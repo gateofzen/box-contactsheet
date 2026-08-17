@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contact Sheet — Box 動画ライブラリ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#0F1317;
+  --surface:#1A2026;
+  --surface-2:#232C34;
+  --line:#333E48;
+  --line-soft:#28313A;
+  --text:#E6EAED;
+  --muted:#8B99A6;
+  --amber:#E8B04B;
+  --mint:#5FD3C4;
+  --red:#FF6B6B;
+  --display:"Space Grotesk",system-ui,sans-serif;
+  --body:"Inter","Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--ink);color:var(--text);font-family:var(--body);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+button,input,select{font-family:inherit;font-size:inherit;color:inherit}
+button{cursor:pointer}
+a{color:var(--mint)}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+
+/* ---------- masthead ---------- */
+.masthead{border-bottom:1px solid var(--line);background:linear-gradient(180deg,#161C22,#12171C);position:sticky;top:0;z-index:40}
+.masthead-in{max-width:1680px;margin:0 auto;padding:14px 20px}
+.brand{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.brand h1{font-family:var(--display);font-weight:700;font-size:19px;letter-spacing:.14em;text-transform:uppercase;margin:0}
+.brand .sub{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.05em}
+
+.rack{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:12px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.field input,.field select{background:var(--ink);border:1px solid var(--line);border-radius:3px;padding:8px 10px;font-family:var(--mono);font-size:12px}
+.field input:focus,.field select:focus{border-color:var(--amber);outline:none}
+.w-token{width:min(300px,55vw)}
+.w-id{width:110px}
+.w-num{width:78px}
+.w-search{width:min(460px,72vw)}
+
+.btn{background:var(--surface-2);border:1px solid var(--line);border-radius:3px;padding:8px 13px;font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;transition:border-color .15s,background .15s}
+.btn:hover{border-color:var(--muted)}
+.btn-go{background:var(--amber);border-color:var(--amber);color:#171208;font-weight:700}
+.btn-go:hover{background:#F2BC5C;border-color:#F2BC5C}
+.btn-stop{border-color:var(--red);color:var(--red)}
+.btn-ghost{background:transparent}
+.btn-sm{padding:5px 9px;font-size:10px}
+.check{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--muted);padding-bottom:9px;white-space:nowrap}
+.check input{accent-color:var(--amber)}
+
+.hint{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px;letter-spacing:.03em}
+.hint b{color:var(--amber);font-weight:500}
+
+/* ---------- tag rail ---------- */
+.rail-tags{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;max-height:78px;overflow-y:auto}
+.chip{
+  background:var(--surface-2);border:1px solid var(--line-soft);border-radius:999px;
+  padding:3px 10px;font-family:var(--mono);font-size:11px;color:var(--muted);
+  display:inline-flex;align-items:center;gap:6px;transition:.13s;
+}
+.chip:hover{border-color:var(--muted);color:var(--text)}
+.chip.active{background:var(--amber);border-color:var(--amber);color:#171208;font-weight:700}
+.chip .n{opacity:.65;font-size:10px}
+.chip.fav{color:var(--amber)}
+.chip.fav.active{color:#171208}
+
+/* ---------- status ---------- */
+.statusbar{border-top:1px solid var(--line-soft);margin-top:12px;padding-top:9px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;font-family:var(--mono);font-size:11px;color:var(--muted)}
+.stat b{color:var(--text);font-weight:500}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:middle}
+.dot.on{background:var(--mint)}
+.dot.off{background:var(--red)}
+.dot.busy{background:var(--amber);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.25}}
+.msg{color:var(--amber)}
+.msg.err{color:var(--red)}
+
+/* ---------- bulk bar ---------- */
+.bulkbar{
+  position:sticky;top:0;z-index:35;display:none;gap:10px;flex-wrap:wrap;align-items:center;
+  background:var(--amber);color:#171208;padding:9px 20px;font-family:var(--mono);font-size:11px;
+}
+.bulkbar.on{display:flex}
+.bulkbar input[type=text]{background:#171208;color:#F0E6D2;border:none;border-radius:3px;padding:6px 9px;font-family:var(--mono);font-size:11px;width:190px}
+.bulkbar .btn{background:#171208;border-color:#171208;color:#F0E6D2}
+.bulkbar b{font-weight:700}
+
+/* ---------- grid ---------- */
+main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
+.sheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:22px}
+.card{background:var(--surface);border:1px solid var(--line-soft);border-radius:4px;overflow:hidden;display:flex;flex-direction:column;transition:border-color .15s,transform .15s}
+.card:hover{border-color:var(--line);transform:translateY(-2px)}
+.card.picked{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber) inset}
+
+.strip{position:relative;background:#000;cursor:pointer;border-bottom:1px solid var(--line-soft)}
+.rail{height:9px;background:repeating-linear-gradient(90deg,var(--surface-2) 0 6px,transparent 6px 14px);background-color:#0B0E11}
+.frames{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line-soft);aspect-ratio:80/9}
+.frames.solo{grid-template-columns:1fr;aspect-ratio:16/9}
+.frames img{width:100%;height:100%;object-fit:cover;display:block;background:#000}
+.frames .slot{position:relative;overflow:hidden;background:#0B0E11}
+.frames .slot::after{content:attr(data-tc);position:absolute;left:0;bottom:0;font-family:var(--mono);font-size:9px;padding:1px 3px;background:rgba(0,0,0,.65);color:var(--amber);opacity:0;transition:opacity .12s}
+.strip:hover .slot::after{opacity:1}
+.frames .slot:hover{outline:1px solid var(--amber);outline-offset:-1px}
+.strip .placeholder{position:absolute;inset:9px 0;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--muted)}
+.strip .fail{color:var(--red)}
+
+.overlay{position:absolute;top:13px;display:flex;gap:5px;z-index:2}
+.overlay.left{left:7px}
+.overlay.right{right:7px}
+.ob{
+  background:rgba(11,14,17,.78);border:1px solid rgba(139,153,166,.4);border-radius:3px;
+  width:26px;height:26px;display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:13px;line-height:1;color:var(--muted);padding:0;
+}
+.ob:hover{border-color:var(--amber);color:var(--amber)}
+.ob.on{background:var(--amber);border-color:var(--amber);color:#171208}
+
+.meta{padding:11px 12px 12px}
+.name{font-family:var(--display);font-weight:500;font-size:13px;line-height:1.35;word-break:break-all;margin:0 0 6px}
+.tags{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--mono);font-size:10px;color:var(--muted)}
+.tags .dur{color:var(--amber)}
+.taglist{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;align-items:center}
+.tg{background:var(--surface-2);border:1px solid var(--line-soft);border-radius:3px;padding:2px 6px;font-family:var(--mono);font-size:10px;color:var(--mint);display:inline-flex;align-items:center;gap:5px}
+.tg x{cursor:pointer;color:var(--muted);font-style:normal}
+.tg x:hover{color:var(--red)}
+.tg-add{background:transparent;border:1px dashed var(--line);border-radius:3px;padding:2px 7px;font-family:var(--mono);font-size:10px;color:var(--muted)}
+.tg-add:hover{border-color:var(--amber);color:var(--amber)}
+.tg-in{background:var(--ink);border:1px solid var(--amber);border-radius:3px;padding:2px 6px;font-family:var(--mono);font-size:10px;width:120px}
+
+.sentinel{height:60px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;color:var(--muted)}
+.empty{border:1px dashed var(--line);border-radius:4px;padding:46px 24px;text-align:center}
+.empty h2{font-family:var(--display);font-size:16px;letter-spacing:.06em;margin:0 0 8px}
+.empty p{color:var(--muted);margin:4px 0;font-size:13px}
+.empty code{font-family:var(--mono);font-size:12px;color:var(--amber)}
+
+/* ---------- player ---------- */
+.scrim{position:fixed;inset:0;background:rgba(6,9,12,.9);z-index:60;display:none;align-items:center;justify-content:center;padding:24px}
+.scrim.open{display:flex}
+.player{background:var(--surface);border:1px solid var(--line);border-radius:5px;width:min(1180px,100%);max-height:100%;display:flex;flex-direction:column;overflow:hidden}
+.player-bar{display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--line-soft)}
+.player-bar .t{font-family:var(--display);font-size:13px;font-weight:500;flex:1;word-break:break-all}
+.player video{width:100%;max-height:68vh;background:#000;display:block}
+.player-foot{padding:10px 14px;font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;gap:16px;flex-wrap:wrap}
+
+.debug{margin-top:20px;border:1px solid var(--line-soft);border-radius:4px;background:var(--surface);font-family:var(--mono);font-size:11px}
+.debug summary{padding:9px 12px;cursor:pointer;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.debug pre{margin:0;padding:0 12px 12px;white-space:pre-wrap;color:var(--muted);max-height:280px;overflow:auto}
+
+@media (max-width:640px){.sheet{grid-template-columns:1fr}.w-token,.w-search{width:100%}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-in">
+    <div class="brand">
+      <h1>Contact&nbsp;Sheet</h1>
+      <span class="sub">Box 動画ライブラリ / 1動画 = 5フレーム</span>
+    </div>
+
+    <div class="rack">
+      <div class="field"><label for="token">アクセストークン</label>
+        <input id="token" class="w-token" type="password" placeholder="Developer Token を貼り付け" autocomplete="off"></div>
+      <div class="field"><label for="folder">フォルダ ID</label>
+        <input id="folder" class="w-id" type="text" value="0" inputmode="numeric"></div>
+      <div class="field"><label for="depth">階層</label>
+        <input id="depth" class="w-num" type="number" value="6" min="0" max="30"></div>
+      <label class="check"><input id="recurse" type="checkbox" checked> サブフォルダ</label>
+      <label class="check"><input id="sync" type="checkbox" checked> タグを Box に保存</label>
+      <button id="scan" class="btn btn-go">スキャン</button>
+      <button id="cancel" class="btn btn-stop" hidden>中止</button>
+    </div>
+
+    <div class="rack">
+      <div class="field"><label for="q">検索</label>
+        <input id="q" class="w-search" type="search" placeholder="例: 心停止 #症例 -#済 ext:mp4"></div>
+      <div class="field"><label for="sort">並び順</label>
+        <select id="sort">
+          <option value="name">名前</option>
+          <option value="modified">更新が新しい順</option>
+          <option value="size">サイズが大きい順</option>
+          <option value="fav">お気に入り優先</option>
+        </select></div>
+      <div class="field"><label for="fw">フレーム幅</label>
+        <input id="fw" class="w-num" type="number" value="160" min="40" max="640" step="10"></div>
+      <div class="field"><label for="conc">同時取得</label>
+        <input id="conc" class="w-num" type="number" value="4" min="1" max="12"></div>
+      <button id="exportBtn" class="btn btn-ghost">書き出し</button>
+      <button id="importBtn" class="btn btn-ghost">読み込み</button>
+      <button id="clear" class="btn btn-ghost">キャッシュ削除</button>
+      <input id="importFile" type="file" accept="application/json" hidden>
+    </div>
+
+    <p class="hint">
+      検索: そのまま入力＝ファイル名 ／ <b>#タグ</b> ／ <b>fav</b> お気に入り ／ <b>untagged</b> 未分類 ／
+      <b>ext:mp4</b> 拡張子 ／ 先頭に <b>-</b> で除外。半角スペース区切りで AND 検索。
+    </p>
+
+    <div id="railTags" class="rail-tags"></div>
+
+    <div class="statusbar">
+      <span class="stat"><span id="authDot" class="dot off"></span><span id="authText">未接続</span></span>
+      <span class="stat">動画 <b id="nTotal">0</b></span>
+      <span class="stat">該当 <b id="nHit">0</b></span>
+      <span class="stat">★ <b id="nFav">0</b></span>
+      <span class="stat">サムネ済 <b id="nCached">0</b></span>
+      <span class="stat" id="progress"></span>
+      <span class="stat msg" id="msg"></span>
+    </div>
+  </div>
+</header>
+
+<div id="bulkbar" class="bulkbar">
+  <span><b id="bulkN">0</b> 件を選択中</span>
+  <input id="bulkTag" type="text" placeholder="付けるタグ" list="tagOptions">
+  <button id="bulkAdd" class="btn btn-sm">タグを付ける</button>
+  <button id="bulkDel" class="btn btn-sm">タグを外す</button>
+  <button id="bulkFav" class="btn btn-sm">★ を付ける</button>
+  <button id="bulkUnfav" class="btn btn-sm">★ を外す</button>
+  <button id="bulkAll" class="btn btn-sm">表示中すべて選択</button>
+  <button id="bulkNone" class="btn btn-sm">選択を解除</button>
+</div>
+<datalist id="tagOptions"></datalist>
+
+<main>
+  <div id="sheet" class="sheet"></div>
+  <div id="sentinel" class="sentinel"></div>
+
+  <div id="empty" class="empty">
+    <h2>まだ何も読み込まれていません</h2>
+    <p>Box の Developer Token を貼り、フォルダ ID を入れて「スキャン」を押してください。</p>
+    <p>ルート（すべてのファイル）は <code>0</code>。個別フォルダの ID は Box の URL 末尾の数字です。</p>
+  </div>
+
+  <details class="debug"><summary>診断ログ</summary><pre id="log"></pre></details>
+</main>
+
+<div id="scrim" class="scrim" role="dialog" aria-modal="true" aria-label="動画プレーヤー">
+  <div class="player">
+    <div class="player-bar">
+      <span class="t" id="pTitle"></span>
+      <button id="pFav" class="btn btn-ghost">★</button>
+      <a id="pBox" class="btn btn-ghost" target="_blank" rel="noopener">Box で開く</a>
+      <button id="pClose" class="btn btn-ghost">閉じる</button>
+    </div>
+    <video id="pVideo" controls playsinline preload="metadata"></video>
+    <div class="player-foot"><span id="pMeta"></span><span id="pNote"></span></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const API = "https://api.box.com/2.0";
+const VIDEO_EXT = new Set(["mp4","m4v","mov","avi","mkv","wmv","flv","webm","mpg","mpeg","mts","m2ts","ts","3gp","ogv","vob","mxf","asf"]);
+const SAMPLE_POINTS = [0.08,0.29,0.50,0.71,0.92];
+const PAGE_SIZE = 60;
+const MD_SCOPE = "global", MD_TPL = "properties";
+const K_FAV = "csFav", K_TAGS = "csTags";
+
+const $ = id => document.getElementById(id);
+const els = {};
+["token","folder","depth","recurse","sync","scan","cancel","clear","q","sort","fw","conc",
+ "exportBtn","importBtn","importFile","authDot","authText","nTotal","nHit","nFav","nCached",
+ "progress","msg","log","sheet","sentinel","empty","railTags","bulkbar","bulkN","bulkTag",
+ "bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
+ "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote"].forEach(k => els[k] = $(k));
+
+let files = [];
+let view = [];
+let rendered = 0;
+let cachedCount = 0;
+let scanAbort = null;
+const cardById = new Map();
+const marks = new Map();      // id -> {fav:bool, tags:[string], dirty:bool}
+const picked = new Set();
+let currentFile = null;
+
+/* ============ ログ ============ */
+const logLines = [];
+function log(...a){
+  logLines.push(new Date().toLocaleTimeString("ja-JP") + "  " + a.join(" "));
+  if (logLines.length > 400) logLines.shift();
+  els.log.textContent = logLines.join("\n");
+}
+function say(t, err){ els.msg.textContent = t || ""; els.msg.classList.toggle("err", !!err); }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ============ IndexedDB ============ */
+let db = null;
+function openDB(){
+  return new Promise((res, rej) => {
+    const rq = indexedDB.open("box-contact-sheet", 2);
+    rq.onupgradeneeded = () => {
+      const d = rq.result;
+      if (!d.objectStoreNames.contains("thumbs")) d.createObjectStore("thumbs", {keyPath:"id"});
+      if (!d.objectStoreNames.contains("folders")) d.createObjectStore("folders", {keyPath:"id"});
+      if (!d.objectStoreNames.contains("marks")) d.createObjectStore("marks", {keyPath:"id"});
+    };
+    rq.onsuccess = () => res(rq.result);
+    rq.onerror = () => rej(rq.error);
+  });
+}
+function idbGet(store, key){
+  return new Promise(res => {
+    if (!db) return res(null);
+    const rq = db.transaction(store,"readonly").objectStore(store).get(key);
+    rq.onsuccess = () => res(rq.result || null); rq.onerror = () => res(null);
+  });
+}
+function idbAll(store){
+  return new Promise(res => {
+    if (!db) return res([]);
+    const rq = db.transaction(store,"readonly").objectStore(store).getAll();
+    rq.onsuccess = () => res(rq.result || []); rq.onerror = () => res([]);
+  });
+}
+function idbPut(store, val){
+  return new Promise(res => {
+    if (!db) return res();
+    const tx = db.transaction(store,"readwrite");
+    tx.objectStore(store).put(val);
+    tx.oncomplete = () => res(); tx.onerror = () => res();
+  });
+}
+function idbClearCaches(){
+  return new Promise(res => {
+    if (!db) return res();
+    const tx = db.transaction(["thumbs","folders"],"readwrite");
+    tx.objectStore("thumbs").clear(); tx.objectStore("folders").clear();
+    tx.oncomplete = () => res(); tx.onerror = () => res();
+  });
+}
+
+/* ============ Box API ============ */
+const token = () => els.token.value.trim();
+
+async function boxFetch(path, opts = {}){
+  if (!token()) throw new Error("アクセストークンが空です");
+  const headers = Object.assign({Authorization:"Bearer " + token()}, opts.headers || {});
+  const r = await fetch(API + path, Object.assign({}, opts, {headers}));
+  if (r.status === 429 || r.status >= 500){
+    const wait = Number(r.headers.get("Retry-After") || 2);
+    log("retry", r.status, wait + "s");
+    await sleep(wait * 1000);
+    return boxFetch(path, opts);
+  }
+  if (r.status === 401){ setAuth(false, "トークンが無効か期限切れです"); throw new Error("401 認証エラー"); }
+  if (!r.ok){
+    const body = await r.text().catch(() => "");
+    const e = new Error(r.status + " " + body.slice(0,200)); e.status = r.status; throw e;
+  }
+  return r.status === 204 ? null : r.json();
+}
+function setAuth(ok, text){
+  els.authDot.className = "dot " + (ok ? "on" : "off");
+  els.authText.textContent = text || (ok ? "接続済み" : "未接続");
+}
+async function checkAuth(){
+  try{
+    const me = await boxFetch("/users/me?fields=name,login");
+    setAuth(true, me.name || me.login || "接続済み");
+    return true;
+  }catch(e){ setAuth(false,"未接続"); say(String(e.message||e), true); return false; }
+}
+
+/* ============ タグ・お気に入り ============ */
+function getMark(id){
+  let m = marks.get(id);
+  if (!m){ m = {id, fav:false, tags:[], dirty:false}; marks.set(id, m); }
+  return m;
+}
+function normTag(s){ return String(s || "").trim().replace(/\s+/g,"_").replace(/^#/,""); }
+
+/** Box の global.properties へ書き戻す。テンプレート作成は不要で誰でも使える。 */
+const mdQueue = [];
+let mdBusy = false;
+function queueSync(id){
+  if (!els.sync.checked) return;
+  if (!mdQueue.includes(id)) mdQueue.push(id);
+  runMdQueue();
+}
+async function runMdQueue(){
+  if (mdBusy) return;
+  mdBusy = true;
+  while (mdQueue.length){
+    const id = mdQueue.shift();
+    const m = getMark(id);
+    const payload = {[K_FAV]: m.fav ? "1" : "0", [K_TAGS]: m.tags.join(",")};
+    try{
+      await writeMetadata(id, payload);
+      m.dirty = false;
+    }catch(err){
+      m.dirty = true;
+      log("metadata 書き込み失敗", id, err.message);
+      say("Box へのタグ保存に失敗しました（ローカルには保存済み）", true);
+    }
+    await idbPut("marks", {id, fav:m.fav, tags:m.tags, dirty:m.dirty});
+  }
+  mdBusy = false;
+}
+async function writeMetadata(id, payload){
+  const path = `/files/${id}/metadata/${MD_SCOPE}/${MD_TPL}`;
+  try{
+    await boxFetch(path, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(payload)
+    });
+    return;
+  }catch(err){
+    if (err.status !== 409) throw err;
+  }
+  // 既にインスタンスがある → JSON-Patch で置き換え
+  let existing = {};
+  try{ existing = await boxFetch(path) || {}; }catch(_){}
+  const ops = Object.keys(payload).map(k => ({
+    op: (k in existing) ? "replace" : "add",
+    path: "/" + k,
+    value: payload[k]
+  }));
+  await boxFetch(path, {
+    method:"PUT",
+    headers:{"Content-Type":"application/json-patch+json"},
+    body: JSON.stringify(ops)
+  });
+}
+
+function setFav(id, val){
+  const m = getMark(id);
+  m.fav = val;
+  idbPut("marks", {id, fav:m.fav, tags:m.tags, dirty:true});
+  queueSync(id);
+  refreshCard(id); refreshCounts(); buildRail();
+}
+function addTag(id, tag){
+  const t = normTag(tag);
+  if (!t) return;
+  const m = getMark(id);
+  if (m.tags.includes(t)) return;
+  m.tags.push(t); m.tags.sort((a,b)=>a.localeCompare(b,"ja"));
+  idbPut("marks", {id, fav:m.fav, tags:m.tags, dirty:true});
+  queueSync(id);
+  refreshCard(id); buildRail();
+}
+function removeTag(id, tag){
+  const m = getMark(id);
+  const i = m.tags.indexOf(tag);
+  if (i < 0) return;
+  m.tags.splice(i,1);
+  idbPut("marks", {id, fav:m.fav, tags:m.tags, dirty:true});
+  queueSync(id);
+  refreshCard(id); buildRail();
+}
+
+/* ============ 検索クエリ ============ */
+function parseQuery(s){
+  const q = {text:[], notText:[], tags:[], notTags:[], exts:[], fav:false, noFav:false, untagged:false};
+  const tokens = (s.match(/(?:[^\s"]+|"[^"]*")+/g) || []);
+  for (let raw of tokens){
+    let neg = false, t = raw;
+    if (t.startsWith("-")){ neg = true; t = t.slice(1); }
+    t = t.replace(/^"|"$/g, "");
+    if (!t) continue;
+    const low = t.toLowerCase();
+    if (t.startsWith("#"))            (neg ? q.notTags : q.tags).push(normTag(t).toLowerCase());
+    else if (low.startsWith("tag:"))  (neg ? q.notTags : q.tags).push(normTag(low.slice(4)).toLowerCase());
+    else if (low.startsWith("ext:"))  q.exts.push(low.slice(4).replace(/^\./,""));
+    else if (low === "fav" || low === "is:fav" || low === "★"){ if (neg) q.noFav = true; else q.fav = true; }
+    else if (low === "untagged" || low === "is:untagged") q.untagged = !neg;
+    else (neg ? q.notText : q.text).push(low);
+  }
+  return q;
+}
+function matches(f, q){
+  const m = marks.get(f.id) || {fav:false, tags:[]};
+  const name = f.name.toLowerCase();
+  const lowTags = (m.tags || []).map(t => t.toLowerCase());
+  for (const t of q.text)    if (!name.includes(t)) return false;
+  for (const t of q.notText) if (name.includes(t)) return false;
+  for (const t of q.tags)    if (!lowTags.includes(t)) return false;
+  for (const t of q.notTags) if (lowTags.includes(t)) return false;
+  if (q.fav && !m.fav) return false;
+  if (q.noFav && m.fav) return false;
+  if (q.untagged && lowTags.length) return false;
+  if (q.exts.length){
+    const ext = (f.name.split(".").pop() || "").toLowerCase();
+    if (!q.exts.includes(ext)) return false;
+  }
+  return true;
+}
+
+/* ============ フォルダ走査 ============ */
+async function listFolder(id, signal){
+  const out = [];
+  let marker = "";
+  do{
+    const url = `/folders/${id}/items?usemarker=true&limit=1000`
+      + `&fields=id,name,type,size,modified_at,extension,metadata.${MD_SCOPE}.${MD_TPL}`
+      + (marker ? "&marker=" + encodeURIComponent(marker) : "");
+    const page = await boxFetch(url, {signal});
+    out.push(...(page.entries || []));
+    marker = page.next_marker || "";
+  } while (marker);
+  return out;
+}
+const isVideo = e => e.type === "file" &&
+  VIDEO_EXT.has((e.extension || e.name.split(".").pop() || "").toLowerCase());
+
+function absorbMetadata(entry){
+  const md = entry.metadata && entry.metadata[MD_SCOPE] && entry.metadata[MD_SCOPE][MD_TPL];
+  if (!md) return;
+  const m = getMark(entry.id);
+  if (m.dirty) return;                       // ローカルの未送信分を優先
+  m.fav = md[K_FAV] === "1";
+  m.tags = String(md[K_TAGS] || "").split(",").map(normTag).filter(Boolean);
+  idbPut("marks", {id:entry.id, fav:m.fav, tags:m.tags, dirty:false});
+}
+
+async function scan(){
+  const rootId = els.folder.value.trim() || "0";
+  const maxDepth = els.recurse.checked ? Math.max(0, Number(els.depth.value) || 0) : 0;
+
+  scanAbort = new AbortController();
+  els.scan.disabled = true; els.cancel.hidden = false;
+  els.authDot.className = "dot busy"; say("");
+  files = []; cardById.clear(); picked.clear(); els.sheet.innerHTML = ""; rendered = 0;
+
+  const queue = [{id:rootId, depth:0, path:""}];
+  let folders = 0;
+
+  try{
+    while (queue.length){
+      const node = queue.shift();
+      let entries;
+      const cached = await idbGet("folders", node.id);
+      if (cached && Date.now() - cached.ts < 6*60*60*1000){
+        entries = cached.entries;
+      }else{
+        entries = await listFolder(node.id, scanAbort.signal);
+        await idbPut("folders", {id:node.id, entries, ts:Date.now()});
+      }
+      folders++;
+      for (const e of entries){
+        if (e.type === "folder"){
+          if (node.depth < maxDepth) queue.push({id:e.id, depth:node.depth+1, path:node.path + "/" + e.name});
+        }else if (isVideo(e)){
+          absorbMetadata(e);
+          files.push({id:e.id, name:e.name, size:e.size, modified:e.modified_at, path:node.path});
+        }
+      }
+      els.progress.textContent = `走査中 — フォルダ ${folders} / 残り ${queue.length} / 動画 ${files.length}`;
+      els.nTotal.textContent = files.length;
+      await sleep(0);
+    }
+    els.progress.textContent = `走査完了 — フォルダ ${folders} 件`;
+    log("scan done:", files.length, "videos /", folders, "folders");
+  }catch(err){
+    if (err.name === "AbortError"){ els.progress.textContent = `中止（動画 ${files.length} 本まで）`; }
+    else { say(String(err.message||err), true); log("scan error:", err.message); }
+  }finally{
+    scanAbort = null; els.scan.disabled = false; els.cancel.hidden = true;
+    setAuth(true); buildRail(); applyView();
+  }
+}
+
+/* ============ サムネイル ============ */
+async function getRepresentation(fileId, hint){
+  const d = await boxFetch(`/files/${fileId}?fields=representations`, {headers:{"X-Rep-Hints":hint}});
+  const entries = (d.representations && d.representations.entries) || [];
+  return entries[0] || null;
+}
+async function waitForRep(entry, tries = 4){
+  let e = entry;
+  for (let i = 0; i < tries; i++){
+    const state = e.status && e.status.state;
+    if (state === "success" || state === "viewable") return e;
+    if (state === "error" || state === "none") return null;
+    if (!e.info || !e.info.url) return null;
+    await sleep(1500 * (i + 1));
+    const r = await fetch(e.info.url, {headers:{Authorization:"Bearer " + token()}});
+    if (!r.ok) return null;
+    e = await r.json();
+  }
+  return null;
+}
+const repContentUrl = e => (e && e.content && e.content.url_template)
+  ? e.content.url_template.replace("{+asset_path}","") : null;
+
+async function fetchBlob(url){
+  const r = await fetch(url, {headers:{Authorization:"Bearer " + token()}});
+  if (!r.ok) throw new Error("representation fetch " + r.status);
+  return r.blob();
+}
+async function sliceFilmstrip(blob, frameW){
+  const bmp = await createImageBitmap(blob);
+  const W = bmp.width, H = bmp.height;
+  const cols = Math.max(1, Math.round(W / frameW));
+  const guessH = Math.round(frameW * 9 / 16);
+  let rows = Math.max(1, Math.round(H / guessH));
+  if (rows === 1 || H / rows < guessH * 0.5) rows = 1;
+  const frameH = Math.round(H / rows);
+  const total = cols * rows;
+  log(`filmstrip ${W}x${H} → ${cols}列 x ${rows}行 = ${total}コマ (1コマ ${frameW}x${frameH})`);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = frameW; canvas.height = frameH;
+  const ctx = canvas.getContext("2d");
+  const frames = [];
+  for (const p of SAMPLE_POINTS){
+    const idx = Math.min(total-1, Math.max(0, Math.round(p * (total-1))));
+    ctx.clearRect(0,0,frameW,frameH);
+    ctx.drawImage(bmp, (idx % cols) * frameW, Math.floor(idx / cols) * frameH, frameW, frameH, 0, 0, frameW, frameH);
+    frames.push(await new Promise(r => canvas.toBlob(r, "image/jpeg", .82)));
+  }
+  bmp.close && bmp.close();
+  return {frames, total};
+}
+async function buildThumbs(file){
+  const cached = await idbGet("thumbs", file.id);
+  if (cached) return cached;
+  const frameW = Math.max(40, Number(els.fw.value) || 160);
+  const rec = {id:file.id, frames:[], total:0, interval:null, ok:false, ts:Date.now()};
+  try{
+    let rep = await getRepresentation(file.id, "[filmstrip]");
+    if (rep) rep = await waitForRep(rep);
+    const url = repContentUrl(rep);
+    if (url){
+      const sliced = await sliceFilmstrip(await fetchBlob(url), frameW);
+      rec.frames = sliced.frames; rec.total = sliced.total;
+      rec.interval = (rep.metadata && rep.metadata.interval) || null;
+      rec.ok = true;
+    }else{
+      let jpg = await getRepresentation(file.id, "[jpg?dimensions=320x320]");
+      if (jpg) jpg = await waitForRep(jpg);
+      const jurl = repContentUrl(jpg);
+      if (jurl){ rec.frames = [await fetchBlob(jurl)]; rec.total = 1; rec.ok = true;
+        log(file.name, "→ filmstrip なし、静止画で代替"); }
+      else log(file.name, "→ サムネイル表現なし");
+    }
+  }catch(err){ log("thumb error", file.name, err.message); }
+  await idbPut("thumbs", rec);
+  return rec;
+}
+
+/* ============ 同時実行プール ============ */
+class Pool{
+  constructor(){ this.active = 0; this.q = []; }
+  push(task){ return new Promise((res,rej) => { this.q.push({task,res,rej}); this.drain(); }); }
+  drain(){
+    const limit = Math.max(1, Number(els.conc.value) || 4);
+    while (this.active < limit && this.q.length){
+      const {task,res,rej} = this.q.shift();
+      this.active++;
+      task().then(res,rej).finally(() => { this.active--; this.drain(); });
+    }
+  }
+}
+const pool = new Pool();
+
+/* ============ 表示ヘルパ ============ */
+function fmtSize(n){
+  if (n == null) return "";
+  const u = ["B","KB","MB","GB","TB"]; let i = 0, v = n;
+  while (v >= 1024 && i < u.length-1){ v /= 1024; i++; }
+  return v.toFixed(v >= 10 || i === 0 ? 0 : 1) + " " + u[i];
+}
+const fmtDate = s => s ? new Date(s).toLocaleDateString("ja-JP",{year:"2-digit",month:"2-digit",day:"2-digit"}) : "";
+function fmtTC(sec){
+  if (sec == null || !isFinite(sec)) return "";
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), s = sec%60;
+  return (h ? String(h).padStart(2,"0") + ":" : "") + String(m).padStart(2,"0") + ":" + String(s).padStart(2,"0");
+}
+
+/* ============ タグレール ============ */
+function buildRail(){
+  const counts = new Map();
+  let favN = 0;
+  for (const f of files){
+    const m = marks.get(f.id);
+    if (!m) continue;
+    if (m.fav) favN++;
+    for (const t of m.tags) counts.set(t, (counts.get(t) || 0) + 1);
+  }
+  els.nFav.textContent = favN;
+
+  const q = els.q.value;
+  els.railTags.innerHTML = "";
+
+  const favChip = document.createElement("button");
+  favChip.className = "chip fav" + (/(^|\s)fav(\s|$)/i.test(q) ? " active" : "");
+  favChip.innerHTML = `★ お気に入り <span class="n">${favN}</span>`;
+  favChip.addEventListener("click", () => toggleToken("fav"));
+  els.railTags.appendChild(favChip);
+
+  const untag = document.createElement("button");
+  untag.className = "chip" + (/(^|\s)untagged(\s|$)/i.test(q) ? " active" : "");
+  const untagN = files.filter(f => !(marks.get(f.id)||{tags:[]}).tags.length).length;
+  untag.innerHTML = `未分類 <span class="n">${untagN}</span>`;
+  untag.addEventListener("click", () => toggleToken("untagged"));
+  els.railTags.appendChild(untag);
+
+  [...counts.entries()].sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0],"ja")).forEach(([t,n]) => {
+    const c = document.createElement("button");
+    const tok = "#" + t;
+    c.className = "chip" + (els.q.value.split(/\s+/).includes(tok) ? " active" : "");
+    c.innerHTML = `${escapeHtml(t)} <span class="n">${n}</span>`;
+    c.addEventListener("click", () => toggleToken(tok));
+    els.railTags.appendChild(c);
+  });
+
+  els.tagOptions.innerHTML = "";
+  [...counts.keys()].sort((a,b)=>a.localeCompare(b,"ja")).forEach(t => {
+    const o = document.createElement("option"); o.value = t; els.tagOptions.appendChild(o);
+  });
+}
+function toggleToken(tok){
+  const parts = els.q.value.split(/\s+/).filter(Boolean);
+  const i = parts.findIndex(p => p.toLowerCase() === tok.toLowerCase());
+  if (i >= 0) parts.splice(i,1); else parts.push(tok);
+  els.q.value = parts.join(" ");
+  buildRail(); applyView();
+}
+function escapeHtml(s){ return s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+/* ============ グリッド ============ */
+function applyView(){
+  const q = parseQuery(els.q.value);
+  view = files.filter(f => matches(f, q));
+
+  const mode = els.sort.value;
+  view.sort((a,b) => {
+    if (mode === "fav"){
+      const fa = (marks.get(a.id)||{}).fav ? 0 : 1, fb = (marks.get(b.id)||{}).fav ? 0 : 1;
+      if (fa !== fb) return fa - fb;
+      return a.name.localeCompare(b.name,"ja");
+    }
+    if (mode === "size") return (b.size||0) - (a.size||0);
+    if (mode === "modified") return String(b.modified||"").localeCompare(String(a.modified||""));
+    return a.name.localeCompare(b.name,"ja");
+  });
+
+  els.sheet.innerHTML = ""; cardById.clear(); rendered = 0;
+  els.nTotal.textContent = files.length;
+  els.empty.hidden = files.length > 0;
+  renderMore(); refreshCounts();
+}
+function refreshCounts(){
+  els.nHit.textContent = view.length;
+  els.bulkN.textContent = picked.size;
+  els.bulkbar.classList.toggle("on", picked.size > 0);
+  let favN = 0;
+  for (const f of files) if ((marks.get(f.id)||{}).fav) favN++;
+  els.nFav.textContent = favN;
+}
+function renderMore(){
+  const slice = view.slice(rendered, rendered + PAGE_SIZE);
+  for (const f of slice) els.sheet.appendChild(makeCard(f));
+  rendered += slice.length;
+  els.sentinel.textContent = rendered < view.length
+    ? `スクロールでさらに読み込み（残り ${view.length - rendered}）`
+    : (view.length ? "すべて表示しました" : "該当する動画がありません");
+}
+
+function makeCard(file){
+  const m = getMark(file.id);
+  const card = document.createElement("article");
+  card.className = "card" + (picked.has(file.id) ? " picked" : "");
+  card.dataset.id = file.id;
+
+  const strip = document.createElement("div");
+  strip.className = "strip";
+  strip.innerHTML =
+    '<div class="rail"></div>' +
+    '<div class="frames"><div class="slot"></div><div class="slot"></div><div class="slot"></div><div class="slot"></div><div class="slot"></div></div>' +
+    '<div class="rail"></div>' +
+    '<div class="placeholder">読み込み待ち</div>';
+
+  const left = document.createElement("div"); left.className = "overlay left";
+  const pick = document.createElement("button");
+  pick.className = "ob" + (picked.has(file.id) ? " on" : "");
+  pick.textContent = "✓"; pick.title = "選択";
+  pick.addEventListener("click", e => {
+    e.stopPropagation();
+    if (picked.has(file.id)) picked.delete(file.id); else picked.add(file.id);
+    pick.classList.toggle("on", picked.has(file.id));
+    card.classList.toggle("picked", picked.has(file.id));
+    refreshCounts();
+  });
+  left.appendChild(pick);
+
+  const right = document.createElement("div"); right.className = "overlay right";
+  const star = document.createElement("button");
+  star.className = "ob" + (m.fav ? " on" : "");
+  star.textContent = "★"; star.title = "お気に入り";
+  star.addEventListener("click", e => { e.stopPropagation(); setFav(file.id, !getMark(file.id).fav); });
+  right.appendChild(star);
+
+  strip.appendChild(left); strip.appendChild(right);
+  strip.addEventListener("click", () => openPlayer(file));
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.innerHTML = '<p class="name"></p><div class="tags"><span class="dur"></span><span class="sz"></span><span class="dt"></span></div><div class="taglist"></div>';
+  meta.querySelector(".name").textContent = file.name;
+  meta.querySelector(".sz").textContent = fmtSize(file.size);
+  meta.querySelector(".dt").textContent = fmtDate(file.modified);
+
+  card.appendChild(strip); card.appendChild(meta);
+  cardById.set(file.id, {card, strip, star, pick, dur: meta.querySelector(".dur"), taglist: meta.querySelector(".taglist")});
+  paintTagList(file.id);
+  thumbObserver.observe(card);
+  return card;
+}
+
+function paintTagList(id){
+  const ref = cardById.get(id);
+  if (!ref) return;
+  const m = getMark(id);
+  const box = ref.taglist;
+  box.innerHTML = "";
+  for (const t of m.tags){
+    const chip = document.createElement("span");
+    chip.className = "tg";
+    chip.appendChild(document.createTextNode(t));
+    const x = document.createElement("x"); x.textContent = "×";
+    x.addEventListener("click", () => removeTag(id, t));
+    chip.appendChild(x);
+    box.appendChild(chip);
+  }
+  const add = document.createElement("button");
+  add.className = "tg-add"; add.textContent = "＋ タグ";
+  add.addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.className = "tg-in"; input.setAttribute("list","tagOptions");
+    input.placeholder = "Enter で確定";
+    box.replaceChild(input, add);
+    input.focus();
+    const commit = () => { const v = input.value; if (v) addTag(id, v); else paintTagList(id); };
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") commit();
+      if (e.key === "Escape") paintTagList(id);
+    });
+    input.addEventListener("blur", () => setTimeout(() => { if (input.isConnected) paintTagList(id); }, 120));
+  });
+  box.appendChild(add);
+}
+function refreshCard(id){
+  const ref = cardById.get(id);
+  if (!ref) return;
+  const m = getMark(id);
+  ref.star.classList.toggle("on", m.fav);
+  paintTagList(id);
+  if (currentFile && currentFile.id === id) els.pFav.style.color = m.fav ? "var(--amber)" : "";
+}
+
+const thumbObserver = new IntersectionObserver(entries => {
+  for (const en of entries){
+    if (!en.isIntersecting) continue;
+    thumbObserver.unobserve(en.target);
+    const f = files.find(x => x.id === en.target.dataset.id);
+    if (f) pool.push(() => paintThumbs(f));
+  }
+}, {rootMargin:"600px 0px"});
+
+async function paintThumbs(file){
+  const ref = cardById.get(file.id);
+  if (!ref) return;
+  const ph = ref.strip.querySelector(".placeholder");
+  if (ph) ph.textContent = "取得中…";
+  const rec = await buildThumbs(file);
+  const framesEl = ref.strip.querySelector(".frames");
+  if (!rec.ok || !rec.frames.length){
+    if (ph){ ph.textContent = "サムネイルなし"; ph.classList.add("fail"); }
+    return;
+  }
+  if (ph) ph.remove();
+  const n = rec.frames.length;
+  if (n === 1) framesEl.classList.add("solo");
+  framesEl.querySelectorAll(".slot").forEach((slot,i) => {
+    if (i >= n){ slot.remove(); return; }
+    const img = document.createElement("img");
+    img.loading = "lazy"; img.alt = "";
+    img.src = URL.createObjectURL(rec.frames[i]);
+    slot.appendChild(img);
+    if (rec.interval && rec.total > 1)
+      slot.dataset.tc = fmtTC(Math.round(SAMPLE_POINTS[i] * (rec.total-1)) * rec.interval);
+  });
+  if (rec.interval && rec.total > 1) ref.dur.textContent = "≈ " + fmtTC(rec.total * rec.interval);
+  cachedCount++; els.nCached.textContent = cachedCount;
+}
+
+/* ============ プレーヤー ============ */
+async function openPlayer(file){
+  currentFile = file;
+  els.scrim.classList.add("open");
+  els.pTitle.textContent = file.name;
+  els.pBox.href = "https://app.box.com/file/" + file.id;
+  els.pMeta.textContent = [fmtSize(file.size), fmtDate(file.modified), file.path].filter(Boolean).join("  ·  ");
+  els.pFav.style.color = getMark(file.id).fav ? "var(--amber)" : "";
+  els.pNote.textContent = "変換版を準備中…";
+  els.pVideo.removeAttribute("src"); els.pVideo.load();
+  try{
+    let rep = await getRepresentation(file.id, "[mp4]");
+    if (rep) rep = await waitForRep(rep, 6);
+    const url = repContentUrl(rep);
+    if (!url) throw new Error("mp4 変換版がありません");
+    els.pVideo.src = url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
+    els.pNote.textContent = "Box の mp4 変換版を再生中";
+  }catch(err){
+    els.pNote.textContent = "再生できません（" + err.message + "）— 「Box で開く」をお試しください";
+    log("player error", file.name, err.message);
+  }
+}
+function closePlayer(){
+  els.scrim.classList.remove("open");
+  els.pVideo.pause(); els.pVideo.removeAttribute("src"); els.pVideo.load();
+  currentFile = null;
+}
+
+/* ============ 一括操作 ============ */
+function bulk(fn){
+  for (const id of picked) fn(id);
+  buildRail(); refreshCounts();
+}
+els.bulkAdd.addEventListener("click", () => {
+  const t = els.bulkTag.value.trim();
+  if (!t) return say("付けるタグを入力してください", true);
+  bulk(id => addTag(id, t));
+  say(`${picked.size} 件に「${normTag(t)}」を付けました`);
+});
+els.bulkDel.addEventListener("click", () => {
+  const t = normTag(els.bulkTag.value);
+  if (!t) return say("外すタグを入力してください", true);
+  bulk(id => removeTag(id, t));
+  say(`${picked.size} 件から「${t}」を外しました`);
+});
+els.bulkFav.addEventListener("click", () => bulk(id => setFav(id, true)));
+els.bulkUnfav.addEventListener("click", () => bulk(id => setFav(id, false)));
+els.bulkAll.addEventListener("click", () => {
+  view.forEach(f => picked.add(f.id));
+  document.querySelectorAll(".card").forEach(c => {
+    c.classList.add("picked");
+    const b = c.querySelector(".overlay.left .ob"); if (b) b.classList.add("on");
+  });
+  refreshCounts();
+});
+els.bulkNone.addEventListener("click", () => {
+  picked.clear();
+  document.querySelectorAll(".card").forEach(c => {
+    c.classList.remove("picked");
+    const b = c.querySelector(".overlay.left .ob"); if (b) b.classList.remove("on");
+  });
+  refreshCounts();
+});
+
+/* ============ 書き出し / 読み込み ============ */
+els.exportBtn.addEventListener("click", async () => {
+  const all = await idbAll("marks");
+  const data = {version:1, exported:new Date().toISOString(),
+    marks: all.filter(m => m.fav || (m.tags && m.tags.length))};
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "contact-sheet-tags-" + new Date().toISOString().slice(0,10) + ".json";
+  a.click();
+  say(`${data.marks.length} 件を書き出しました`);
+});
+els.importBtn.addEventListener("click", () => els.importFile.click());
+els.importFile.addEventListener("change", async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try{
+    const data = JSON.parse(await file.text());
+    let n = 0;
+    for (const rec of (data.marks || [])){
+      const m = getMark(rec.id);
+      m.fav = !!rec.fav;
+      m.tags = [...new Set([...(m.tags||[]), ...(rec.tags||[])])].map(normTag).filter(Boolean).sort();
+      await idbPut("marks", {id:rec.id, fav:m.fav, tags:m.tags, dirty:true});
+      queueSync(rec.id);
+      n++;
+    }
+    say(`${n} 件を読み込みました`);
+    buildRail(); applyView();
+  }catch(err){ say("読み込みに失敗しました: " + err.message, true); }
+  e.target.value = "";
+});
+
+/* ============ イベント ============ */
+els.scan.addEventListener("click", async () => {
+  localStorage.setItem("bcs_token", els.token.value);
+  localStorage.setItem("bcs_folder", els.folder.value);
+  if (await checkAuth()) scan();
+});
+els.cancel.addEventListener("click", () => scanAbort && scanAbort.abort());
+els.clear.addEventListener("click", async () => {
+  await idbClearCaches();
+  cachedCount = 0; els.nCached.textContent = "0";
+  say("サムネイルとフォルダ一覧のキャッシュを削除しました。タグとお気に入りは残ります。");
+});
+let qTimer = null;
+els.q.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { buildRail(); applyView(); }, 220); });
+els.sort.addEventListener("change", applyView);
+els.pClose.addEventListener("click", closePlayer);
+els.pFav.addEventListener("click", () => { if (currentFile) setFav(currentFile.id, !getMark(currentFile.id).fav); });
+els.scrim.addEventListener("click", e => { if (e.target === els.scrim) closePlayer(); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && els.scrim.classList.contains("open")) closePlayer();
+  if (e.key === "f" && els.scrim.classList.contains("open") && currentFile && e.target === document.body)
+    setFav(currentFile.id, !getMark(currentFile.id).fav);
+});
+new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.length) renderMore(); },
+  {rootMargin:"400px"}).observe(els.sentinel);
+
+/* ============ 起動 ============ */
+(async function init(){
+  db = await openDB().catch(() => null);
+  for (const rec of await idbAll("marks"))
+    marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [], dirty:!!rec.dirty});
+  els.token.value = localStorage.getItem("bcs_token") || "";
+  els.folder.value = localStorage.getItem("bcs_folder") || "0";
+  if (els.token.value) checkAuth();
+  log("ready — marks:", marks.size);
+})();
+</script>
+</body>
+</html>
