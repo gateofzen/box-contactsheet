@@ -101,6 +101,32 @@ a{color:var(--mint)}
 
 /* ---------- grid ---------- */
 main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
+.layout{display:grid;grid-template-columns:250px 1fr;gap:26px;align-items:start}
+.layout.solo{grid-template-columns:1fr}
+.layout.solo .tree{display:none}
+.tree{
+  position:sticky;top:0;max-height:calc(100vh - 40px);overflow-y:auto;
+  border:1px solid var(--line-soft);border-radius:4px;background:var(--surface);
+  padding:10px 4px 12px;font-family:var(--mono);font-size:11px;
+}
+.tree-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 8px 9px;
+  border-bottom:1px solid var(--line-soft);margin-bottom:7px;color:var(--muted);
+  letter-spacing:.14em;text-transform:uppercase;font-size:10px}
+.tree-deep{display:flex;align-items:center;gap:5px;text-transform:none;letter-spacing:0;cursor:pointer}
+.tree-deep input{accent-color:var(--amber)}
+.node{display:flex;align-items:center;gap:2px;border-radius:3px}
+.node:hover{background:var(--surface-2)}
+.node.on{background:var(--amber)}
+.node.on .nname,.node.on .ncount{color:#171208}
+.node.on .nname{font-weight:700}
+.twist{width:16px;flex:none;background:none;border:none;color:var(--muted);padding:2px 0;font-size:9px;line-height:1}
+.twist.leaf{visibility:hidden}
+.nname{flex:1;text-align:left;background:none;border:none;padding:4px 2px;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ncount{color:var(--muted);padding-right:7px;font-size:10px}
+.kids{margin-left:11px;border-left:1px solid var(--line-soft);padding-left:3px}
+.tree-empty{padding:8px;color:var(--muted)}
+@media (max-width:900px){.layout{grid-template-columns:1fr}.tree{position:static;max-height:220px}}
 .sheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--col,300px),1fr));gap:22px}
 .card{background:var(--surface);border:1px solid var(--line-soft);border-radius:4px;overflow:hidden;display:flex;flex-direction:column;transition:border-color .15s,transform .15s}
 .card:hover{border-color:var(--line);transform:translateY(-2px)}
@@ -141,6 +167,8 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
 .name{font-family:var(--display);font-weight:500;font-size:13px;line-height:1.35;word-break:break-all;margin:0 0 6px}
 .tags{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--mono);font-size:10px;color:var(--muted)}
 .tags .dur{color:var(--amber)}
+.tags .fd{color:var(--mint)}
+.tags .fd:hover{text-decoration:underline}
 .taglist{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;align-items:center}
 .tg{background:var(--surface-2);border:1px solid var(--line-soft);border-radius:3px;padding:2px 6px;font-family:var(--mono);font-size:10px;color:var(--mint);display:inline-flex;align-items:center;gap:5px}
 .tg x{cursor:pointer;color:var(--muted);font-style:normal}
@@ -266,16 +294,28 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
 <datalist id="tagOptions"></datalist>
 
 <main>
-  <div id="sheet" class="sheet"></div>
-  <div id="sentinel" class="sentinel"></div>
+  <div class="layout" id="layout">
+    <aside class="tree" id="treePane">
+      <div class="tree-head">
+        <span>フォルダ</span>
+        <label class="tree-deep"><input id="treeDeep" type="checkbox" checked> 下位も含む</label>
+      </div>
+      <div id="tree"></div>
+    </aside>
 
-  <div id="empty" class="empty">
-    <h2>まだ何も読み込まれていません</h2>
-    <p>Box の Developer Token を貼り、フォルダ ID を入れて「スキャン」を押してください。</p>
-    <p>ルート（すべてのファイル）は <code>0</code>。個別フォルダの ID は Box の URL 末尾の数字です。</p>
+    <div class="content">
+      <div id="sheet" class="sheet"></div>
+      <div id="sentinel" class="sentinel"></div>
+
+      <div id="empty" class="empty">
+        <h2>まだ何も読み込まれていません</h2>
+        <p>「接続設定」でクライアント ID と Worker URL を入れ、「Box でログイン」を押してください。</p>
+        <p>フォルダ ID はルート（すべてのファイル）が <code>0</code>。個別フォルダは Box の URL 末尾の数字です。</p>
+      </div>
+
+      <details class="debug"><summary>診断ログ</summary><pre id="log"></pre></details>
+    </div>
   </div>
-
-  <details class="debug"><summary>診断ログ</summary><pre id="log"></pre></details>
 </main>
 
 <div id="scrim" class="scrim" role="dialog" aria-modal="true" aria-label="動画プレーヤー">
@@ -304,7 +344,7 @@ const K_FAV = "csFav", K_TAGS = "csTags";
 const $ = id => document.getElementById(id);
 const els = {};
 ["token","folder","depth","recurse","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq",
- "login","logout","clientId","worker","setupBox","redirUri",
+ "login","logout","clientId","worker","setupBox","redirUri","tree","treeDeep","treePane","layout",
  "exportBtn","importBtn","importFile","authDot","authText","nTotal","nHit","nFav","nCached",
  "progress","msg","log","sheet","sentinel","empty","railTags","bulkbar","bulkN","bulkTag",
  "bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
@@ -606,9 +646,90 @@ function removeTag(id, tag){
   refreshCard(id); buildRail();
 }
 
+/* ============ フォルダツリー ============ */
+let selPath = null;                    // null = すべて
+const openPaths = new Set([""]);       // 展開しているフォルダ
+
+function buildFolderTree(){
+  const root = {name:"すべて", path:"", children:new Map(), own:0, total:0};
+  for (const f of files){
+    root.total++;
+    let node = root, acc = "";
+    for (const part of (f.path || "").split("/").filter(Boolean)){
+      acc += "/" + part;
+      if (!node.children.has(part))
+        node.children.set(part, {name:part, path:acc, children:new Map(), own:0, total:0});
+      node = node.children.get(part);
+      node.total++;
+    }
+    node.own++;
+  }
+  return root;
+}
+
+function renderTree(){
+  const root = buildFolderTree();
+  els.tree.innerHTML = "";
+  if (!files.length){
+    els.tree.innerHTML = '<div class="tree-empty">スキャンするとフォルダが並びます</div>';
+    els.layout.classList.add("solo");
+    return;
+  }
+  els.layout.classList.toggle("solo", root.children.size === 0);
+  els.tree.appendChild(nodeEl(root));
+}
+
+function nodeEl(node){
+  const wrap = document.createElement("div");
+  const row = document.createElement("div");
+  row.className = "node" + (selPath === node.path || (selPath === null && node.path === "") ? " on" : "");
+
+  const twist = document.createElement("button");
+  const hasKids = node.children.size > 0;
+  twist.className = "twist" + (hasKids ? "" : " leaf");
+  twist.textContent = openPaths.has(node.path) ? "▼" : "▶";
+  twist.addEventListener("click", () => {
+    if (openPaths.has(node.path)) openPaths.delete(node.path); else openPaths.add(node.path);
+    renderTree();
+  });
+
+  const name = document.createElement("button");
+  name.className = "nname";
+  name.textContent = node.name;
+  name.title = node.path || "すべて";
+  name.addEventListener("click", () => {
+    selPath = node.path === "" ? null : node.path;
+    if (hasKids) openPaths.add(node.path);
+    renderTree(); applyView();
+  });
+
+  const count = document.createElement("span");
+  count.className = "ncount";
+  count.textContent = node.total;
+
+  row.appendChild(twist); row.appendChild(name); row.appendChild(count);
+  wrap.appendChild(row);
+
+  if (hasKids && openPaths.has(node.path)){
+    const kids = document.createElement("div");
+    kids.className = "kids";
+    [...node.children.values()]
+      .sort((a,b) => a.name.localeCompare(b.name, "ja"))
+      .forEach(c => kids.appendChild(nodeEl(c)));
+    wrap.appendChild(kids);
+  }
+  return wrap;
+}
+
+function matchesPath(f){
+  if (selPath == null) return true;
+  const p = f.path || "";
+  return els.treeDeep.checked ? (p === selPath || p.startsWith(selPath + "/")) : p === selPath;
+}
+
 /* ============ 検索クエリ ============ */
 function parseQuery(s){
-  const q = {text:[], notText:[], tags:[], notTags:[], exts:[], fav:false, noFav:false, untagged:false};
+  const q = {text:[], notText:[], tags:[], notTags:[], exts:[], folders:[], notFolders:[], fav:false, noFav:false, untagged:false};
   const tokens = (s.match(/(?:[^\s"]+|"[^"]*")+/g) || []);
   for (let raw of tokens){
     let neg = false, t = raw;
@@ -619,6 +740,7 @@ function parseQuery(s){
     if (t.startsWith("#"))            (neg ? q.notTags : q.tags).push(normTag(t).toLowerCase());
     else if (low.startsWith("tag:"))  (neg ? q.notTags : q.tags).push(normTag(low.slice(4)).toLowerCase());
     else if (low.startsWith("ext:"))  q.exts.push(low.slice(4).replace(/^\./,""));
+    else if (low.startsWith("folder:")) (neg ? q.notFolders : q.folders).push(low.slice(7));
     else if (low === "fav" || low === "is:fav" || low === "★"){ if (neg) q.noFav = true; else q.fav = true; }
     else if (low === "untagged" || low === "is:untagged") q.untagged = !neg;
     else (neg ? q.notText : q.text).push(low);
@@ -626,6 +748,10 @@ function parseQuery(s){
   return q;
 }
 function matches(f, q){
+  if (!matchesPath(f)) return false;
+  const path = (f.path || "").toLowerCase();
+  for (const t of q.folders)    if (!path.includes(t)) return false;
+  for (const t of q.notFolders) if (path.includes(t)) return false;
   const m = marks.get(f.id) || {fav:false, tags:[]};
   const name = f.name.toLowerCase();
   const lowTags = (m.tags || []).map(t => t.toLowerCase());
@@ -678,6 +804,7 @@ async function scan(){
   els.scan.disabled = true; els.cancel.hidden = false;
   els.authDot.className = "dot busy"; say("");
   files = []; cardById.clear(); picked.clear(); els.sheet.innerHTML = ""; rendered = 0;
+  selPath = null; openPaths.clear(); openPaths.add("");
 
   const queue = [{id:rootId, depth:0, path:""}];
   let folders = 0;
@@ -713,7 +840,7 @@ async function scan(){
     else { say(String(err.message||err), true); log("scan error:", err.message); }
   }finally{
     scanAbort = null; els.scan.disabled = false; els.cancel.hidden = true;
-    setAuth(true); buildRail(); applyView();
+    setAuth(true); buildRail(); renderTree(); applyView();
   }
 }
 
@@ -1048,10 +1175,22 @@ function makeCard(file){
 
   const meta = document.createElement("div");
   meta.className = "meta";
-  meta.innerHTML = '<p class="name"></p><div class="tags"><span class="dur"></span><span class="sz"></span><span class="dt"></span></div><div class="taglist"></div>';
+  meta.innerHTML = '<p class="name"></p><div class="tags"><span class="dur"></span><span class="sz"></span><span class="dt"></span><span class="fd"></span></div><div class="taglist"></div>';
   meta.querySelector(".name").textContent = file.name;
   meta.querySelector(".sz").textContent = fmtSize(file.size);
   meta.querySelector(".dt").textContent = fmtDate(file.modified);
+  const fd = meta.querySelector(".fd");
+  if (file.path){
+    fd.textContent = "▸ " + file.path.split("/").filter(Boolean).slice(-1)[0];
+    fd.title = file.path;
+    fd.style.cursor = "pointer";
+    fd.addEventListener("click", () => {
+      selPath = file.path;
+      file.path.split("/").filter(Boolean).reduce((acc,p) => { openPaths.add(acc); return acc + "/" + p; }, "");
+      openPaths.add("");
+      renderTree(); applyView(); window.scrollTo({top:0, behavior:"smooth"});
+    });
+  }
 
   card.appendChild(strip); card.appendChild(meta);
   cardById.set(file.id, {card, strip, star, pick, hq, hero: strip.querySelector(".hero"),
@@ -1359,6 +1498,7 @@ els.clear.addEventListener("click", async () => {
 let qTimer = null;
 els.q.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { buildRail(); applyView(); }, 220); });
 els.sort.addEventListener("change", applyView);
+els.treeDeep.addEventListener("change", applyView);
 els.col.addEventListener("input", () => {
   const v = Math.max(200, Number(els.col.value) || 380);
   document.documentElement.style.setProperty("--col", v + "px");
@@ -1388,6 +1528,7 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   document.documentElement.style.setProperty("--col", els.col.value + "px");
   els.redirUri.textContent = redirectUri();
+  renderTree();
 
   loadAuth();
   saveAuth();
