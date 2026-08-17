@@ -97,22 +97,30 @@ a{color:var(--mint)}
 
 /* ---------- grid ---------- */
 main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
-.sheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:22px}
+.sheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--col,300px),1fr));gap:22px}
 .card{background:var(--surface);border:1px solid var(--line-soft);border-radius:4px;overflow:hidden;display:flex;flex-direction:column;transition:border-color .15s,transform .15s}
 .card:hover{border-color:var(--line);transform:translateY(-2px)}
 .card.picked{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber) inset}
 
 .strip{position:relative;background:#000;cursor:pointer;border-bottom:1px solid var(--line-soft)}
 .rail{height:9px;background:repeating-linear-gradient(90deg,var(--surface-2) 0 6px,transparent 6px 14px);background-color:#0B0E11}
+.hero{position:relative;aspect-ratio:16/9;background:#0B0E11;overflow:hidden}
+.hero img{width:100%;height:100%;object-fit:cover;display:block}
+.hero .tc{position:absolute;right:6px;bottom:6px;font-family:var(--mono);font-size:11px;padding:2px 6px;background:rgba(0,0,0,.7);color:var(--amber);border-radius:2px}
 .frames{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line-soft);aspect-ratio:80/9}
 .frames.solo{grid-template-columns:1fr;aspect-ratio:16/9}
 .frames img{width:100%;height:100%;object-fit:cover;display:block;background:#000}
-.frames .slot{position:relative;overflow:hidden;background:#0B0E11}
+.frames .slot{position:relative;overflow:hidden;background:#0B0E11;cursor:pointer}
 .frames .slot::after{content:attr(data-tc);position:absolute;left:0;bottom:0;font-family:var(--mono);font-size:9px;padding:1px 3px;background:rgba(0,0,0,.65);color:var(--amber);opacity:0;transition:opacity .12s}
 .strip:hover .slot::after{opacity:1}
+.frames .slot.sel{outline:2px solid var(--amber);outline-offset:-2px}
 .frames .slot:hover{outline:1px solid var(--amber);outline-offset:-1px}
-.strip .placeholder{position:absolute;inset:9px 0;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--muted)}
+.strip .placeholder{position:absolute;inset:9px 0 0;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--muted);pointer-events:none}
 .strip .fail{color:var(--red)}
+.hq{position:absolute;left:7px;bottom:7px;z-index:3;background:rgba(11,14,17,.82);border:1px solid rgba(139,153,166,.45);border-radius:3px;padding:3px 8px;font-family:var(--mono);font-size:10px;color:var(--muted);opacity:0;transition:opacity .13s}
+.card:hover .hq{opacity:1}
+.hq:hover{border-color:var(--amber);color:var(--amber)}
+.hq.done{color:var(--mint);border-color:rgba(95,211,196,.45);opacity:1}
 
 .overlay{position:absolute;top:13px;display:flex;gap:5px;z-index:2}
 .overlay.left{left:7px}
@@ -192,10 +200,13 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
           <option value="size">サイズが大きい順</option>
           <option value="fav">お気に入り優先</option>
         </select></div>
+      <div class="field"><label for="col">カード幅</label>
+        <input id="col" class="w-num" type="number" value="380" min="200" max="900" step="20"></div>
       <div class="field"><label for="fw">フレーム幅</label>
         <input id="fw" class="w-num" type="number" value="160" min="40" max="640" step="10"></div>
       <div class="field"><label for="conc">同時取得</label>
         <input id="conc" class="w-num" type="number" value="4" min="1" max="12"></div>
+      <label class="check"><input id="autohq" type="checkbox"> 常に高画質</label>
       <button id="exportBtn" class="btn btn-ghost">書き出し</button>
       <button id="importBtn" class="btn btn-ghost">読み込み</button>
       <button id="refresh" class="btn btn-ghost">一覧を再取得</button>
@@ -272,7 +283,7 @@ const K_FAV = "csFav", K_TAGS = "csTags";
 
 const $ = id => document.getElementById(id);
 const els = {};
-["token","folder","depth","recurse","sync","scan","cancel","clear","refresh","q","sort","fw","conc",
+["token","folder","depth","recurse","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq",
  "exportBtn","importBtn","importFile","authDot","authText","nTotal","nHit","nFav","nCached",
  "progress","msg","log","sheet","sentinel","empty","railTags","bulkbar","bulkN","bulkTag",
  "bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
@@ -582,19 +593,29 @@ async function getRepresentation(fileId, hint){
   const entries = (d.representations && d.representations.entries) || [];
   return entries[0] || null;
 }
-async function waitForRep(entry, tries = 4){
+/**
+ * Box の表現は遅延生成。state が none（未生成）や pending（生成中）のときは
+ * info.url を叩くと生成が始まる／進捗が返る。
+ * 戻り値: {rep, pending} — pending が true なら「まだ出来ていないだけ」。
+ */
+async function waitForRep(entry, tries = 5){
   let e = entry;
   for (let i = 0; i < tries; i++){
     const state = e.status && e.status.state;
-    if (state === "success" || state === "viewable") return e;
-    if (state === "error" || state === "none") return null;
-    if (!e.info || !e.info.url) return null;
-    await sleep(1500 * (i + 1));
+    if (state === "success" || state === "viewable") return {rep:e, pending:false};
+    if (state === "error") return {rep:null, pending:false};
+    if (!e.info || !e.info.url) return {rep:null, pending:false};
+
     const r = await fetch(e.info.url, {headers:{Authorization:"Bearer " + token()}});
-    if (!r.ok) return null;
+    if (!r.ok) return {rep:null, pending:false};
     e = await r.json();
+
+    const st = e.status && e.status.state;
+    if (st === "success" || st === "viewable") return {rep:e, pending:false};
+    if (st === "error") return {rep:null, pending:false};
+    await sleep(2000 * (i + 1));
   }
-  return null;
+  return {rep:null, pending:true};
 }
 const repContentUrl = e => (e && e.content && e.content.url_template)
   ? e.content.url_template.replace("{+asset_path}","") : null;
@@ -628,30 +649,94 @@ async function sliceFilmstrip(blob, frameW){
   bmp.close && bmp.close();
   return {frames, total};
 }
+/**
+ * 原本の動画を直接シークして 5 コマを切り出す。
+ * filmstrip の 160x90 と違い、元の解像度そのままで取れる。
+ * Range リクエストで必要な部分しか落とさないので、5GB の動画でも実用になる。
+ */
+async function captureFromVideo(src, points){
+  const v = document.createElement("video");
+  v.preload = "metadata";
+  v.muted = true;
+  v.crossOrigin = "anonymous";
+  v.src = src;
+
+  await new Promise((res, rej) => {
+    const to = setTimeout(() => rej(new Error("メタデータ取得がタイムアウト")), 30000);
+    v.addEventListener("loadedmetadata", () => { clearTimeout(to); res(); }, {once:true});
+    v.addEventListener("error", () => { clearTimeout(to); rej(new Error("動画を開けません")); }, {once:true});
+  });
+
+  const dur = v.duration;
+  if (!isFinite(dur) || dur <= 0) throw new Error("再生時間が取得できません");
+
+  const canvas = document.createElement("canvas");
+  canvas.width = v.videoWidth; canvas.height = v.videoHeight;
+  const ctx = canvas.getContext("2d");
+  const frames = [];
+
+  for (const p of points){
+    await new Promise((res, rej) => {
+      const to = setTimeout(() => rej(new Error("シークがタイムアウト")), 30000);
+      v.addEventListener("seeked", () => { clearTimeout(to); res(); }, {once:true});
+      v.currentTime = Math.min(dur - 0.1, Math.max(0, dur * p));
+    });
+    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+    frames.push(await new Promise(r => canvas.toBlob(r, "image/jpeg", .85)));
+  }
+  v.src = ""; v.load();
+  return {frames, duration: dur, w: canvas.width, h: canvas.height};
+}
+
+async function buildHiRes(file){
+  const rec = {id:file.id, frames:[], total:0, interval:null, ok:false, pending:false, hq:true, duration:null, ts:Date.now()};
+  const cap = await captureFromVideo(originalUrl(file), SAMPLE_POINTS);
+  rec.frames = cap.frames;
+  rec.duration = cap.duration;
+  rec.ok = true;
+  log(`高画質 ${file.name} → ${cap.w}x${cap.h} × 5 コマ`);
+  await idbPut("thumbs", rec);
+  return rec;
+}
+
+
 async function buildThumbs(file){
   const cached = await idbGet("thumbs", file.id);
-  if (cached) return cached;
+  if (cached && cached.ok && cached.frames && cached.frames.length){
+    if (!els.autohq.checked || cached.hq) return cached;
+  }
+  if (els.autohq.checked){
+    try{ return await buildHiRes(file); }
+    catch(err){ log("高画質に失敗、filmstrip に戻します:", file.name, err.message); }
+    if (cached && cached.ok) return cached;
+  }
+
   const frameW = Math.max(40, Number(els.fw.value) || 160);
-  const rec = {id:file.id, frames:[], total:0, interval:null, ok:false, ts:Date.now()};
+  const rec = {id:file.id, frames:[], total:0, interval:null, ok:false, pending:false, ts:Date.now()};
   try{
-    let rep = await getRepresentation(file.id, "[filmstrip]");
-    if (rep) rep = await waitForRep(rep);
-    const url = repContentUrl(rep);
+    const fs = await waitForRep(await getRepresentation(file.id, "[filmstrip]") || {});
+    const url = repContentUrl(fs.rep);
     if (url){
       const sliced = await sliceFilmstrip(await fetchBlob(url), frameW);
       rec.frames = sliced.frames; rec.total = sliced.total;
-      rec.interval = (rep.metadata && rep.metadata.interval) || null;
+      rec.interval = (fs.rep.metadata && fs.rep.metadata.interval) || null;
       rec.ok = true;
     }else{
-      let jpg = await getRepresentation(file.id, "[jpg?dimensions=320x320]");
-      if (jpg) jpg = await waitForRep(jpg);
-      const jurl = repContentUrl(jpg);
-      if (jurl){ rec.frames = [await fetchBlob(jurl)]; rec.total = 1; rec.ok = true;
-        log(file.name, "→ filmstrip なし、静止画で代替"); }
-      else log(file.name, "→ サムネイル表現なし");
+      // filmstrip は Box 側で生成中。とりあえず静止画を出しておき、あとで作り直す。
+      const jp = await waitForRep(await getRepresentation(file.id, "[jpg?dimensions=320x320]") || {}, 2);
+      const jurl = repContentUrl(jp.rep);
+      if (jurl){ rec.frames = [await fetchBlob(jurl)]; rec.total = 1; }
+      rec.pending = fs.pending || jp.pending;
+      rec.ok = !rec.pending && !!jurl;
+      log(file.name, rec.pending ? "→ filmstrip を生成中（あとで再取得します）"
+                                 : (jurl ? "→ filmstrip なし、静止画で確定" : "→ サムネイル表現なし"));
     }
-  }catch(err){ log("thumb error", file.name, err.message); }
-  await idbPut("thumbs", rec);
+  }catch(err){
+    log("thumb error", file.name, err.message);
+    rec.pending = true;   // 通信エラーは一時的なものとして扱う
+  }
+  // 生成待ちのものは保存しない（保存すると二度と再試行されないため）
+  if (!rec.pending) await idbPut("thumbs", rec);
   return rec;
 }
 
@@ -784,10 +869,29 @@ function makeCard(file){
   const strip = document.createElement("div");
   strip.className = "strip";
   strip.innerHTML =
+    '<div class="hero"></div>' +
     '<div class="rail"></div>' +
     '<div class="frames"><div class="slot"></div><div class="slot"></div><div class="slot"></div><div class="slot"></div><div class="slot"></div></div>' +
     '<div class="rail"></div>' +
     '<div class="placeholder">読み込み待ち</div>';
+
+  const hq = document.createElement("button");
+  hq.className = "hq"; hq.textContent = "⤢ 高画質";
+  hq.title = "元動画から 5 コマを作り直します";
+  hq.addEventListener("click", async e => {
+    e.stopPropagation();
+    hq.textContent = "作成中…";
+    try{
+      await buildHiRes(file);
+      await paintThumbs(file, true);
+      hq.textContent = "⤢ 高画質済"; hq.classList.add("done");
+    }catch(err){
+      hq.textContent = "⤢ 失敗";
+      log("高画質失敗", file.name, err.message);
+      say("高画質サムネイルを作れませんでした: " + err.message, true);
+    }
+  });
+  strip.appendChild(hq);
 
   const left = document.createElement("div"); left.className = "overlay left";
   const pick = document.createElement("button");
@@ -820,7 +924,8 @@ function makeCard(file){
   meta.querySelector(".dt").textContent = fmtDate(file.modified);
 
   card.appendChild(strip); card.appendChild(meta);
-  cardById.set(file.id, {card, strip, star, pick, dur: meta.querySelector(".dur"), taglist: meta.querySelector(".taglist")});
+  cardById.set(file.id, {card, strip, star, pick, hq, hero: strip.querySelector(".hero"),
+    dur: meta.querySelector(".dur"), taglist: meta.querySelector(".taglist")});
   paintTagList(file.id);
   thumbObserver.observe(card);
   return card;
@@ -876,57 +981,149 @@ const thumbObserver = new IntersectionObserver(entries => {
   }
 }, {rootMargin:"600px 0px"});
 
-async function paintThumbs(file){
+const waiting = new Set();   // Box が filmstrip を生成中のファイル ID
+
+async function paintThumbs(file, fromCache){
   const ref = cardById.get(file.id);
   if (!ref) return;
-  const ph = ref.strip.querySelector(".placeholder");
+  let ph = ref.strip.querySelector(".placeholder");
   if (ph) ph.textContent = "取得中…";
-  const rec = await buildThumbs(file);
+
+  const rec = fromCache ? await idbGet("thumbs", file.id) : await buildThumbs(file);
+  if (!rec) return;
   const framesEl = ref.strip.querySelector(".frames");
-  if (!rec.ok || !rec.frames.length){
-    if (ph){ ph.textContent = "サムネイルなし"; ph.classList.add("fail"); }
+
+  if (rec.pending) waiting.add(file.id); else waiting.delete(file.id);
+
+  if (!rec.frames.length){
+    if (ph){
+      ph.textContent = rec.pending ? "Box が生成中…" : "サムネイルなし";
+      ph.classList.toggle("fail", !rec.pending);
+    }
+    updateWaitingCount();
     return;
   }
-  if (ph) ph.remove();
+
+  // 差し替えのため既存の画像を捨ててから描き直す
+  ref.strip.querySelectorAll("img").forEach(i => { URL.revokeObjectURL(i.src); i.remove(); });
   const n = rec.frames.length;
-  if (n === 1) framesEl.classList.add("solo");
-  framesEl.querySelectorAll(".slot").forEach((slot,i) => {
-    if (i >= n){ slot.remove(); return; }
+  const urls = rec.frames.map(b => URL.createObjectURL(b));
+  const tcOf = i => {
+    if (rec.duration) return fmtTC(SAMPLE_POINTS[i] * rec.duration);
+    if (rec.interval && rec.total > 1) return fmtTC(Math.round(SAMPLE_POINTS[i] * (rec.total-1)) * rec.interval);
+    return "";
+  };
+
+  // 主画像 — 既定は中央のコマ
+  ref.hero.innerHTML = "";
+  const heroImg = document.createElement("img");
+  const heroTc = document.createElement("span");
+  heroTc.className = "tc";
+  ref.hero.appendChild(heroImg); ref.hero.appendChild(heroTc);
+
+  const showFrame = i => {
+    heroImg.src = urls[i];
+    heroTc.textContent = tcOf(i);
+    heroTc.style.display = tcOf(i) ? "" : "none";
+    framesEl.querySelectorAll(".slot").forEach((s,k) => s.classList.toggle("sel", k === i));
+  };
+
+  framesEl.classList.toggle("solo", n === 1);
+  [...framesEl.querySelectorAll(".slot")].forEach((slot,i) => {
+    if (i >= n){ slot.style.display = "none"; return; }
+    slot.style.display = "";
     const img = document.createElement("img");
     img.loading = "lazy"; img.alt = "";
-    img.src = URL.createObjectURL(rec.frames[i]);
+    img.src = urls[i];
     slot.appendChild(img);
-    if (rec.interval && rec.total > 1)
-      slot.dataset.tc = fmtTC(Math.round(SAMPLE_POINTS[i] * (rec.total-1)) * rec.interval);
+    slot.dataset.tc = tcOf(i);
+    // 帯のコマにマウスを載せると主画像が切り替わる
+    slot.addEventListener("mouseenter", () => showFrame(i));
+    slot.addEventListener("click", e => { e.stopPropagation(); openPlayer(file, SAMPLE_POINTS[i]); });
   });
-  if (rec.interval && rec.total > 1) ref.dur.textContent = "≈ " + fmtTC(rec.total * rec.interval);
-  cachedCount++; els.nCached.textContent = cachedCount;
+  showFrame(Math.min(2, n - 1));
+
+  if (rec.duration) ref.dur.textContent = "≈ " + fmtTC(rec.duration);
+  else if (rec.interval && rec.total > 1) ref.dur.textContent = "≈ " + fmtTC(rec.total * rec.interval);
+  if (rec.hq){ ref.hq.textContent = "⤢ 高画質済"; ref.hq.classList.add("done"); }
+
+  if (ph && !rec.pending){ ph.remove(); ph = null; }
+  if (ph && rec.pending){
+    ph.textContent = "静止画（filmstrip を生成中）";
+    ph.style.background = "rgba(11,14,17,.7)";
+  }
+  if (rec.ok && !fromCache){ cachedCount++; els.nCached.textContent = cachedCount; }
+  updateWaitingCount();
 }
 
+function updateWaitingCount(){
+  els.progress.textContent = waiting.size
+    ? `Box が ${waiting.size} 本のコマ画像を生成中 — 30秒ごとに取りに行きます`
+    : "";
+}
+
+// Box 側の生成が終わった頃を見計らって、画面に残っているものだけ取り直す。
+setInterval(() => {
+  if (!waiting.size || scanAbort) return;
+  const retry = [...waiting].filter(id => cardById.has(id)).slice(0, 6);
+  for (const id of retry){
+    const f = files.find(x => x.id === id);
+    if (f) pool.push(() => paintThumbs(f));
+  }
+}, 30000);
+
 /* ============ プレーヤー ============ */
-async function openPlayer(file){
+// 原本を直接読む URL。Box は access_token をクエリで受け付けるので
+// <video> にそのまま渡せる（Authorization ヘッダーは付けられないため）。
+function originalUrl(file){
+  return `${API}/files/${file.id}/content?access_token=${encodeURIComponent(token())}`;
+}
+
+async function openPlayer(file, startAt){
   currentFile = file;
   els.scrim.classList.add("open");
   els.pTitle.textContent = file.name;
   els.pBox.href = "https://app.box.com/file/" + file.id;
   els.pMeta.textContent = [fmtSize(file.size), fmtDate(file.modified), file.path].filter(Boolean).join("  ·  ");
   els.pFav.style.color = getMark(file.id).fav ? "var(--amber)" : "";
-  els.pNote.textContent = "変換版を準備中…";
-  els.pVideo.removeAttribute("src"); els.pVideo.load();
-  try{
-    let rep = await getRepresentation(file.id, "[mp4]");
-    if (rep) rep = await waitForRep(rep, 6);
-    const url = repContentUrl(rep);
-    if (!url) throw new Error("mp4 変換版がありません");
-    els.pVideo.src = url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
-    els.pNote.textContent = "Box の mp4 変換版を再生中";
-  }catch(err){
-    els.pNote.textContent = "再生できません（" + err.message + "）— 「Box で開く」をお試しください";
-    log("player error", file.name, err.message);
+
+  // 原本をそのままストリーミングする。Range リクエストが効くので
+  // 5GB でも先頭から順に落とすわけではない。変換版の生成を待つ必要もない。
+  els.pVideo.onerror = null;
+  els.pVideo.src = originalUrl(file);
+  els.pNote.textContent = "原本を再生中";
+  if (startAt != null){
+    els.pVideo.addEventListener("loadedmetadata", () => {
+      if (isFinite(els.pVideo.duration)) els.pVideo.currentTime = els.pVideo.duration * startAt;
+    }, {once:true});
   }
+  els.pVideo.play().catch(() => {});
+
+  // 原本のコーデックをブラウザが扱えないときだけ、Box の変換版に切り替える
+  els.pVideo.onerror = async () => {
+    const code = els.pVideo.error ? els.pVideo.error.code : "?";
+    log("原本の再生に失敗 (code " + code + ")", file.name, "→ mp4 変換版を試します");
+    els.pNote.textContent = "原本を再生できないため変換版を準備しています…";
+    try{
+      const got = await waitForRep(await getRepresentation(file.id, "[mp4]") || {}, 8);
+      const url = repContentUrl(got.rep);
+      if (!url) throw new Error(got.pending
+        ? "Box が変換版を生成中です。数分後にもう一度開いてください"
+        : "この動画には変換版がありません");
+      els.pVideo.onerror = () => {
+        els.pNote.textContent = "変換版も再生できません — 「Box で開く」をお試しください";
+      };
+      els.pVideo.src = url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
+      els.pNote.textContent = "Box の mp4 変換版を再生中";
+    }catch(err){
+      els.pNote.textContent = "再生できません（" + err.message + "）— 「Box で開く」をお試しください";
+      log("player error", file.name, err.message);
+    }
+  };
 }
 function closePlayer(){
   els.scrim.classList.remove("open");
+  els.pVideo.onerror = null;
   els.pVideo.pause(); els.pVideo.removeAttribute("src"); els.pVideo.load();
   currentFile = null;
 }
@@ -1026,6 +1223,11 @@ els.clear.addEventListener("click", async () => {
 let qTimer = null;
 els.q.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { buildRail(); applyView(); }, 220); });
 els.sort.addEventListener("change", applyView);
+els.col.addEventListener("input", () => {
+  const v = Math.max(200, Number(els.col.value) || 380);
+  document.documentElement.style.setProperty("--col", v + "px");
+  localStorage.setItem("bcs_col", v);
+});
 els.pClose.addEventListener("click", closePlayer);
 els.pFav.addEventListener("click", () => { if (currentFile) setFav(currentFile.id, !getMark(currentFile.id).fav); });
 els.scrim.addEventListener("click", e => { if (e.target === els.scrim) closePlayer(); });
@@ -1044,6 +1246,8 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
     marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [], dirty:!!rec.dirty});
   els.token.value = localStorage.getItem("bcs_token") || "";
   els.folder.value = localStorage.getItem("bcs_folder") || "0";
+  els.col.value = localStorage.getItem("bcs_col") || "380";
+  document.documentElement.style.setProperty("--col", els.col.value + "px");
   log("ready — marks:", marks.size);
 
   // 前回のトークンがまだ生きていれば、そのまま前回の続きを表示する。
