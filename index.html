@@ -60,6 +60,10 @@ a{color:var(--mint)}
 
 .hint{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px;letter-spacing:.03em}
 .hint b{color:var(--amber);font-weight:500}
+.setup{margin-top:12px;border:1px solid var(--line-soft);border-radius:4px;background:var(--surface);padding:0 12px}
+.setup summary{padding:8px 0;cursor:pointer;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.setup[open]{padding-bottom:10px}
+.setup .rack{margin-top:2px}
 
 /* ---------- tag rail ---------- */
 .rail-tags{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;max-height:78px;overflow-y:auto}
@@ -178,8 +182,8 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
     </div>
 
     <div class="rack">
-      <div class="field"><label for="token">アクセストークン</label>
-        <input id="token" class="w-token" type="password" placeholder="Developer Token を貼り付け" autocomplete="off"></div>
+      <button id="login" class="btn btn-go">Box でログイン</button>
+      <button id="logout" class="btn btn-ghost" hidden>ログアウト</button>
       <div class="field"><label for="folder">フォルダ ID</label>
         <input id="folder" class="w-id" type="text" value="0" inputmode="numeric"></div>
       <div class="field"><label for="depth">階層</label>
@@ -189,6 +193,22 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
       <button id="scan" class="btn btn-go">スキャン</button>
       <button id="cancel" class="btn btn-stop" hidden>中止</button>
     </div>
+
+    <details class="setup" id="setupBox">
+      <summary>接続設定（初回のみ）</summary>
+      <div class="rack">
+        <div class="field"><label for="clientId">クライアント ID</label>
+          <input id="clientId" class="w-token" type="text" placeholder="Box 開発者コンソールの Client ID" autocomplete="off"></div>
+        <div class="field"><label for="worker">Worker URL</label>
+          <input id="worker" class="w-token" type="text" placeholder="https://xxx.workers.dev" autocomplete="off"></div>
+        <div class="field"><label for="token">開発者トークン（予備）</label>
+          <input id="token" class="w-token" type="password" placeholder="ログインを使う場合は空でよい" autocomplete="off"></div>
+      </div>
+      <p class="hint">
+        リダイレクト URI には <b id="redirUri"></b> を Box 側に登録してください。
+        ログインすると60日間有効なリフレッシュトークンが保存され、以後アクセストークンは自動で更新されます。
+      </p>
+    </details>
 
     <div class="rack">
       <div class="field"><label for="q">検索</label>
@@ -284,6 +304,7 @@ const K_FAV = "csFav", K_TAGS = "csTags";
 const $ = id => document.getElementById(id);
 const els = {};
 ["token","folder","depth","recurse","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq",
+ "login","logout","clientId","worker","setupBox","redirUri",
  "exportBtn","importBtn","importFile","authDot","authText","nTotal","nHit","nFav","nCached",
  "progress","msg","log","sheet","sentinel","empty","railTags","bulkbar","bulkN","bulkTag",
  "bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
@@ -355,11 +376,98 @@ function idbClearStore(name){
   });
 }
 
+/* ============ 認証（OAuth + 自動更新） ============ */
+const auth = {access:null, refresh:null, exp:0};
+
+function loadAuth(){
+  try{
+    const s = JSON.parse(localStorage.getItem("bcs_auth") || "null");
+    if (s && s.access){ auth.access = s.access; auth.refresh = s.refresh; auth.exp = s.exp || 0; }
+  }catch(_){}
+}
+function saveAuth(){
+  localStorage.setItem("bcs_auth", JSON.stringify(auth));
+  els.logout.hidden = !auth.access;
+  els.login.textContent = auth.access ? "ログインし直す" : "Box でログイン";
+}
+function clearAuth(){
+  auth.access = auth.refresh = null; auth.exp = 0;
+  localStorage.removeItem("bcs_auth");
+  els.logout.hidden = true;
+  els.login.textContent = "Box でログイン";
+}
+function redirectUri(){ return location.origin + location.pathname; }
+
+async function callWorker(endpoint, body){
+  const base = els.worker.value.trim().replace(/\/+$/, "");
+  if (!base) throw new Error("Worker URL が設定されていません");
+  const r = await fetch(base + endpoint, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(body)
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error_description || d.error || ("Worker " + r.status));
+  return d;
+}
+function absorbTokens(d){
+  auth.access = d.access_token;
+  if (d.refresh_token) auth.refresh = d.refresh_token;   // 使うたびに新しいものに入れ替わる
+  auth.exp = Date.now() + ((d.expires_in || 3600) * 1000);
+  saveAuth();
+  log("トークンを取得しました。次の更新は " + new Date(auth.exp - 5*60*1000).toLocaleTimeString("ja-JP"));
+}
+
+function startLogin(){
+  const cid = els.clientId.value.trim();
+  if (!cid) { els.setupBox.open = true; return say("クライアント ID を入力してください", true); }
+  if (!els.worker.value.trim()) { els.setupBox.open = true; return say("Worker URL を入力してください", true); }
+  saveSettings();
+  const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  sessionStorage.setItem("bcs_state", state);
+  location.href = "https://account.box.com/api/oauth2/authorize"
+    + "?client_id=" + encodeURIComponent(cid)
+    + "&response_type=code"
+    + "&redirect_uri=" + encodeURIComponent(redirectUri())
+    + "&state=" + encodeURIComponent(state);
+}
+
+// リフレッシュは 1 本だけ走らせる。並行して何本も投げると、
+// Box はリフレッシュトークンを 1 回きりで無効化するため全部失敗する。
+let refreshing = null;
+function refreshTokens(){
+  if (!refreshing){
+    refreshing = (async () => {
+      if (!auth.refresh) throw new Error("リフレッシュトークンがありません");
+      absorbTokens(await callWorker("/refresh", {refresh_token: auth.refresh}));
+    })().finally(() => { refreshing = null; });
+  }
+  return refreshing;
+}
+async function ensureFresh(){
+  if (!auth.access || !auth.refresh) return;
+  if (Date.now() < auth.exp - 5*60*1000) return;
+  try{ await refreshTokens(); }
+  catch(err){
+    log("更新に失敗:", err.message);
+    setAuth(false, "再ログインが必要です");
+    say("セッションが切れました。もう一度ログインしてください。", true);
+  }
+}
+setInterval(ensureFresh, 60000);   // 長いスキャン中でも切れないように
+
+function saveSettings(){
+  localStorage.setItem("bcs_client", els.clientId.value.trim());
+  localStorage.setItem("bcs_worker", els.worker.value.trim());
+  localStorage.setItem("bcs_token", els.token.value.trim());
+  localStorage.setItem("bcs_folder", els.folder.value.trim());
+}
+
 /* ============ Box API ============ */
-const token = () => els.token.value.trim();
+const token = () => auth.access || els.token.value.trim();
 
 async function boxFetch(path, opts = {}){
-  if (!token()) throw new Error("アクセストークンが空です");
+  if (!token()) throw new Error("ログインしていません");
   const headers = Object.assign({Authorization:"Bearer " + token()}, opts.headers || {});
   const r = await fetch(API + path, Object.assign({}, opts, {headers}));
   if (r.status === 429 || r.status >= 500){
@@ -368,7 +476,17 @@ async function boxFetch(path, opts = {}){
     await sleep(wait * 1000);
     return boxFetch(path, opts);
   }
-  if (r.status === 401){ setAuth(false, "トークンが無効か期限切れです"); throw new Error("401 認証エラー"); }
+  if (r.status === 401){
+    // 期限切れなら 1 度だけ更新して再試行する
+    if (auth.refresh && !opts._retried){
+      try{
+        await refreshTokens();
+        return boxFetch(path, Object.assign({}, opts, {_retried:true}));
+      }catch(err){ log("401 後の更新に失敗:", err.message); }
+    }
+    setAuth(false, "トークンが無効か期限切れです");
+    throw new Error("401 認証エラー");
+  }
   if (!r.ok){
     const body = await r.text().catch(() => "");
     const e = new Error(r.status + " " + body.slice(0,200)); e.status = r.status; throw e;
@@ -1199,9 +1317,15 @@ els.importFile.addEventListener("change", async e => {
 
 /* ============ イベント ============ */
 els.scan.addEventListener("click", async () => {
-  localStorage.setItem("bcs_token", els.token.value);
-  localStorage.setItem("bcs_folder", els.folder.value);
+  saveSettings();
+  await ensureFresh();
   if (await checkAuth()) scan();
+});
+els.login.addEventListener("click", startLogin);
+els.logout.addEventListener("click", () => {
+  clearAuth();
+  setAuth(false, "ログアウトしました");
+  say("ログアウトしました。タグとサムネイルは残っています。");
 });
 els.cancel.addEventListener("click", () => scanAbort && scanAbort.abort());
 
@@ -1244,20 +1368,53 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   db = await openDB().catch(() => null);
   for (const rec of await idbAll("marks"))
     marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [], dirty:!!rec.dirty});
-  els.token.value = localStorage.getItem("bcs_token") || "";
-  els.folder.value = localStorage.getItem("bcs_folder") || "0";
-  els.col.value = localStorage.getItem("bcs_col") || "380";
+
+  els.clientId.value = localStorage.getItem("bcs_client") || "";
+  els.worker.value   = localStorage.getItem("bcs_worker") || "";
+  els.token.value    = localStorage.getItem("bcs_token") || "";
+  els.folder.value   = localStorage.getItem("bcs_folder") || "0";
+  els.col.value      = localStorage.getItem("bcs_col") || "380";
   document.documentElement.style.setProperty("--col", els.col.value + "px");
+  els.redirUri.textContent = redirectUri();
+
+  loadAuth();
+  saveAuth();
   log("ready — marks:", marks.size);
 
-  // 前回のトークンがまだ生きていれば、そのまま前回の続きを表示する。
-  // 一覧キャッシュが残っていれば Box への問い合わせは発生しない。
-  if (els.token.value && await checkAuth()){
+  // Box からの折り返し（?code=...）を処理する
+  const params = new URLSearchParams(location.search);
+  if (params.get("error")){
+    say("ログインが拒否されました: " + params.get("error"), true);
+    history.replaceState({}, "", location.pathname);
+  }else if (params.get("code")){
+    const expect = sessionStorage.getItem("bcs_state");
+    history.replaceState({}, "", location.pathname);
+    if (expect && params.get("state") !== expect){
+      say("ログインの検証に失敗しました（state 不一致）。もう一度お試しください。", true);
+    }else{
+      try{
+        say("ログイン処理中…");
+        absorbTokens(await callWorker("/token", {code: params.get("code"), redirect_uri: redirectUri()}));
+        say("ログインしました");
+      }catch(err){
+        say("ログインに失敗しました: " + err.message, true);
+        log("token exchange failed:", err.message);
+      }
+    }
+    sessionStorage.removeItem("bcs_state");
+  }
+
+  if (!auth.access && !els.token.value){
+    els.setupBox.open = !els.clientId.value;
+    setAuth(false, "未接続");
+    return;
+  }
+
+  await ensureFresh();
+  if (await checkAuth()){
     say("前回の続きを読み込んでいます…");
     await scan();
     say("");
-  }else if (els.token.value){
-    say("トークンの期限が切れています。新しい開発者トークンを貼り付けてスキャンしてください。", true);
   }
 })();
 </script>
