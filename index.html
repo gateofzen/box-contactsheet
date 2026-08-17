@@ -126,6 +126,13 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
 .ncount{color:var(--muted);padding-right:7px;font-size:10px}
 .kids{margin-left:11px;border-left:1px solid var(--line-soft);padding-left:3px}
 .tree-empty{padding:8px;color:var(--muted)}
+.tree-foot{border-top:1px solid var(--line-soft);margin-top:9px;padding:9px 8px 2px;display:flex;flex-direction:column;gap:7px}
+.tree-foot .sel{color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-foot .sel b{color:var(--amber);font-weight:500}
+.tree-foot .btn{width:100%;text-align:center}
+.node .vcount{color:var(--amber);font-size:9px;padding-right:6px}
+.node.on .vcount{color:#171208}
+.twist.busy{color:var(--amber);animation:pulse 1s infinite}
 @media (max-width:900px){.layout{grid-template-columns:1fr}.tree{position:static;max-height:220px}}
 .sheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--col,300px),1fr));gap:22px}
 .card{background:var(--surface);border:1px solid var(--line-soft);border-radius:4px;overflow:hidden;display:flex;flex-direction:column;transition:border-color .15s,transform .15s}
@@ -297,10 +304,15 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
   <div class="layout" id="layout">
     <aside class="tree" id="treePane">
       <div class="tree-head">
-        <span>フォルダ</span>
-        <label class="tree-deep"><input id="treeDeep" type="checkbox" checked> 下位も含む</label>
+        <span>Box フォルダ</span>
+        <button id="treeReload" class="btn btn-sm btn-ghost" title="Box から取り直す">⟳</button>
       </div>
       <div id="tree"></div>
+      <div class="tree-foot">
+        <div class="sel">選択中: <b id="selName">—</b></div>
+        <button id="loadFolder" class="btn btn-sm btn-go">このフォルダを読み込む</button>
+        <button id="prefetch" class="btn btn-sm">サムネイル一括取得</button>
+      </div>
     </aside>
 
     <div class="content">
@@ -344,7 +356,7 @@ const K_FAV = "csFav", K_TAGS = "csTags";
 const $ = id => document.getElementById(id);
 const els = {};
 ["token","folder","depth","recurse","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq",
- "login","logout","clientId","worker","setupBox","redirUri","tree","treeDeep","treePane","layout",
+ "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName","loadFolder","prefetch",
  "exportBtn","importBtn","importFile","authDot","authText","nTotal","nHit","nFav","nCached",
  "progress","msg","log","sheet","sentinel","empty","railTags","bulkbar","bulkN","bulkTag",
  "bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
@@ -646,85 +658,151 @@ function removeTag(id, tag){
   refreshCard(id); buildRail();
 }
 
-/* ============ フォルダツリー ============ */
-let selPath = null;                    // null = すべて
-const openPaths = new Set([""]);       // 展開しているフォルダ
+/* ============ Box フォルダブラウザ ============ */
+// 走査結果からの逆算ではなく、Box のフォルダを実際にたどる。
+// 一覧は既存の folders ストアと共用なので、走査済みの範囲は追加通信なしで開く。
+const fnode = new Map();          // id -> {id, name, kids:null|[id], videos:number, loading:bool}
+const fopen = new Set();
+let froot = "0";
+let fsel = null;                  // 選択中のフォルダ id
 
-function buildFolderTree(){
-  const root = {name:"すべて", path:"", children:new Map(), own:0, total:0};
-  for (const f of files){
-    root.total++;
-    let node = root, acc = "";
-    for (const part of (f.path || "").split("/").filter(Boolean)){
-      acc += "/" + part;
-      if (!node.children.has(part))
-        node.children.set(part, {name:part, path:acc, children:new Map(), own:0, total:0});
-      node = node.children.get(part);
-      node.total++;
-    }
-    node.own++;
+function ensureNode(id, name){
+  if (!fnode.has(id)) fnode.set(id, {id, name: name || id, kids:null, videos:0, loading:false});
+  else if (name) fnode.get(id).name = name;
+  return fnode.get(id);
+}
+
+async function fetchFolderName(id){
+  if (id === "0") return "すべてのファイル";
+  try{
+    const d = await boxFetch(`/folders/${id}?fields=name`);
+    return d.name || id;
+  }catch(_){ return id; }
+}
+
+async function loadChildren(id, force){
+  const node = ensureNode(id);
+  if (node.kids && !force) return node.kids;
+  node.loading = true; renderTree();
+
+  let entries;
+  const cached = force ? null : await idbGet("folders", id);
+  if (cached && Date.now() - cached.ts < 6*60*60*1000){
+    entries = cached.entries;
+  }else{
+    entries = await listFolder(id);
+    await idbPut("folders", {id, entries, ts: Date.now()});
   }
-  return root;
+
+  node.videos = entries.filter(isVideo).length;
+  node.kids = entries.filter(e => e.type === "folder")
+    .sort((a,b) => a.name.localeCompare(b.name, "ja"))
+    .map(e => { ensureNode(e.id, e.name); return e.id; });
+  node.loading = false;
+  renderTree();
+  return node.kids;
+}
+
+async function toggleFolder(id){
+  if (fopen.has(id)){ fopen.delete(id); renderTree(); return; }
+  fopen.add(id);
+  try{ await loadChildren(id); }
+  catch(err){ fopen.delete(id); say("フォルダを開けません: " + err.message, true); renderTree(); }
+}
+
+function selectFolder(id){
+  fsel = id;
+  els.folder.value = id;
+  const n = fnode.get(id);
+  els.selName.textContent = n ? n.name : id;
+  els.selName.title = id;
+  renderTree();
 }
 
 function renderTree(){
-  const root = buildFolderTree();
   els.tree.innerHTML = "";
-  if (!files.length){
-    els.tree.innerHTML = '<div class="tree-empty">スキャンするとフォルダが並びます</div>';
-    els.layout.classList.add("solo");
+  if (!fnode.has(froot)){
+    els.tree.innerHTML = '<div class="tree-empty">ログインするとフォルダが並びます</div>';
     return;
   }
-  els.layout.classList.toggle("solo", root.children.size === 0);
-  els.tree.appendChild(nodeEl(root));
+  els.tree.appendChild(folderRow(froot, 0));
 }
 
-function nodeEl(node){
+function folderRow(id, depth){
+  const node = ensureNode(id);
   const wrap = document.createElement("div");
   const row = document.createElement("div");
-  row.className = "node" + (selPath === node.path || (selPath === null && node.path === "") ? " on" : "");
+  row.className = "node" + (fsel === id ? " on" : "");
 
   const twist = document.createElement("button");
-  const hasKids = node.children.size > 0;
-  twist.className = "twist" + (hasKids ? "" : " leaf");
-  twist.textContent = openPaths.has(node.path) ? "▼" : "▶";
-  twist.addEventListener("click", () => {
-    if (openPaths.has(node.path)) openPaths.delete(node.path); else openPaths.add(node.path);
-    renderTree();
-  });
+  twist.className = "twist" + (node.loading ? " busy" : "");
+  twist.textContent = node.loading ? "◌" : (fopen.has(id) ? "▼" : "▶");
+  twist.addEventListener("click", e => { e.stopPropagation(); toggleFolder(id); });
 
   const name = document.createElement("button");
   name.className = "nname";
   name.textContent = node.name;
-  name.title = node.path || "すべて";
+  name.title = "ID " + id;
   name.addEventListener("click", () => {
-    selPath = node.path === "" ? null : node.path;
-    if (hasKids) openPaths.add(node.path);
-    renderTree(); applyView();
+    selectFolder(id);
+    if (!fopen.has(id)) toggleFolder(id);
   });
 
-  const count = document.createElement("span");
-  count.className = "ncount";
-  count.textContent = node.total;
+  const vc = document.createElement("span");
+  vc.className = "vcount";
+  if (node.kids) vc.textContent = node.videos ? node.videos + "本" : "";
 
-  row.appendChild(twist); row.appendChild(name); row.appendChild(count);
+  row.appendChild(twist); row.appendChild(name); row.appendChild(vc);
   wrap.appendChild(row);
 
-  if (hasKids && openPaths.has(node.path)){
+  if (fopen.has(id) && node.kids && node.kids.length){
     const kids = document.createElement("div");
     kids.className = "kids";
-    [...node.children.values()]
-      .sort((a,b) => a.name.localeCompare(b.name, "ja"))
-      .forEach(c => kids.appendChild(nodeEl(c)));
+    node.kids.forEach(k => kids.appendChild(folderRow(k, depth + 1)));
     wrap.appendChild(kids);
   }
   return wrap;
 }
 
-function matchesPath(f){
-  if (selPath == null) return true;
-  const p = f.path || "";
-  return els.treeDeep.checked ? (p === selPath || p.startsWith(selPath + "/")) : p === selPath;
+async function initTree(rootId){
+  froot = rootId || "0";
+  ensureNode(froot, await fetchFolderName(froot));
+  fopen.add(froot);
+  if (!fsel) selectFolder(froot);
+  try{ await loadChildren(froot); }
+  catch(err){ log("フォルダツリーの初期化に失敗:", err.message); }
+  renderTree();
+}
+
+/* ============ サムネイル一括取得 ============ */
+let batchRunning = false, batchStop = false;
+
+async function prefetchThumbs(){
+  if (batchRunning){ batchStop = true; return; }
+  const list = view.slice();
+  if (!list.length) return say("対象がありません。先にフォルダを読み込んでください。", true);
+
+  batchRunning = true; batchStop = false;
+  els.prefetch.textContent = "一括取得を中止";
+  let done = 0, ok = 0, pend = 0;
+
+  await Promise.all(list.map(f => pool.push(async () => {
+    if (batchStop) return;
+    let rec = null;
+    try{ rec = await buildThumbs(f); }catch(_){}
+    done++;
+    if (rec && rec.ok) ok++; else if (rec && rec.pending) pend++;
+    els.progress.textContent =
+      `サムネイル一括取得 ${done}/${list.length}（完了 ${ok}${pend ? " / Box 生成待ち " + pend : ""}）`;
+    if (cardById.has(f.id)) await paintThumbs(f, true);
+  })));
+
+  batchRunning = false;
+  els.prefetch.textContent = "サムネイル一括取得";
+  els.progress.textContent = batchStop
+    ? `中止しました（${done}/${list.length} まで完了）`
+    : `一括取得が終わりました — 完了 ${ok} / ${list.length}` + (pend ? `、${pend} 本は Box が生成中` : "");
+  log(`prefetch done: ${ok}/${list.length}, pending ${pend}`);
 }
 
 /* ============ 検索クエリ ============ */
@@ -748,7 +826,6 @@ function parseQuery(s){
   return q;
 }
 function matches(f, q){
-  if (!matchesPath(f)) return false;
   const path = (f.path || "").toLowerCase();
   for (const t of q.folders)    if (!path.includes(t)) return false;
   for (const t of q.notFolders) if (path.includes(t)) return false;
@@ -804,7 +881,6 @@ async function scan(){
   els.scan.disabled = true; els.cancel.hidden = false;
   els.authDot.className = "dot busy"; say("");
   files = []; cardById.clear(); picked.clear(); els.sheet.innerHTML = ""; rendered = 0;
-  selPath = null; openPaths.clear(); openPaths.add("");
 
   const queue = [{id:rootId, depth:0, path:""}];
   let folders = 0;
@@ -840,7 +916,7 @@ async function scan(){
     else { say(String(err.message||err), true); log("scan error:", err.message); }
   }finally{
     scanAbort = null; els.scan.disabled = false; els.cancel.hidden = true;
-    setAuth(true); buildRail(); renderTree(); applyView();
+    setAuth(true); buildRail(); applyView();
   }
 }
 
@@ -1185,10 +1261,10 @@ function makeCard(file){
     fd.title = file.path;
     fd.style.cursor = "pointer";
     fd.addEventListener("click", () => {
-      selPath = file.path;
-      file.path.split("/").filter(Boolean).reduce((acc,p) => { openPaths.add(acc); return acc + "/" + p; }, "");
-      openPaths.add("");
-      renderTree(); applyView(); window.scrollTo({top:0, behavior:"smooth"});
+      const leaf = file.path.split("/").filter(Boolean).slice(-1)[0];
+      els.q.value = "folder:" + leaf.toLowerCase();
+      buildRail(); applyView();
+      window.scrollTo({top:0, behavior:"smooth"});
     });
   }
 
@@ -1470,7 +1546,9 @@ els.importFile.addEventListener("change", async e => {
 els.scan.addEventListener("click", async () => {
   saveSettings();
   await ensureFresh();
-  if (await checkAuth()) scan();
+  if (!await checkAuth()) return;
+  if (!fnode.has(els.folder.value.trim() || "0")) await initTree(els.folder.value.trim() || "0");
+  scan();
 });
 els.login.addEventListener("click", startLogin);
 els.logout.addEventListener("click", () => {
@@ -1479,6 +1557,21 @@ els.logout.addEventListener("click", () => {
   say("ログアウトしました。タグとサムネイルは残っています。");
 });
 els.cancel.addEventListener("click", () => scanAbort && scanAbort.abort());
+
+els.loadFolder.addEventListener("click", async () => {
+  if (!fsel) return say("フォルダを選んでください", true);
+  els.folder.value = fsel;
+  saveSettings();
+  await ensureFresh();
+  if (await checkAuth()) scan();
+});
+els.prefetch.addEventListener("click", prefetchThumbs);
+els.treeReload.addEventListener("click", async () => {
+  const target = fsel || froot;
+  say("Box からフォルダを取り直しています…");
+  try{ await loadChildren(target, true); say(""); }
+  catch(err){ say("取り直しに失敗しました: " + err.message, true); }
+});
 
 // ファイル一覧だけ取り直す。サムネイルは温存されるので、
 // Box に動画を追加したときはこちらを使う。
@@ -1498,7 +1591,6 @@ els.clear.addEventListener("click", async () => {
 let qTimer = null;
 els.q.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { buildRail(); applyView(); }, 220); });
 els.sort.addEventListener("change", applyView);
-els.treeDeep.addEventListener("change", applyView);
 els.col.addEventListener("input", () => {
   const v = Math.max(200, Number(els.col.value) || 380);
   document.documentElement.style.setProperty("--col", v + "px");
@@ -1565,6 +1657,7 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
 
   await ensureFresh();
   if (await checkAuth()){
+    await initTree(els.folder.value.trim() || "0");
     say("前回の続きを読み込んでいます…");
     await scan();
     say("");
