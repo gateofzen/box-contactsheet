@@ -198,7 +198,8 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
         <input id="conc" class="w-num" type="number" value="4" min="1" max="12"></div>
       <button id="exportBtn" class="btn btn-ghost">書き出し</button>
       <button id="importBtn" class="btn btn-ghost">読み込み</button>
-      <button id="clear" class="btn btn-ghost">キャッシュ削除</button>
+      <button id="refresh" class="btn btn-ghost">一覧を再取得</button>
+      <button id="clear" class="btn btn-ghost">サムネイル削除</button>
       <input id="importFile" type="file" accept="application/json" hidden>
     </div>
 
@@ -271,7 +272,7 @@ const K_FAV = "csFav", K_TAGS = "csTags";
 
 const $ = id => document.getElementById(id);
 const els = {};
-["token","folder","depth","recurse","sync","scan","cancel","clear","q","sort","fw","conc",
+["token","folder","depth","recurse","sync","scan","cancel","clear","refresh","q","sort","fw","conc",
  "exportBtn","importBtn","importFile","authDot","authText","nTotal","nHit","nFav","nCached",
  "progress","msg","log","sheet","sentinel","empty","railTags","bulkbar","bulkN","bulkTag",
  "bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
@@ -334,11 +335,11 @@ function idbPut(store, val){
     tx.oncomplete = () => res(); tx.onerror = () => res();
   });
 }
-function idbClearCaches(){
+function idbClearStore(name){
   return new Promise(res => {
     if (!db) return res();
-    const tx = db.transaction(["thumbs","folders"],"readwrite");
-    tx.objectStore("thumbs").clear(); tx.objectStore("folders").clear();
+    const tx = db.transaction(name,"readwrite");
+    tx.objectStore(name).clear();
     tx.oncomplete = () => res(); tx.onerror = () => res();
   });
 }
@@ -1006,10 +1007,21 @@ els.scan.addEventListener("click", async () => {
   if (await checkAuth()) scan();
 });
 els.cancel.addEventListener("click", () => scanAbort && scanAbort.abort());
+
+// ファイル一覧だけ取り直す。サムネイルは温存されるので、
+// Box に動画を追加したときはこちらを使う。
+els.refresh.addEventListener("click", async () => {
+  await idbClearStore("folders");
+  say("Box から一覧を取り直しています…");
+  if (await checkAuth()) scan();
+});
+
+// サムネイルだけ捨てる。フレーム幅を変えたときの作り直し用。
 els.clear.addEventListener("click", async () => {
-  await idbClearCaches();
+  await idbClearStore("thumbs");
   cachedCount = 0; els.nCached.textContent = "0";
-  say("サムネイルとフォルダ一覧のキャッシュを削除しました。タグとお気に入りは残ります。");
+  say("サムネイルを削除しました。一覧・タグ・お気に入りは残っています。");
+  applyView();
 });
 let qTimer = null;
 els.q.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { buildRail(); applyView(); }, 220); });
@@ -1032,8 +1044,17 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
     marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [], dirty:!!rec.dirty});
   els.token.value = localStorage.getItem("bcs_token") || "";
   els.folder.value = localStorage.getItem("bcs_folder") || "0";
-  if (els.token.value) checkAuth();
   log("ready — marks:", marks.size);
+
+  // 前回のトークンがまだ生きていれば、そのまま前回の続きを表示する。
+  // 一覧キャッシュが残っていれば Box への問い合わせは発生しない。
+  if (els.token.value && await checkAuth()){
+    say("前回の続きを読み込んでいます…");
+    await scan();
+    say("");
+  }else if (els.token.value){
+    say("トークンの期限が切れています。新しい開発者トークンを貼り付けてスキャンしてください。", true);
+  }
 })();
 </script>
 </body>
