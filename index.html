@@ -401,11 +401,23 @@ function redirectUri(){ return location.origin + location.pathname; }
 async function callWorker(endpoint, body){
   const base = els.worker.value.trim().replace(/\/+$/, "");
   if (!base) throw new Error("Worker URL が設定されていません");
-  const r = await fetch(base + endpoint, {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body: JSON.stringify(body)
-  });
+  const target = base + endpoint;
+  let r;
+  try{
+    r = await fetch(target, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(body)
+    });
+  }catch(netErr){
+    // ここに来るのは CORS 遮断・URL 誤り・混在コンテンツのいずれか。
+    // 判別できるように実際の値を出しておく。
+    log("Worker に到達できません");
+    log("  送信先 : " + target);
+    log("  自分のオリジン : " + location.origin);
+    log("  ページ : " + location.href);
+    throw new Error(`Worker に到達できません（送信先 ${target} / 自分のオリジン ${location.origin}）`);
+  }
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error_description || d.error || ("Worker " + r.status));
   return d;
