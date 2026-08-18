@@ -304,7 +304,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v27</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v29</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -2312,6 +2312,10 @@ const dashAudio = {
     if (!r.ok){ log("manifest の取得に失敗: " + r.status); return null; }
     const xml = new DOMParser().parseFromString(await r.text(), "application/xml");
 
+    if (xml.getElementsByTagName("ContentProtection").length){
+      log("この dash は暗号化されています（DRM）。音声だけの取り出しはできません。");
+      return null;
+    }
     const sets = [...xml.getElementsByTagName("AdaptationSet")];
     const aset = sets.find(a =>
       (a.getAttribute("mimeType") || "").startsWith("audio") ||
@@ -2387,6 +2391,8 @@ const dashAudio = {
       if (!this.sb) return rej(new Error("バッファがありません"));
       const done = () => { this.sb.removeEventListener("updateend", done); res(); };
       this.sb.addEventListener("updateend", done);
+      const onErr = () => { this.sb.removeEventListener("updateend", done); rej(new Error("区間の展開に失敗")); };
+      this.sb.addEventListener("error", onErr, {once:true});
       try{ this.sb.appendBuffer(buf); }catch(err){ this.sb.removeEventListener("updateend", done); rej(err); }
     });
   },
@@ -2405,17 +2411,24 @@ const dashAudio = {
   // 先読みが足りなければ次の区間を足す。
   // 画面オフだとブラウザがタイマーを間引くため、setTimeout で繋がず
   // ひとつの繰り返しの中で必要な分をまとめて取る。
-  target(){ return document.hidden ? 300 : 90; },   // 先読みの秒数
+  // 先読みの秒数。飛んだ直後は少なめにして、鳴り出すまでを短くする。
+  target(){
+    if (this.justSeeked) return 12;
+    return document.hidden ? 300 : 90;
+  },
 
   async pump(){
-    if (this.busy || !this.ready || this.stopped || !this.sb) return;
+    if (this.busy){ this.again = true; return; }   // 走っている先読みに合図だけ残す
+    if (!this.ready || this.stopped || !this.sb) return;
     const last = this.segs.start + this.segs.count - 1;
+    const gen = this.gen || 0;
 
-    this.busy = true;
+    this.busy = true; this.again = false;
     try{
-      while (!this.stopped && this.next <= last && this.bufferedAhead() < this.target()){
+      while (!this.stopped && (this.gen || 0) === gen
+             && this.next <= last && this.bufferedAhead() < this.target()){
         const buf = await this.fetchSeg(this.segs.template(this.next));
-        if (this.stopped) break;
+        if (this.stopped || (this.gen || 0) !== gen) break;   // シークで打ち切られた
         await this.append(buf);
         this.next++;
         this.retry = 0;
@@ -2438,6 +2451,7 @@ const dashAudio = {
       }
     }finally{
       this.busy = false;
+      if (this.again && !this.stopped){ this.again = false; this.pump(); }
     }
   },
 
@@ -2455,11 +2469,16 @@ const dashAudio = {
     if (!this.ready || !this.segs) return;
     const t = this.el.currentTime;
     if (this.bufferedAhead() > 3) return;         // 既に持っていれば何もしない
-    const idx = this.segs.start + Math.max(0, Math.floor(t / this.segs.segDur));
-    this.next = idx;
+
+    // 古い位置の先読みを打ち切り、飛んだ先を最優先で取りに行く
+    this.gen = (this.gen || 0) + 1;
+    this.next = this.segs.start + Math.max(0, Math.floor(t / this.segs.segDur));
     if (this.sb && !this.sb.updating){
       try{ this.sb.abort(); }catch(_){}
     }
+    this.again = false;
+    this.justSeeked = true;
+    setTimeout(() => { this.justSeeked = false; this.pump(); }, 1500);
     this.pump();
   }
 };
@@ -2527,6 +2546,11 @@ function watchAudio(){
     + `pos=${fmtTC(A.currentTime)} paused=${A.paused} ready=${A.readyState} src=${audioKind}`);
   ["play","playing","pause","waiting","stalled","suspend","ended","error","abort"]
     .forEach(ev => A.addEventListener(ev, () => note(ev)));
+  A.addEventListener("error", () => {
+    const e = A.error;
+    log("音声要素のエラー: code=" + (e && e.code) + " " + (e && e.message || ""));
+    if (dualActive()) fallbackToVideoAudio("音声要素のエラー");
+  });
 
   // 画面が消えている間に止められたら数回だけ復帰を試みる。
   // 端末が止め続ける場合はすぐ諦める（再生成功で回数を戻さないこと）。
@@ -2562,6 +2586,7 @@ async function armDualAudio(file){
       if (wantPlay && els.pAudio.paused)
         els.pAudio.play().catch(err => log("音声の再生に失敗: " + err.message));
       startAudioWatchdog();
+      startAudioProgressWatch();
       els.pNote.textContent = "再生中（音声: DASH 音声のみ・背景再生可）";
       if (!els.pVideo.paused) syncAudioTo(els.pVideo.currentTime, true);
       return;
@@ -2626,6 +2651,51 @@ function bindDual(){
   }, 2000);
 }
 
+// 音声が「再生中」と言いながら実際には進んでいない場合に備える見張り。
+// 進まないまま映像だけ流れると、無音のまま気づけない。
+let progressTimer = null, lastAudioTime = -1, stuckCount = 0;
+
+function startAudioProgressWatch(){
+  clearInterval(progressTimer);
+  lastAudioTime = -1; stuckCount = 0;
+  progressTimer = setInterval(() => {
+    if (!els.scrim.classList.contains("open") || !dualActive()) return;
+    if (els.pAudio.paused || !wantPlay) { lastAudioTime = els.pAudio.currentTime; return; }
+
+    const t = els.pAudio.currentTime;
+    if (lastAudioTime < 0){ lastAudioTime = t; return; }   // 初回は基準を取るだけ
+    const buffered = els.pAudio.buffered.length
+      ? `${els.pAudio.buffered.start(0).toFixed(0)}–${els.pAudio.buffered.end(els.pAudio.buffered.length-1).toFixed(0)}`
+      : "なし";
+    if (Math.abs(t - lastAudioTime) < 0.2){
+      stuckCount++;
+      log(`音声が進んでいません (${stuckCount}) t=${fmtTC(t)} ready=${els.pAudio.readyState} `
+        + `buffered=${buffered} vol=${els.pAudio.volume} muted=${els.pAudio.muted}`);
+      if (stuckCount >= 2) fallbackToVideoAudio("音声が進まない");
+    }else{
+      if (stuckCount) log(`音声の進行を確認 t=${fmtTC(t)} buffered=${buffered}`);
+      stuckCount = 0;
+    }
+    lastAudioTime = t;
+  }, 2000);
+}
+
+// 音声の分離をやめ、映像自身の音で普通に再生する
+function fallbackToVideoAudio(reason){
+  clearInterval(progressTimer); progressTimer = null;
+  log("音声連携を解除します（理由: " + reason + "）");
+  say("音声を分離できなかったため通常再生にしました（背景再生は使えません）");
+  const t = els.pVideo.currentTime;
+  stopDual();                       // 映像の消音が解除される
+  els.pVideo.muted = false;
+  els.pVideo.volume = userVolume || 1;
+  els.pNote.textContent = "原本を再生中（背景再生は使えません）";
+  if (wantPlay && els.pVideo.paused){
+    els.pVideo.currentTime = t;
+    els.pVideo.play().catch(err => log("再生に失敗: " + err.message));
+  }
+}
+
 // 音声がどうしても鳴らない場合の最後の砦。
 // 10 秒経っても両方止まっていたら音声連携を諦め、映像だけで普通に再生する。
 let watchdogTimer = null;
@@ -2669,7 +2739,7 @@ function setVolume(v){
 function alignVideo(){
   syncing = true;
   els.pVideo.currentTime = els.pAudio.currentTime;
-  setTimeout(() => { syncing = false; }, 300);
+  setTimeout(() => { syncing = false; }, 120);
 }
 
 // 音声が区間を取りに行っている間は映像も待たせる
@@ -2715,6 +2785,7 @@ function onVidSeek(){
 
 function stopDual(){
   clearTimeout(watchdogTimer);
+  clearInterval(progressTimer); progressTimer = null;
   dashAudio.stop();
   els.pAudio.removeEventListener("seeking", onAudStall);
   els.pAudio.removeEventListener("waiting", onAudStall);
@@ -2948,7 +3019,7 @@ function seekTo(t){
   syncing = true;
   if (!audioOnly) els.pVideo.currentTime = t;
   if (dualActive()) els.pAudio.currentTime = t;
-  setTimeout(() => { syncing = false; }, 250);
+  setTimeout(() => { syncing = false; }, 120);
   // 映像は音声が鳴り出すのを待つ。ここで音声を起こさないと双方が待ち合って止まる。
   if (wantPlay && dualActive() && els.pAudio.paused)
     els.pAudio.play().catch(err => log("音声の再生に失敗: " + err.message));
