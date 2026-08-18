@@ -288,7 +288,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v17</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v19</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -1082,6 +1082,7 @@ async function prefetchThumbs(){
   els.prefetch.hidden = false; setBusy(true);
   let done = 0, ok = 0, pend = 0;
   const eta = makeEta();
+  srcStats.shared = srcStats.made = srcStats.failed = 0;
 
   await Promise.all(list.map(f => pool.push(async () => {
     if (batchStop) return;
@@ -1092,7 +1093,8 @@ async function prefetchThumbs(){
     eta.tick();
     els.progress.textContent =
       `サムネイル ${done}/${list.length}`
-      + (pend ? `（Box 生成待ち ${pend}）` : "")
+      + `　共有から ${srcStats.shared} / 新規 ${srcStats.made}`
+      + (pend ? ` / Box生成待ち ${pend}` : "")
       + (done < list.length ? `　${eta.remain(list.length - done)}` : "");
     syncStatusLine();
     if (cardById.has(f.id)) await paintThumbs(f, true);
@@ -1102,7 +1104,9 @@ async function prefetchThumbs(){
   els.prefetch.hidden = true; setBusy(false);
   els.progress.textContent = batchStop
     ? `中止しました（${done}/${list.length}）`
-    : `${files.length} 本の動画` + (pend ? `　※ ${pend} 本は Box が生成中` : "");
+    : `${files.length} 本の動画　共有から ${srcStats.shared} / 新規 ${srcStats.made}`
+      + (pend ? ` / Box生成待ち ${pend}` : "");
+  log(`内訳: 共有から ${srcStats.shared} / 新規作成 ${srcStats.made} / 共有の失敗 ${srcStats.failed}`);
   syncStatusLine();
   log(`prefetch done: ${ok}/${list.length}, pending ${pend}`);
 }
@@ -1461,14 +1465,20 @@ async function splitSheet(blob, n){
   return out;
 }
 
+const srcStats = {shared:0, made:0, failed:0};
+
 async function fetchSharedThumbs(file){
-  if (!els.shareThumbs.checked || !file.parentId) return null;
+  if (!els.shareThumbs.checked) return null;
+  if (!file.parentId){ log("親フォルダ不明のため共有を使えません: " + file.name); return null; }
   const index = await getCacheIndex(file.parentId);
   const hit = index.get(file.id);
   if (!hit) return null;
   const r = await fetch(`${API}/files/${hit.id}/content`, {headers:{Authorization:"Bearer " + token()}});
   if (!r.ok) throw new Error("共有サムネイルの取得 " + r.status);
-  const frames = await splitSheet(await r.blob(), FRAME_COUNT);
+  const blob = await r.blob();
+  if (!blob || blob.size < 100 || !/image/.test(blob.type || "image/jpeg"))
+    throw new Error(`受け取った内容が画像ではありません (${blob && blob.size} bytes, ${blob && blob.type})`);
+  const frames = await splitSheet(blob, FRAME_COUNT);
   return {id:file.id, frames, total:0, interval:null, duration:hit.dur || null,
           ok:true, pending:false, hq:false, shared:true, ts:Date.now()};
 }
@@ -1495,6 +1505,7 @@ async function uploadSharedThumbs(file, rec){
     const d = await r.json().catch(() => ({}));
     if (r.ok && d.entries && d.entries[0]){
       index.set(file.id, {id: d.entries[0].id, dur});
+      log(`共有に保存: ${name} → フォルダ ${folderId}`);
     }else if (r.status === 409 && d.context_info && d.context_info.conflicts){
       const c = d.context_info.conflicts;
       index.set(file.id, {id: (c.id || (c[0] && c[0].id)), dur});
@@ -1558,8 +1569,12 @@ async function buildThumbs(file){
   if (els.shareThumbs.checked){
     try{
       const shared = await fetchSharedThumbs(file);
-      if (shared){ await idbPut("thumbs", shared); return withPoster(file, shared); }
-    }catch(err){ log("共有サムネイルを使えません", file.name, err.message); }
+      if (shared){
+        srcStats.shared++;
+        await idbPut("thumbs", shared);
+        return withPoster(file, shared);
+      }
+    }catch(err){ srcStats.failed++; log("共有サムネイルを使えません", file.name, err.message); }
   }
 
   const frameW = Math.max(40, Number(els.fw.value) || 160);
@@ -1588,6 +1603,7 @@ async function buildThumbs(file){
   }
   // 生成待ちのものは保存しない（保存すると二度と再試行されないため）
   if (!rec.pending){
+    if (rec.ok) srcStats.made++;
     await idbPut("thumbs", rec);
     await uploadSharedThumbs(file, rec);
     await withPoster(file, rec);
@@ -2191,6 +2207,202 @@ els.col.addEventListener("input", () => {
 els.pClose.addEventListener("click", closePlayer);
 els.pFav.addEventListener("click", () => { if (currentFile) setFav(currentFile.id, !getMark(currentFile.id).fav); });
 els.scrim.addEventListener("click", e => { if (e.target === els.scrim) closePlayer(); });
+/* ============ 音声だけを取り出して流す（DASH + MSE） ============ */
+// Box の dash 表現は音声と映像が別々の流れに分かれている。
+// 音声の流れだけを <audio> に流し込めば、映像トラックを含まない
+// 純粋な音声再生になるため、Android でも画面オフで鳴り続ける。
+
+const dashAudio = {
+  ms: null, sb: null, el: null,
+  segs: null,          // {init, template, start, count, segDur, codecs, timescale, duration}
+  next: 0, busy: false, stopped: true, ready: false,
+
+  async start(file, audioEl){
+    this.stop();
+    this.el = audioEl;
+    this.stopped = false;
+
+    const info = await this.loadManifest(file);
+    if (!info) return false;
+    this.segs = info;
+
+    const mime = `audio/mp4; codecs="${info.codecs}"`;
+    if (!("MediaSource" in window) || !MediaSource.isTypeSupported(mime)){
+      log("この端末は " + mime + " を扱えません");
+      return false;
+    }
+
+    this.ms = new MediaSource();
+    audioEl.src = URL.createObjectURL(this.ms);
+
+    await new Promise(res => this.ms.addEventListener("sourceopen", res, {once:true}));
+    if (this.stopped) return false;
+
+    this.sb = this.ms.addSourceBuffer(mime);
+    this.sb.mode = "segments";
+    if (isFinite(info.duration)) try{ this.ms.duration = info.duration; }catch(_){}
+
+    await this.append(await this.fetchSeg(info.init));
+    this.next = info.start;
+    this.ready = true;
+
+    this.sb.addEventListener("updateend", () => this.pump());
+    audioEl.addEventListener("timeupdate", () => this.pump());
+    audioEl.addEventListener("seeking", () => this.onSeek());
+    this.pump();
+
+    log(`音声ストリーム開始: ${info.codecs} / ${info.count} 区間 / 1 区間 ${info.segDur.toFixed(1)} 秒`);
+    return true;
+  },
+
+  stop(){
+    this.stopped = true; this.ready = false;
+    try{ if (this.ms && this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
+    this.ms = null; this.sb = null; this.segs = null; this.next = 0; this.busy = false;
+  },
+
+  // dash 表現の manifest を取って、音声の流れの定義を抜き出す
+  async loadManifest(file){
+    let repInfo;
+    try{
+      repInfo = await waitForRep(await getRepresentation(file.id, "[dash]") || {}, 6);
+    }catch(err){ log("dash 表現の取得に失敗: " + err.message); return null; }
+
+    const tmpl = repInfo && repInfo.rep && repInfo.rep.content && repInfo.rep.content.url_template;
+    if (!tmpl){
+      log(repInfo && repInfo.pending ? "dash 表現を Box が生成中です" : "この動画に dash 表現がありません");
+      return null;
+    }
+    const manifestUrl = tmpl.replace("{+asset_path}", "manifest.mpd");
+
+    const r = await fetch(this.auth(manifestUrl));
+    if (!r.ok){ log("manifest の取得に失敗: " + r.status); return null; }
+    const xml = new DOMParser().parseFromString(await r.text(), "application/xml");
+
+    const sets = [...xml.getElementsByTagName("AdaptationSet")];
+    const aset = sets.find(a =>
+      (a.getAttribute("mimeType") || "").startsWith("audio") ||
+      (a.getAttribute("contentType") || "") === "audio" ||
+      [...a.getElementsByTagName("Representation")]
+        .some(r2 => (r2.getAttribute("mimeType") || "").startsWith("audio")));
+    if (!aset){ log("manifest に音声の流れが見つかりません"); return null; }
+
+    const rep = [...aset.getElementsByTagName("Representation")][0];
+    if (!rep){ log("音声の Representation がありません"); return null; }
+
+    const codecs = rep.getAttribute("codecs") || aset.getAttribute("codecs") || "mp4a.40.2";
+    const st = aset.getElementsByTagName("SegmentTemplate")[0]
+            || rep.getElementsByTagName("SegmentTemplate")[0];
+    if (!st){ log("SegmentTemplate 形式ではないため対応できません"); return null; }
+
+    const timescale = Number(st.getAttribute("timescale") || 1);
+    const segDur = Number(st.getAttribute("duration") || 0) / timescale;
+    const start = Number(st.getAttribute("startNumber") || 1);
+    const repId = rep.getAttribute("id") || "";
+    const bw = rep.getAttribute("bandwidth") || "";
+
+    const fill = p => p.replace(/\$RepresentationID\$/g, repId)
+                       .replace(/\$Bandwidth\$/g, bw);
+    const initPath  = fill(st.getAttribute("initialization") || "");
+    const mediaPath = fill(st.getAttribute("media") || "");
+    if (!initPath || !mediaPath || !segDur){
+      log("manifest の記述が想定と異なります"); return null;
+    }
+
+    const duration = this.mpdDuration(xml);
+    const count = segDur ? Math.ceil(duration / segDur) : 0;
+
+    return {
+      base: manifestUrl,
+      init: new URL(initPath, manifestUrl).href,
+      template: (n) => new URL(mediaPath.replace(/\$Number(%0\d+d)?\$/g, m => {
+        const pad = /%0(\d+)d/.exec(m);
+        return pad ? String(n).padStart(Number(pad[1]), "0") : String(n);
+      }), manifestUrl).href,
+      start, count, segDur, codecs, timescale, duration
+    };
+  },
+
+  mpdDuration(xml){
+    const d = xml.documentElement.getAttribute("mediaPresentationDuration") || "";
+    const m = /P(?:.*?T)?(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?/.exec(d);
+    if (!m) return Infinity;
+    return (Number(m[1]||0)*3600) + (Number(m[2]||0)*60) + Number(m[3]||0);
+  },
+
+  auth(url){ return url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token()); },
+
+  async fetchSeg(url){
+    const r = await fetch(this.auth(url));
+    if (!r.ok) throw new Error("区間 " + r.status);
+    return r.arrayBuffer();
+  },
+
+  append(buf){
+    return new Promise((res, rej) => {
+      if (!this.sb) return rej(new Error("バッファがありません"));
+      const done = () => { this.sb.removeEventListener("updateend", done); res(); };
+      this.sb.addEventListener("updateend", done);
+      try{ this.sb.appendBuffer(buf); }catch(err){ this.sb.removeEventListener("updateend", done); rej(err); }
+    });
+  },
+
+  bufferedAhead(){
+    const el = this.el;
+    if (!el || !this.sb || !this.sb.buffered.length) return 0;
+    const t = el.currentTime;
+    for (let i = 0; i < this.sb.buffered.length; i++){
+      if (this.sb.buffered.start(i) <= t + 0.1 && t <= this.sb.buffered.end(i) + 0.1)
+        return this.sb.buffered.end(i) - t;
+    }
+    return 0;
+  },
+
+  // 先読みが足りなければ次の区間を足す
+  async pump(){
+    if (this.busy || !this.ready || this.stopped || !this.sb || this.sb.updating) return;
+    if (this.next > this.segs.start + this.segs.count - 1){
+      try{ if (this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
+      return;
+    }
+    if (this.bufferedAhead() > 40) return;
+
+    this.busy = true;
+    try{
+      await this.append(await this.fetchSeg(this.segs.template(this.next)));
+      this.next++;
+      await this.trim();
+    }catch(err){
+      if (!this.stopped) log("音声区間の取得に失敗: " + err.message);
+    }finally{
+      this.busy = false;
+      if (!this.stopped && this.bufferedAhead() < 40) setTimeout(() => this.pump(), 0);
+    }
+  },
+
+  // 後ろに溜まった分を捨ててメモリを抑える
+  async trim(){
+    if (!this.sb || this.sb.updating || !this.sb.buffered.length) return;
+    const t = this.el.currentTime;
+    const start = this.sb.buffered.start(0);
+    if (t - start > 180){
+      try{ this.sb.remove(start, t - 120); }catch(_){}
+    }
+  },
+
+  onSeek(){
+    if (!this.ready || !this.segs) return;
+    const t = this.el.currentTime;
+    if (this.bufferedAhead() > 2) return;         // 既に持っていれば何もしない
+    const idx = this.segs.start + Math.max(0, Math.floor(t / this.segs.segDur));
+    this.next = idx;
+    if (this.sb && !this.sb.updating){
+      try{ this.sb.abort(); }catch(_){}
+    }
+    this.pump();
+  }
+};
+
 /* ---- 画面オフでも音声を続ける ---- */
 // Android は画面が消えると <video> を止める。しかも、消えた「後」に
 // 音声を鳴らし始めることも制限される。そこで最初から音声要素に音を担当させ、
@@ -2199,7 +2411,7 @@ let audioOnly = false;          // 利用者が 🎧 を押した状態
 let posterUrlForSession = null;
 let driftTimer = null;
 
-function dualActive(){ return els.bgAudio.checked && !!els.pAudio.getAttribute("src"); }
+function dualActive(){ return els.bgAudio.checked && (dashAudio.ready || !!els.pAudio.getAttribute("src")); }
 function soundEl(){ return dualActive() ? els.pAudio : els.pVideo; }
 function activeMedia(){ return dualActive() ? els.pAudio : els.pVideo; }
 
@@ -2216,16 +2428,17 @@ function syncAudioTo(t, play){
 async function resolveAudioSrc(file){
   for (const hint of ["[mp3]", "[mp4]"]){
     try{
-      const got = await waitForRep(await getRepresentation(file.id, hint) || {}, 3);
+      const got = await waitForRep(await getRepresentation(file.id, hint) || {}, 6);
       const url = repContentUrl(got.rep);
       if (url){
         audioKind = hint === "[mp3]" ? "mp3（音声のみ）" : "mp4（変換版）";
+        log("音声用に " + hint + " を採用");
         return url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
       }
     }catch(_){}
   }
-  audioKind = "原本";
-  return originalUrl(file);
+  audioKind = "";
+  return null;          // 音声だけの軽い版が無いなら二重取得はしない
 }
 
 let audioKind = "";
@@ -2238,38 +2451,67 @@ function watchAudio(){
   ["play","playing","pause","waiting","stalled","suspend","ended","error","abort"]
     .forEach(ev => A.addEventListener(ev, () => note(ev)));
 
-  // 画面が消えている間に勝手に止められたら、数回だけ復帰を試みる
+  // 画面が消えている間に止められたら数回だけ復帰を試みる。
+  // 端末が止め続ける場合はすぐ諦める（再生成功で回数を戻さないこと）。
   A.addEventListener("pause", () => {
-    if (!document.hidden || audioOnly === false && els.pVideo.paused && !dualActive()) return;
-    if (!els.scrim.classList.contains("open")) return;
-    if (A.ended || resumeTries >= 3) return;
+    if (!document.hidden || !els.scrim.classList.contains("open") || A.ended) return;
+    if (resumeTries >= 3){
+      if (resumeTries === 3){
+        resumeTries++;
+        log("端末が背景での音声再生を許可しないため、復帰を諦めました");
+      }
+      return;
+    }
     const attempt = ++resumeTries;
     setTimeout(() => {
       A.play().then(() => log("音声を自動復帰しました (" + attempt + "回目)"))
               .catch(err => log("音声の自動復帰に失敗: " + err.message));
     }, 300);
   });
-  A.addEventListener("playing", () => { resumeTries = 0; });
+  // 画面が点いている間だけ回数を戻す
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) resumeTries = 0; });
 }
 
 async function armDualAudio(file){
   stopDual();
   if (!els.bgAudio.checked || !file) return;
+
+  // 1) DASH の音声だけを流す（映像トラックを含まないので背景再生できる）
+  try{
+    if (await dashAudio.start(file, els.pAudio)){
+      audioKind = "DASH 音声のみ";
+      bindDual();
+      els.pNote.textContent = "再生中（音声: DASH 音声のみ・背景再生可）";
+      if (!els.pVideo.paused) syncAudioTo(els.pVideo.currentTime, true);
+      return;
+    }
+  }catch(err){ log("DASH 音声を使えません: " + err.message); dashAudio.stop(); }
+
+  // 2) だめなら音声用の軽いファイルを探す
   const src = await resolveAudioSrc(file);
   if (!els.scrim.classList.contains("open")) return;
+  if (!src){
+    // 変換版が無い動画。原本を 2 本読むと通信が詰まるので映像だけで再生する。
+    log("音声専用のソースが無いため、通常再生にします（背景再生は使えません）");
+    els.pNote.textContent = "原本を再生中（背景再生は使えません）";
+    return;
+  }
   els.pAudio.setAttribute("src", src);
   els.pAudio.load();
-  els.pVideo.muted = true;          // 音は音声要素が出す
-  els.pVideo.volume = 0;
   els.pNote.textContent = "再生中（音声: " + audioKind + "）";
   log("音声ソース: " + audioKind);
+  bindDual();
   if (!els.pVideo.paused) syncAudioTo(els.pVideo.currentTime, true);
+}
 
+// 映像と音声を連動させる
+function bindDual(){
+  els.pVideo.muted = true;          // 音は音声要素が出す
+  els.pVideo.volume = 0;
   els.pVideo.addEventListener("play",   onVidPlay);
   els.pVideo.addEventListener("pause",  onVidPause);
   els.pVideo.addEventListener("seeked", onVidSeek);
-
-  // わずかな時間差を定期的に補正する
+  clearInterval(driftTimer);
   driftTimer = setInterval(() => {
     if (audioOnly || els.pVideo.paused || els.pAudio.paused) return;
     const d = els.pAudio.currentTime - els.pVideo.currentTime;
@@ -2281,6 +2523,7 @@ function onVidPause(){ if (!audioOnly && !document.hidden) syncAudioTo(els.pVide
 function onVidSeek(){ if (!audioOnly) syncAudioTo(els.pVideo.currentTime, !els.pVideo.paused); }
 
 function stopDual(){
+  dashAudio.stop();
   clearInterval(driftTimer); driftTimer = null;
   els.pVideo.removeEventListener("play", onVidPlay);
   els.pVideo.removeEventListener("pause", onVidPause);
