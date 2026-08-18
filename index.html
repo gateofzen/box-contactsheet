@@ -314,7 +314,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v33</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v34</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -420,6 +420,7 @@ b{font-weight:600}
           <div class="rack">
             <label class="check"><input id="autohq" type="checkbox"> 常に高画質で作る（遅い）</label>
             <label class="check"><input id="bgAudio" type="checkbox" checked> 画面を消しても音声を続ける</label>
+            <label class="check"><input id="dashVideoOpt" type="checkbox" checked> 映像も区間配信で受け取る（シークが速い）</label>
             <div class="field"><label for="conc">同時取得</label>
               <input id="conc" class="w-num" type="number" value="4" min="1" max="12"></div>
             <div class="field"><label for="fw">コマ幅 px</label>
@@ -567,7 +568,7 @@ const K_FAV = "csFav", K_TAGS = "csTags";
 
 const $ = id => document.getElementById(id);
 const els = {};
-["token","folder","depth","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq",
+["token","folder","depth","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
  "advBox","advBtn","chiprow","statusline","pbar","exportBtn","importBtn","importFile",
@@ -2618,14 +2619,37 @@ async function armDualAudio(file){
 
       // 映像も区間配信に切り替える。原本は 1 秒あたり約 2MB あり、
       // 飛ぶたびに大量に読み直すため反応が鈍い。
-      try{
+      if (els.dashVideoOpt.checked){
         const keep = els.pVideo.currentTime;
-        if (await dashVideo.start(file, els.pVideo)){
-          videoKind = "DASH";
-          if (keep > 0) els.pVideo.currentTime = keep;
-          els.pNote.textContent = "再生中（区間配信・背景再生可）";
+        try{
+          if (await dashVideo.start(file, els.pVideo)){
+            // 実際に絵が出せるところまで確認してから採用する。
+            // 空のまま差し替えると位置が 0 に戻り、再生バーも効かなくなる。
+            if (keep > 0) els.pVideo.currentTime = keep;
+            const usable = await waitFor(() => els.pVideo.readyState >= 2, 4000);
+            if (usable){
+              videoKind = "DASH";
+              els.pNote.textContent = "再生中（区間配信・背景再生可）";
+              log("映像を区間配信に切り替えました");
+            }else{
+              throw new Error("区間配信の映像が再生可能になりません");
+            }
+          }else{
+            throw new Error("区間配信の映像を開始できません");
+          }
+        }catch(err){
+          log("映像は原本のままにします: " + err.message);
+          dashVideo.stop();
+          videoKind = "原本";
+          els.pVideo.src = originalUrl(file);
+          if (keep > 0){
+            els.pVideo.addEventListener("loadedmetadata", () => {
+              els.pVideo.currentTime = keep;
+              if (wantPlay) els.pVideo.play().catch(()=>{});
+            }, {once:true});
+          }
         }
-      }catch(err){ log("DASH 映像を使えません: " + err.message); dashVideo.stop(); }
+      }
 
       if (wantPlay && els.pVideo.paused) els.pVideo.play().catch(()=>{});
       if (!els.pVideo.paused) syncAudioTo(els.pVideo.currentTime, true);
@@ -2998,6 +3022,18 @@ function setZoom(scale, focal){
   applyZoom();
 }
 function resetZoom(){ zoom.s = 1; zoom.x = 0; zoom.y = 0; applyZoom(); }
+
+// 条件が満たされるまで待つ（上限つき）
+function waitFor(cond, ms){
+  return new Promise(res => {
+    if (cond()) return res(true);
+    const t0 = Date.now();
+    const id = setInterval(() => {
+      if (cond()){ clearInterval(id); res(true); }
+      else if (Date.now() - t0 > ms){ clearInterval(id); res(false); }
+    }, 100);
+  });
+}
 
 function fsElement(){ return document.fullscreenElement || document.webkitFullscreenElement || null; }
 
