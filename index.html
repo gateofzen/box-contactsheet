@@ -320,7 +320,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v40</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v41</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -2677,32 +2677,72 @@ function waitFor(cond, ms){
 /* ---- プレーヤーのズーム（ピンチ / ホイール / ダブルタップ） ---- */
 const zoom = {s:1, x:0, y:0};
 
+let layoutShift = {x:0, y:0};      // 枠が広がったことによる映像のずれ
+let pinchActive = false;           // 二本指で操作している最中か
+
+// object-fit:contain で実際に絵が出ている矩形を求める（変形は含めない）
+function contentRect(el){
+  const b = el.getBoundingClientRect();
+  const s = zoom.s || 1;
+  const bw = b.width / s, bh = b.height / s;
+  const bx = b.left + b.width/2 - bw/2 - zoom.x;
+  const by = b.top + b.height/2 - bh/2 - zoom.y;
+  const vw = el.videoWidth || 16, vh = el.videoHeight || 9;
+  const k = Math.min(bw/vw, bh/vh);
+  const w = vw*k, h = vh*k;
+  return {x: bx + (bw-w)/2, y: by + (bh-h)/2, w, h};
+}
+
+// 枠を画面いっぱいに広げる。広げると映像の位置が変わるので、
+// 指の下にある絵の点が動かないように平行移動で補正する。
+function enterZoomLayout(focal){
+  const card = els.scrim.querySelector(".player");
+  if (!card || fsElement() || card.classList.contains("zooming")) return;
+  const r0 = contentRect(els.pVideo);
+  card.classList.add("zooming");
+  els.scrim.classList.add("zooming");
+  const r1 = contentRect(els.pVideo);
+  if (focal && r0.w && r1.w){
+    const u = (focal.x - r0.x) / r0.w;
+    const v = (focal.y - r0.y) / r0.h;
+    layoutShift = {
+      x: focal.x - (r1.x + u * r1.w),
+      y: focal.y - (r1.y + v * r1.h)
+    };
+    zoom.x = layoutShift.x;
+    zoom.y = layoutShift.y;
+  }
+  applyZoom();
+}
+
+function exitZoomLayout(){
+  const card = els.scrim.querySelector(".player");
+  if (card) card.classList.remove("zooming");
+  els.scrim.classList.remove("zooming");
+  layoutShift = {x:0, y:0};
+}
+
 function applyZoom(){
   const box = els.vzoom.getBoundingClientRect();
   const maxX = Math.max(0, (box.width  * zoom.s - box.width)  / 2);
   const maxY = Math.max(0, (box.height * zoom.s - box.height) / 2);
-  zoom.x = Math.min(maxX, Math.max(-maxX, zoom.x));
-  zoom.y = Math.min(maxY, Math.max(-maxY, zoom.y));
+  // 拡大するにつれて、枠が広がったぶんのずれは中央へ戻していく
+  const blend = Math.max(0, 1 - (zoom.s - 1));
+  const cx = layoutShift.x * blend, cy = layoutShift.y * blend;
+  zoom.x = Math.min(cx + maxX, Math.max(cx - maxX, zoom.x));
+  zoom.y = Math.min(cy + maxY, Math.max(cy - maxY, zoom.y));
   els.pVideo.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})`;
   const on = zoom.s > 1.01;
   els.vzoom.classList.toggle("zoomed", on);
 
-  // 拡大中だけ画面いっぱいに広げる（全画面 API は使わないので端末の挙動を邪魔しない）
-  const card = els.scrim.querySelector(".player");
-  if (card && !fsElement()){
-    card.classList.toggle("zooming", on);
-    els.scrim.classList.toggle("zooming", on);
-  }
+  // 等倍に戻ったら枠も元に戻す。ただし指を置いている最中は戻さない
+  // （置いた瞬間はまだ等倍なので、そこで戻すと広げた意味がなくなる）
+  if (!on && !pinchActive) exitZoomLayout();
 }
 function setZoom(scale, focal){
   const prev = zoom.s;
-  const wasOn = prev > 1.01;
+  if (scale > 1.01 && focal) enterZoomLayout(focal);   // 先に枠を広げて位置を補正
   zoom.s = Math.min(6, Math.max(1, scale));
-  // 等倍から拡大に入る瞬間に枠が広がるので、先に反映させてから位置を計算する
-  if (!wasOn && zoom.s > 1.01){
-    const card = els.scrim.querySelector(".player");
-    if (card && !fsElement()){ card.classList.add("zooming"); els.scrim.classList.add("zooming"); }
-  }
   if (focal && prev !== zoom.s){
     // つまんだ位置が画面上で動かないように平行移動を補正する
     const box = els.vzoom.getBoundingClientRect();
@@ -2715,7 +2755,7 @@ function setZoom(scale, focal){
   if (zoom.s <= 1.01){ zoom.x = 0; zoom.y = 0; }
   applyZoom();
 }
-function resetZoom(){ zoom.s = 1; zoom.x = 0; zoom.y = 0; applyZoom(); }
+function resetZoom(){ zoom.s = 1; zoom.x = 0; zoom.y = 0; layoutShift = {x:0,y:0}; exitZoomLayout(); applyZoom(); }
 
 // 条件が満たされるまで待つ（上限つき）
 function waitFor(cond, ms){
@@ -2758,6 +2798,9 @@ window.addEventListener("orientationchange", () => setTimeout(applyZoom, 300));
 
   els.vzoom.addEventListener("touchstart", e => {
     if (e.touches.length === 2){
+      const m = mid(e.touches[0], e.touches[1]);
+      pinchActive = true;
+      enterZoomLayout(m);                 // 指を置いた時点で広げ、その位置を保つ
       pinch = {d: dist(e.touches[0], e.touches[1]), s: zoom.s};
       e.preventDefault();
     }else if (e.touches.length === 1){
@@ -2786,7 +2829,13 @@ window.addEventListener("orientationchange", () => setTimeout(applyZoom, 300));
     }
   }, {passive:false});
 
-  const endTouch = e => { if (e.touches.length < 2) pinch = null; if (!e.touches.length) drag = null; };
+  const endTouch = e => {
+    if (e.touches.length < 2){
+      pinch = null; pinchActive = false;
+      if (zoom.s <= 1.01) { resetZoom(); }   // 広げただけで終わったら元に戻す
+    }
+    if (!e.touches.length) drag = null;
+  };
   els.vzoom.addEventListener("touchend", endTouch);
   els.vzoom.addEventListener("touchcancel", endTouch);
 
