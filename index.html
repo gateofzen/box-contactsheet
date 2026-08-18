@@ -233,6 +233,9 @@ b{font-weight:600}
 .player{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:12px;
   width:min(1180px,100%);max-height:100%;display:flex;flex-direction:column;overflow:hidden}
 .player-bar{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line-soft)}
+.volbox{display:flex;align-items:center;gap:5px;font-size:12px}
+.volbox input[type=range]{width:74px;accent-color:var(--amber);background:transparent}
+@media (max-width:860px){ .volbox input[type=range]{width:60px} }
 .player-bar .t{font-family:var(--display);font-size:13px;font-weight:500;flex:1;
   word-break:break-word;min-width:0}
 /* 二本指の操作を横取りするため touch-action は常に none。
@@ -301,7 +304,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v26</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v27</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -485,6 +488,8 @@ b{font-weight:600}
   <div class="player">
     <div class="player-bar">
       <span class="t" id="pTitle"></span>
+      <span class="volbox" title="音量"><span>🔊</span>
+        <input id="pVol" type="range" min="0" max="1" step="0.05" value="1" aria-label="音量"></span>
       <button id="pFull" class="btn btn-sm" title="全画面">⛶</button>
       <button id="pAudioBtn" class="btn btn-sm" title="音声のみで再生">🎧</button>
       <button id="pFav" class="btn btn-ghost">★</button>
@@ -559,7 +564,7 @@ const els = {};
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
- "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom","zoomReset","pFull",
+ "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom","zoomReset","pFull","pVol",
  "pAudio","pAudioBtn","audioVeil","bgAudio"].forEach(k => els[k] = $(k));
 
 let files = [];
@@ -2587,9 +2592,20 @@ let syncing = false;                 // こちらが位置を書き換えてい�
 
 let wantPlay = false;           // 利用者が再生を望んでいるか（待機中も保持する）
 
+let volSyncing = false;
+let userVolume = Number(localStorage.getItem("bcs_volume") || 1);   // 利用者が決めた音量
+
 function bindDual(){
-  els.pVideo.muted = true;          // 音は音声要素が出す
-  els.pVideo.volume = 0;
+  // 音は音声要素が出す。こちらは確実に鳴る状態にしておく。
+  els.pAudio.muted = false;
+  els.pAudio.volume = userVolume;
+  els.pVol.value = String(userVolume);
+  volSyncing = true;
+  els.pVideo.muted = true;
+  els.pVideo.volume = 1;            // スライダーは満位置にしておく
+  setTimeout(() => { volSyncing = false; }, 50);
+  els.pVideo.addEventListener("volumechange", onVidVolume);
+  log(`音量: 音声要素 vol=${els.pAudio.volume} muted=${els.pAudio.muted}`);
   els.pVideo.addEventListener("play",   onVidPlay);
   els.pVideo.addEventListener("pause",  onVidPause);
   els.pVideo.addEventListener("seeked", onVidSeek);
@@ -2627,6 +2643,28 @@ function startAudioWatchdog(){
   }, 10000);
 }
 
+// 映像の音量スライダーは、実際に音を出している音声要素へ橋渡しする。
+// 映像の音を鳴らすと二重になるので、映像は常に消音のままにする。
+function onVidVolume(){
+  // 映像の音を鳴らすと音声要素と二重になるので、消音に戻すだけ。
+  // 音量そのものはプレーヤー上部のつまみで決める。
+  if (volSyncing || audioOnly || !dualActive()) return;
+  if (!els.pVideo.muted){
+    volSyncing = true;
+    els.pVideo.muted = true;
+    setTimeout(() => { volSyncing = false; }, 50);
+  }
+}
+
+function setVolume(v){
+  userVolume = Math.max(0, Math.min(1, v));
+  localStorage.setItem("bcs_volume", String(userVolume));
+  const sn = soundEl();
+  sn.muted = false;
+  sn.volume = userVolume;
+  if (els.pVol.value !== String(userVolume)) els.pVol.value = String(userVolume);
+}
+
 // 映像を音声の位置に合わせる（音は触らない）
 function alignVideo(){
   syncing = true;
@@ -2650,6 +2688,11 @@ function onAudStall(){
 function onAudReady(){
   clearTimeout(watchdogTimer);
   if (audioOnly || !dualActive()) return;
+  if (els.pAudio.muted || els.pAudio.volume === 0){
+    els.pAudio.muted = false;
+    els.pAudio.volume = userVolume || 1;
+    log("音声が無音だったので戻しました");
+  }
   if (pendingStart != null) applyPendingStart();
   alignVideo();
   if (wantPlay && els.pVideo.paused) els.pVideo.play().catch(()=>{});
@@ -2683,8 +2726,9 @@ function stopDual(){
   els.pAudio.pause();
   els.pAudio.removeAttribute("src");
   els.pAudio.load();
+  els.pVideo.removeEventListener("volumechange", onVidVolume);
   els.pVideo.muted = false;
-  els.pVideo.volume = 1;
+  els.pVideo.volume = userVolume || 1;
 }
 
 // 🎧 映像を止めて音だけにする（通信量を抑えたいときにも使える）
@@ -2759,6 +2803,7 @@ document.addEventListener("visibilitychange", () => {
 });
 els.pAudioBtn.addEventListener("click", () => { audioOnly ? exitAudioOnly() : enterAudioOnly(); });
 els.pFull.addEventListener("click", toggleFullscreen);
+els.pVol.addEventListener("input", () => setVolume(Number(els.pVol.value)));
 els.audioVeil.addEventListener("click", exitAudioOnly);
 els.bgAudio.addEventListener("change", () => {
   if (!els.scrim.classList.contains("open")) return;
@@ -2920,10 +2965,8 @@ function seekToFraction(p){
   playerToast(Math.round(p * 100) + "%　" + fmtTC(t));
 }
 function nudgeVolume(d){
-  const v = soundEl();
-  v.muted = false;
-  v.volume = Math.min(1, Math.max(0, v.volume + d));
-  playerToast("音量 " + Math.round(v.volume * 100) + "%");
+  setVolume((soundEl().volume || 0) + d);
+  playerToast("音量 " + Math.round(userVolume * 100) + "%");
 }
 
 document.addEventListener("keydown", e => {
