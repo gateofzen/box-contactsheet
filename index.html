@@ -235,7 +235,19 @@ b{font-weight:600}
 .player-bar{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line-soft)}
 .player-bar .t{font-family:var(--display);font-size:13px;font-weight:500;flex:1;
   word-break:break-word;min-width:0}
-.player video{width:100%;max-height:66vh;background:#000;display:block}
+.vzoom{position:relative;overflow:hidden;background:#000;touch-action:pan-y}
+.vzoom.zoomed{touch-action:none;cursor:grab}
+.vzoom.zoomed:active{cursor:grabbing}
+.player video{width:100%;max-height:66vh;background:#000;display:block;
+  transform-origin:center center;will-change:transform}
+.audioveil{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;
+  background:rgba(11,14,17,.94);text-align:center;cursor:pointer;padding:20px}
+.audioveil .big{font-family:var(--display);font-size:17px;color:var(--amber);margin-bottom:8px}
+.audioveil .sub{font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.7}
+#pAudio{display:none}
+.zreset{position:absolute;right:10px;top:10px;z-index:4;background:rgba(11,14,17,.8);
+  border:1px solid var(--amber);color:var(--amber);border-radius:7px;padding:5px 10px;
+  font-family:var(--mono);font-size:11px}
 .player-foot{padding:9px 12px;font-family:var(--mono);font-size:10.5px;color:var(--muted);
   display:flex;gap:14px;flex-wrap:wrap;align-items:center}
 .player-foot .keys{color:var(--line);font-size:9.5px;flex:1;text-align:right}
@@ -262,6 +274,7 @@ b{font-weight:600}
   .hq{opacity:.8}
   .player{max-height:100%;border-radius:10px}
   .player video{max-height:52vh}
+  .zreset{padding:8px 13px;font-size:12px}
   .player-foot .keys{display:none}
   .scrim{padding:8px}
 }
@@ -274,7 +287,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v12</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v14</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -372,6 +385,7 @@ b{font-weight:600}
           <h4>画質と速度</h4>
           <div class="rack">
             <label class="check"><input id="autohq" type="checkbox"> 常に高画質で作る（遅い）</label>
+            <label class="check"><input id="bgAudio" type="checkbox" checked> 画面を消しても音声を続ける</label>
             <div class="field"><label for="conc">同時取得</label>
               <input id="conc" class="w-num" type="number" value="4" min="1" max="12"></div>
             <div class="field"><label for="fw">コマ幅 px</label>
@@ -450,14 +464,25 @@ b{font-weight:600}
   <div class="player">
     <div class="player-bar">
       <span class="t" id="pTitle"></span>
+      <button id="pAudioBtn" class="btn btn-sm" title="音声のみで再生">🎧</button>
       <button id="pFav" class="btn btn-ghost">★</button>
       <a id="pBox" class="btn btn-ghost" target="_blank" rel="noopener">Box で開く</a>
       <button id="pClose" class="btn btn-ghost">閉じる</button>
     </div>
-    <video id="pVideo" controls playsinline preload="metadata"></video>
+    <div id="vzoom" class="vzoom">
+      <video id="pVideo" controls playsinline preload="metadata"></video>
+      <button id="zoomReset" class="zreset" hidden>100%</button>
+      <div id="audioVeil" class="audioveil" hidden>
+        <div>
+          <div class="big">🎧 音声のみ再生中</div>
+          <div class="sub">画面を消しても続きます。タップすると映像に戻ります。</div>
+        </div>
+      </div>
+    </div>
+    <audio id="pAudio" preload="none"></audio>
     <div class="player-foot">
       <span id="pMeta"></span><span id="pNote"></span>
-      <span class="keys">← → 10秒 ／ Shift+← → 60秒 ／ J L 30秒 ／ Space 再生 ／ ↑ ↓ 音量 ／ 0–9 位置 ／ F ★</span>
+      <span class="keys">← → 10秒 ／ Shift 併用で60秒 ／ Space 再生 ／ ↑ ↓ 音量 ／ 1–9 位置 ／ + − 拡大縮小 ／ F ★</span>
     </div>
     <div id="pToast" class="ptoast"></div>
   </div>
@@ -511,7 +536,8 @@ const els = {};
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
- "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast"].forEach(k => els[k] = $(k));
+ "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom","zoomReset",
+ "pAudio","pAudioBtn","audioVeil","bgAudio"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -542,6 +568,31 @@ function syncStatusLine(){
   els.statusline.classList.toggle("on", has);
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* 直近の処理速度から残り時間を見積もる。
+   最初はキャッシュ済みで速く、あとから生成待ちで遅くなるため、
+   全体平均ではなく直近 20 件の平均を使う。 */
+function makeEta(){
+  const marks = [];
+  return {
+    tick(){ marks.push(Date.now()); if (marks.length > 21) marks.shift(); },
+    remain(n){
+      if (n <= 0 || marks.length < 3) return "";
+      const span = marks[marks.length-1] - marks[0];
+      const per = span / (marks.length - 1);
+      if (!isFinite(per) || per <= 0) return "";
+      return "残り約 " + fmtSpan(n * per / 1000);
+    }
+  };
+}
+function fmtSpan(sec){
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 90) return sec + " 秒";
+  const m = Math.round(sec / 60);
+  if (m < 60) return m + " 分";
+  const h = Math.floor(m / 60);
+  return h + " 時間 " + (m % 60) + " 分";
+}
 
 /* ============ IndexedDB ============ */
 let db = null;
@@ -1022,6 +1073,7 @@ async function prefetchThumbs(){
   batchRunning = true; batchStop = false;
   els.prefetch.hidden = false; setBusy(true);
   let done = 0, ok = 0, pend = 0;
+  const eta = makeEta();
 
   await Promise.all(list.map(f => pool.push(async () => {
     if (batchStop) return;
@@ -1029,8 +1081,11 @@ async function prefetchThumbs(){
     try{ rec = await buildThumbs(f); }catch(_){}
     done++;
     if (rec && rec.ok) ok++; else if (rec && rec.pending) pend++;
+    eta.tick();
     els.progress.textContent =
-      `サムネイル ${done}/${list.length}${pend ? "（Box 生成待ち " + pend + "）" : ""}`;
+      `サムネイル ${done}/${list.length}`
+      + (pend ? `（Box 生成待ち ${pend}）` : "")
+      + (done < list.length ? `　${eta.remain(list.length - done)}` : "");
     syncStatusLine();
     if (cardById.has(f.id)) await paintThumbs(f, true);
   })));
@@ -1127,6 +1182,7 @@ async function scan(scanTarget){
 
   const queue = [{id:rootId, depth:0, path:""}];
   let folders = 0;
+  const eta = makeEta();
 
   try{
     while (queue.length){
@@ -1156,7 +1212,10 @@ async function scan(scanTarget){
                       path:node.path, parentId:node.id});
         }
       }
-      setBusy(true); els.progress.textContent = `走査中 — フォルダ ${folders} / 残り ${queue.length} / 動画 ${files.length}`;
+      eta.tick();
+      setBusy(true);
+      els.progress.textContent = `フォルダを調べています ${folders} 件 / 動画 ${files.length} 本`
+        + (queue.length ? `　${eta.remain(queue.length) || "残り " + queue.length + " フォルダ"}` : "");
       els.nTotal.textContent = files.length;
       await sleep(0);
     }
@@ -1905,7 +1964,16 @@ function originalUrl(file){
 async function openPlayer(file, startAt){
   currentFile = file;
   els.scrim.classList.add("open");
+  resetZoom();
+  stopAudioMode();
   els.pTitle.textContent = file.name;
+  idbGet("thumbs", file.id).then(rec => {
+    if (rec && rec.poster){
+      if (posterUrlForSession) URL.revokeObjectURL(posterUrlForSession);
+      posterUrlForSession = URL.createObjectURL(rec.poster);
+    }else posterUrlForSession = null;
+    updateMediaSession();
+  });
   els.pBox.href = "https://app.box.com/file/" + file.id;
   els.pMeta.textContent = [fmtSize(file.size), fmtDate(file.modified), file.path].filter(Boolean).join("  ·  ");
   els.pFav.style.color = getMark(file.id).fav ? "var(--amber)" : "";
@@ -1945,6 +2013,9 @@ async function openPlayer(file, startAt){
   };
 }
 function closePlayer(){
+  resetZoom();
+  stopAudioMode();
+  if ("mediaSession" in navigator) try{ navigator.mediaSession.metadata = null; }catch(_){}
   els.scrim.classList.remove("open");
   els.pVideo.onerror = null;
   els.pVideo.pause(); els.pVideo.removeAttribute("src"); els.pVideo.load();
@@ -2103,6 +2174,185 @@ els.col.addEventListener("input", () => {
 els.pClose.addEventListener("click", closePlayer);
 els.pFav.addEventListener("click", () => { if (currentFile) setFav(currentFile.id, !getMark(currentFile.id).fav); });
 els.scrim.addEventListener("click", e => { if (e.target === els.scrim) closePlayer(); });
+/* ---- 画面オフでも音声を続ける ---- */
+// Android のブラウザは画面が消えると <video> を止めるが、<audio> は鳴り続ける。
+// そこで画面が隠れた時点で同じ位置から音声要素へ引き継ぐ。
+let audioMode = false;
+let posterUrlForSession = null;
+
+function activeMedia(){ return audioMode ? els.pAudio : els.pVideo; }
+
+async function goAudio(reason){
+  if (audioMode || !currentFile) return;
+  const src = els.pVideo.currentSrc || els.pVideo.src;
+  if (!src) return;
+  const t = els.pVideo.currentTime;
+  try{
+    if (els.pAudio.src !== src) els.pAudio.src = src;
+    els.pAudio.currentTime = t;
+    await els.pAudio.play();
+    els.pVideo.pause();
+    audioMode = true;
+    els.audioVeil.hidden = false;
+    els.pAudioBtn.classList.add("btn-go");
+    els.pNote.textContent = "音声のみ再生中";
+    updateMediaSession();
+    log("音声のみに切り替え (" + reason + ") " + fmtTC(t));
+  }catch(err){
+    log("音声への切り替えに失敗: " + err.message);
+  }
+}
+
+async function goVideo(){
+  if (!audioMode) return;
+  const t = els.pAudio.currentTime;
+  const wasPlaying = !els.pAudio.paused;
+  els.pAudio.pause();
+  audioMode = false;
+  els.audioVeil.hidden = true;
+  els.pAudioBtn.classList.remove("btn-go");
+  els.pNote.textContent = "原本を再生中";
+  try{
+    els.pVideo.currentTime = t;
+    if (wasPlaying) await els.pVideo.play();
+  }catch(err){ log("映像への復帰に失敗: " + err.message); }
+  updateMediaSession();
+}
+
+function stopAudioMode(){
+  audioMode = false;
+  els.audioVeil.hidden = true;
+  els.pAudioBtn.classList.remove("btn-go");
+  els.pAudio.pause();
+  els.pAudio.removeAttribute("src");
+  els.pAudio.load();
+}
+
+// ロック画面や通知領域に曲名と操作ボタンを出す
+function updateMediaSession(){
+  if (!("mediaSession" in navigator) || !currentFile) return;
+  try{
+    const art = posterUrlForSession
+      ? [{src: posterUrlForSession, sizes:"512x512", type:"image/jpeg"}] : [];
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentFile.name.replace(/\.[^.]+$/, ""),
+      artist: (currentFile.path || "").split("/").filter(Boolean).slice(-1)[0] || "Contact Sheet",
+      album: "Box",
+      artwork: art
+    });
+    const M = navigator.mediaSession;
+    M.setActionHandler("play",  () => activeMedia().play().catch(()=>{}));
+    M.setActionHandler("pause", () => activeMedia().pause());
+    M.setActionHandler("seekbackward", () => { activeMedia().currentTime = Math.max(0, activeMedia().currentTime - 15); });
+    M.setActionHandler("seekforward",  () => { activeMedia().currentTime += 15; });
+    M.setActionHandler("seekto", d => { if (d.seekTime != null) activeMedia().currentTime = d.seekTime; });
+  }catch(_){}
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!els.scrim.classList.contains("open")) return;
+  if (document.hidden){
+    if (els.bgAudio.checked && !els.pVideo.paused) goAudio("画面オフ");
+  }else{
+    if (audioMode) goVideo();
+  }
+});
+els.pAudioBtn.addEventListener("click", () => { audioMode ? goVideo() : goAudio("手動"); });
+els.audioVeil.addEventListener("click", goVideo);
+
+/* ---- プレーヤーのズーム（ピンチ / ホイール / ダブルタップ） ---- */
+const zoom = {s:1, x:0, y:0};
+
+function applyZoom(){
+  const box = els.vzoom.getBoundingClientRect();
+  const maxX = Math.max(0, (box.width  * zoom.s - box.width)  / 2);
+  const maxY = Math.max(0, (box.height * zoom.s - box.height) / 2);
+  zoom.x = Math.min(maxX, Math.max(-maxX, zoom.x));
+  zoom.y = Math.min(maxY, Math.max(-maxY, zoom.y));
+  els.pVideo.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})`;
+  const on = zoom.s > 1.01;
+  els.vzoom.classList.toggle("zoomed", on);
+  els.zoomReset.hidden = !on;
+  els.zoomReset.textContent = Math.round(zoom.s * 100) + "%　⟲";
+}
+function setZoom(scale, focal){
+  const prev = zoom.s;
+  zoom.s = Math.min(6, Math.max(1, scale));
+  if (focal && prev !== zoom.s){
+    // つまんだ位置が画面上で動かないように平行移動を補正する
+    const box = els.vzoom.getBoundingClientRect();
+    const fx = focal.x - box.left - box.width / 2;
+    const fy = focal.y - box.top  - box.height / 2;
+    const k = zoom.s / prev;
+    zoom.x = fx - (fx - zoom.x) * k;
+    zoom.y = fy - (fy - zoom.y) * k;
+  }
+  if (zoom.s <= 1.01){ zoom.x = 0; zoom.y = 0; }
+  applyZoom();
+}
+function resetZoom(){ zoom.s = 1; zoom.x = 0; zoom.y = 0; applyZoom(); }
+
+(function bindZoom(){
+  let pinch = null, drag = null, lastTap = 0;
+  const dist = (a,b) => Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
+  const mid  = (a,b) => ({x:(a.clientX+b.clientX)/2, y:(a.clientY+b.clientY)/2});
+
+  els.vzoom.addEventListener("touchstart", e => {
+    if (e.touches.length === 2){
+      pinch = {d: dist(e.touches[0], e.touches[1]), s: zoom.s};
+      e.preventDefault();
+    }else if (e.touches.length === 1){
+      const now = Date.now();
+      if (now - lastTap < 300){                    // ダブルタップで拡大 / 戻す
+        setZoom(zoom.s > 1.01 ? 1 : 2.5, {x:e.touches[0].clientX, y:e.touches[0].clientY});
+        e.preventDefault();
+      }
+      lastTap = now;
+      // 拡大中だけ 1 本指で位置を動かす（等倍のときは再生バーの操作を邪魔しない）
+      if (zoom.s > 1.01) drag = {x:e.touches[0].clientX, y:e.touches[0].clientY};
+    }
+  }, {passive:false});
+
+  els.vzoom.addEventListener("touchmove", e => {
+    if (pinch && e.touches.length === 2){
+      const d = dist(e.touches[0], e.touches[1]);
+      setZoom(pinch.s * (d / pinch.d), mid(e.touches[0], e.touches[1]));
+      e.preventDefault();
+    }else if (drag && e.touches.length === 1 && zoom.s > 1.01){
+      zoom.x += e.touches[0].clientX - drag.x;
+      zoom.y += e.touches[0].clientY - drag.y;
+      drag = {x:e.touches[0].clientX, y:e.touches[0].clientY};
+      applyZoom();
+      e.preventDefault();
+    }
+  }, {passive:false});
+
+  const endTouch = e => { if (e.touches.length < 2) pinch = null; if (!e.touches.length) drag = null; };
+  els.vzoom.addEventListener("touchend", endTouch);
+  els.vzoom.addEventListener("touchcancel", endTouch);
+
+  // パソコン: ホイールで拡大縮小、拡大中はドラッグで移動
+  els.vzoom.addEventListener("wheel", e => {
+    if (!els.scrim.classList.contains("open")) return;
+    e.preventDefault();
+    setZoom(zoom.s * (e.deltaY < 0 ? 1.15 : 1/1.15), {x:e.clientX, y:e.clientY});
+  }, {passive:false});
+
+  let mdrag = null;
+  els.vzoom.addEventListener("mousedown", e => {
+    if (zoom.s > 1.01 && e.target === els.pVideo){ mdrag = {x:e.clientX, y:e.clientY}; e.preventDefault(); }
+  });
+  window.addEventListener("mousemove", e => {
+    if (!mdrag) return;
+    zoom.x += e.clientX - mdrag.x; zoom.y += e.clientY - mdrag.y;
+    mdrag = {x:e.clientX, y:e.clientY};
+    applyZoom();
+  });
+  window.addEventListener("mouseup", () => { mdrag = null; });
+
+  els.zoomReset.addEventListener("click", e => { e.stopPropagation(); resetZoom(); });
+})();
+
 /* ---- プレーヤーのキーボード操作 ---- */
 let toastTimer = null;
 function playerToast(text){
@@ -2112,19 +2362,19 @@ function playerToast(text){
   toastTimer = setTimeout(() => els.pToast.classList.remove("on"), 700);
 }
 function seekBy(sec){
-  const v = els.pVideo;
+  const v = activeMedia();
   if (!isFinite(v.duration)) return;
   v.currentTime = Math.min(v.duration - 0.05, Math.max(0, v.currentTime + sec));
   playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + (sec > 0 ? sec : sec) + "秒　" + fmtTC(v.currentTime));
 }
 function seekToFraction(p){
-  const v = els.pVideo;
+  const v = activeMedia();
   if (!isFinite(v.duration)) return;
   v.currentTime = v.duration * p;
   playerToast(Math.round(p * 100) + "%　" + fmtTC(v.currentTime));
 }
 function nudgeVolume(d){
-  const v = els.pVideo;
+  const v = activeMedia();
   v.muted = false;
   v.volume = Math.min(1, Math.max(0, v.volume + d));
   playerToast("音量 " + Math.round(v.volume * 100) + "%");
@@ -2140,7 +2390,7 @@ document.addEventListener("keydown", e => {
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
 
-  const v = els.pVideo;
+  const v = activeMedia();
   const big = e.shiftKey;      // Shift 併用で大きく動かす
 
   switch (e.key){
@@ -2154,6 +2404,13 @@ document.addEventListener("keydown", e => {
       if (v.paused){ v.play().catch(() => {}); playerToast("再生"); }
       else { v.pause(); playerToast("一時停止"); }
       break;
+    case "+": case ";": case "=":
+      setZoom(zoom.s * 1.25); playerToast("拡大 " + Math.round(zoom.s*100) + "%"); break;
+    case "-":
+      setZoom(zoom.s / 1.25); playerToast("縮小 " + Math.round(zoom.s*100) + "%"); break;
+    case "0":
+      if (zoom.s > 1.01){ resetZoom(); playerToast("等倍に戻しました"); break; }
+      seekToFraction(0); break;
     case "m": case "M":
       v.muted = !v.muted; playerToast(v.muted ? "ミュート" : "ミュート解除"); break;
     case "Home": seekToFraction(0); break;
@@ -2165,7 +2422,7 @@ document.addEventListener("keydown", e => {
       }
       break;
     default:
-      if (e.key >= "0" && e.key <= "9"){ seekToFraction(Number(e.key) / 10); break; }
+      if (e.key >= "1" && e.key <= "9"){ seekToFraction(Number(e.key) / 10); break; }
       return;   // 対象外のキーは既定動作のまま
   }
   e.preventDefault();   // 矢印やスペースでのページスクロールを止める
