@@ -939,14 +939,17 @@ async function initTree(rootId, force){
 }
 
 // フォルダを開く一連の流れ（読み込み → サムネイル）をここに集約する
+let openSeq = 0;
 async function openSelectedFolder(){
   if (!fsel) return;
+  const seq = ++openSeq;               // 後から選び直されたら、この回は降りる
   els.folder.value = fsel;
   saveSettings();
   await ensureFresh();
   if (!await checkAuth()) return;
   await scan();
-  if (els.autothumb.checked && files.length) prefetchThumbs();
+  if (seq !== openSeq) return;         // 別のフォルダに追い越された
+  if (els.autothumb.checked && files.length) await prefetchThumbs();
 }
 
 /* ============ サムネイル一括取得 ============ */
@@ -954,8 +957,14 @@ let batchRunning = false, batchStop = false;
 
 async function prefetchThumbs(){
   if (batchRunning){ batchStop = true; return; }
+  // 走査直後で表示リストがまだ作られていないことがあるので、ここで確定させる
+  if (!view.length && files.length) applyView();
   const list = view.slice();
-  if (!list.length) return say("対象がありません。先にフォルダを読み込んでください。", true);
+  if (!list.length){
+    return say(files.length
+      ? "絞り込みの結果が 0 件です。検索欄を空にしてお試しください。"
+      : "先に左のフォルダを選んでください。", true);
+  }
 
   batchRunning = true; batchStop = false;
   els.prefetch.hidden = false; setBusy(true);
