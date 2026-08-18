@@ -233,11 +233,8 @@ b{font-weight:600}
 .player{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:12px;
   width:min(1180px,100%);max-height:100%;display:flex;flex-direction:column;overflow:hidden}
 .player-bar{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line-soft)}
-/* 映像側の音量ボタンは常に消音表示になって紛らわしいので隠す。
-   音量はプレーヤー上部のつまみ一本で操作する。 */
-#pVideo::-webkit-media-controls-mute-button,
-#pVideo::-webkit-media-controls-volume-control-container,
-#pVideo::-webkit-media-controls-volume-slider{ display:none !important; }
+/* 端末側のコントロールには手を出さない。
+   一部を隠すと機種によって再生バーごと壊れることがあるため。 */
 
 .volbox{display:flex;align-items:center;gap:5px;font-size:12px}
 .volbox input[type=range]{width:74px;accent-color:var(--amber);background:transparent}
@@ -317,7 +314,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v30</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v31</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -2756,6 +2753,8 @@ function alignVideo(){
 }
 
 // 音声が区間を取りに行っている間は映像も待たせる
+let stallReleaseTimer = null;
+
 function onAudStall(){
   if (audioOnly || !dualActive()) return;
   if (!els.pVideo.paused){
@@ -2765,11 +2764,22 @@ function onAudStall(){
   }
   if (wantPlay && els.pAudio.paused)
     els.pAudio.play().catch(err => log("音声の再生に失敗: " + err.message));
+
+  // 音声の準備が長引いても映像は 2 秒で動かす。
+  // 待ち続けると、シークしても何も起きないように見える。
+  clearTimeout(stallReleaseTimer);
+  stallReleaseTimer = setTimeout(() => {
+    if (wantPlay && !audioOnly && els.pVideo.paused){
+      log("音声の準備が長いため、映像を先に進めます");
+      els.pVideo.play().catch(()=>{});
+    }
+  }, 2000);
 }
 
 // 音声が鳴り出したら映像を合わせて再開する
 function onAudReady(){
   clearTimeout(watchdogTimer);
+  clearTimeout(stallReleaseTimer);
   if (audioOnly || !dualActive()) return;
   if (els.pAudio.muted || els.pAudio.volume === 0){
     els.pAudio.muted = false;
@@ -2798,6 +2808,7 @@ function onVidSeek(){
 
 function stopDual(){
   clearTimeout(watchdogTimer);
+  clearTimeout(stallReleaseTimer);
   clearInterval(progressTimer); progressTimer = null;
   dashAudio.stop();
   els.pAudio.removeEventListener("seeking", onAudStall);
