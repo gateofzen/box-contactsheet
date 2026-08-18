@@ -240,6 +240,7 @@ b{font-weight:600}
 .vzoom.zoomed:active{cursor:grabbing}
 .player video{width:100%;max-height:66vh;background:#000;display:block;
   transform-origin:center center;will-change:transform}
+.audioveil[hidden]{display:none}
 .audioveil{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;
   background:rgba(11,14,17,.94);text-align:center;cursor:pointer;padding:20px}
 .audioveil .big{font-family:var(--display);font-size:17px;color:var(--amber);margin-bottom:8px}
@@ -287,7 +288,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v15</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v16</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -1973,7 +1974,7 @@ async function openPlayer(file, startAt){
   currentFile = file;
   els.scrim.classList.add("open");
   resetZoom();
-  stopAudioMode();
+  resetAudioState();
   els.pTitle.textContent = file.name;
   idbGet("thumbs", file.id).then(rec => {
     if (rec && rec.poster){
@@ -1989,7 +1990,9 @@ async function openPlayer(file, startAt){
   // 原本をそのままストリーミングする。Range リクエストが効くので
   // 5GB でも先頭から順に落とすわけではない。変換版の生成を待つ必要もない。
   els.pVideo.onerror = null;
-  els.pVideo.src = originalUrl(file);
+  const src = originalUrl(file);
+  els.pVideo.src = src;
+  armDualAudio(src);                 // 音は最初から音声要素が担当する
   els.pNote.textContent = "原本を再生中";
   if (startAt != null){
     els.pVideo.addEventListener("loadedmetadata", () => {
@@ -2012,7 +2015,9 @@ async function openPlayer(file, startAt){
       els.pVideo.onerror = () => {
         els.pNote.textContent = "変換版も再生できません — 「Box で開く」をお試しください";
       };
-      els.pVideo.src = url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
+      const alt = url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
+      els.pVideo.src = alt;
+      armDualAudio(alt);
       els.pNote.textContent = "Box の mp4 変換版を再生中";
     }catch(err){
       els.pNote.textContent = "再生できません（" + err.message + "）— 「Box で開く」をお試しください";
@@ -2022,7 +2027,7 @@ async function openPlayer(file, startAt){
 }
 function closePlayer(){
   resetZoom();
-  stopAudioMode();
+  resetAudioState();
   if ("mediaSession" in navigator) try{ navigator.mediaSession.metadata = null; }catch(_){}
   els.scrim.classList.remove("open");
   els.pVideo.onerror = null;
@@ -2188,57 +2193,92 @@ els.pClose.addEventListener("click", closePlayer);
 els.pFav.addEventListener("click", () => { if (currentFile) setFav(currentFile.id, !getMark(currentFile.id).fav); });
 els.scrim.addEventListener("click", e => { if (e.target === els.scrim) closePlayer(); });
 /* ---- 画面オフでも音声を続ける ---- */
-// Android のブラウザは画面が消えると <video> を止めるが、<audio> は鳴り続ける。
-// そこで画面が隠れた時点で同じ位置から音声要素へ引き継ぐ。
-let audioMode = false;
+// Android は画面が消えると <video> を止める。しかも、消えた「後」に
+// 音声を鳴らし始めることも制限される。そこで最初から音声要素に音を担当させ、
+// 映像は消音して絵だけを出す。画面が消えても鳴り続けているものは止まらない。
+let audioOnly = false;          // 利用者が 🎧 を押した状態
 let posterUrlForSession = null;
+let driftTimer = null;
 
-function activeMedia(){ return audioMode ? els.pAudio : els.pVideo; }
+function dualActive(){ return els.bgAudio.checked && !!els.pAudio.getAttribute("src"); }
+function soundEl(){ return dualActive() ? els.pAudio : els.pVideo; }
+function activeMedia(){ return dualActive() ? els.pAudio : els.pVideo; }
 
-async function goAudio(reason){
-  if (audioMode || !currentFile) return;
-  const src = els.pVideo.currentSrc || els.pVideo.src;
-  if (!src) return;
-  const t = els.pVideo.currentTime;
-  try{
-    if (els.pAudio.src !== src) els.pAudio.src = src;
-    els.pAudio.currentTime = t;
-    await els.pAudio.play();
-    els.pVideo.pause();
-    audioMode = true;
-    els.audioVeil.hidden = false;
-    els.pAudioBtn.classList.add("btn-go");
-    els.pNote.textContent = "音声のみ再生中";
-    updateMediaSession();
-    log("音声のみに切り替え (" + reason + ") " + fmtTC(t));
-  }catch(err){
-    log("音声への切り替えに失敗: " + err.message);
-  }
+// 映像と音声の再生位置を合わせる
+function syncAudioTo(t, play){
+  if (!dualActive()) return;
+  if (Math.abs(els.pAudio.currentTime - t) > 0.3) els.pAudio.currentTime = t;
+  if (play && els.pAudio.paused) els.pAudio.play().catch(err => log("音声の再生に失敗: " + err.message));
+  if (!play && !els.pAudio.paused) els.pAudio.pause();
 }
 
-async function goVideo(){
-  if (!audioMode) return;
-  const t = els.pAudio.currentTime;
-  const wasPlaying = !els.pAudio.paused;
-  els.pAudio.pause();
-  audioMode = false;
-  els.audioVeil.hidden = true;
-  els.pAudioBtn.classList.remove("btn-go");
-  els.pNote.textContent = "原本を再生中";
-  try{
-    els.pVideo.currentTime = t;
-    if (wasPlaying) await els.pVideo.play();
-  }catch(err){ log("映像への復帰に失敗: " + err.message); }
-  updateMediaSession();
-}
+function armDualAudio(src){
+  stopDual();
+  if (!els.bgAudio.checked || !src) return;
+  els.pAudio.setAttribute("src", src);
+  els.pAudio.load();
+  els.pVideo.muted = true;          // 音は音声要素が出す
+  els.pVideo.volume = 0;
 
-function stopAudioMode(){
-  audioMode = false;
-  els.audioVeil.hidden = true;
-  els.pAudioBtn.classList.remove("btn-go");
+  els.pVideo.addEventListener("play",   onVidPlay);
+  els.pVideo.addEventListener("pause",  onVidPause);
+  els.pVideo.addEventListener("seeked", onVidSeek);
+
+  // わずかな時間差を定期的に補正する
+  driftTimer = setInterval(() => {
+    if (audioOnly || els.pVideo.paused || els.pAudio.paused) return;
+    const d = els.pAudio.currentTime - els.pVideo.currentTime;
+    if (Math.abs(d) > 0.35) els.pAudio.currentTime = els.pVideo.currentTime;
+  }, 2000);
+}
+function onVidPlay(){ if (!audioOnly) syncAudioTo(els.pVideo.currentTime, true); }
+function onVidPause(){ if (!audioOnly && !document.hidden) syncAudioTo(els.pVideo.currentTime, false); }
+function onVidSeek(){ if (!audioOnly) syncAudioTo(els.pVideo.currentTime, !els.pVideo.paused); }
+
+function stopDual(){
+  clearInterval(driftTimer); driftTimer = null;
+  els.pVideo.removeEventListener("play", onVidPlay);
+  els.pVideo.removeEventListener("pause", onVidPause);
+  els.pVideo.removeEventListener("seeked", onVidSeek);
   els.pAudio.pause();
   els.pAudio.removeAttribute("src");
   els.pAudio.load();
+  els.pVideo.muted = false;
+  els.pVideo.volume = 1;
+}
+
+// 🎧 映像を止めて音だけにする（通信量を抑えたいときにも使える）
+function enterAudioOnly(){
+  if (!dualActive()){
+    say("設定で「画面を消しても音声を続ける」を有効にしてください", true);
+    return;
+  }
+  audioOnly = true;
+  syncAudioTo(els.pVideo.currentTime, true);
+  els.pVideo.pause();
+  els.audioVeil.hidden = false;
+  els.pAudioBtn.classList.add("btn-go");
+  els.pNote.textContent = "音声のみ再生中";
+  updateMediaSession();
+}
+function exitAudioOnly(){
+  if (!audioOnly) return;
+  // 位置合わせで音声が一瞬止まるので、再生中かどうかは先に控えておく
+  const wasPlaying = !els.pAudio.paused;
+  const t = els.pAudio.currentTime;
+  audioOnly = false;
+  els.audioVeil.hidden = true;
+  els.pAudioBtn.classList.remove("btn-go");
+  els.pNote.textContent = "原本を再生中";
+  els.pVideo.currentTime = t;
+  if (wasPlaying) els.pVideo.play().catch(()=>{});   // 再生すると音声も追従する
+  updateMediaSession();
+}
+function resetAudioState(){
+  audioOnly = false;
+  els.audioVeil.hidden = true;
+  els.pAudioBtn.classList.remove("btn-go");
+  stopDual();
 }
 
 // ロック画面や通知領域に曲名と操作ボタンを出す
@@ -2254,24 +2294,31 @@ function updateMediaSession(){
       artwork: art
     });
     const M = navigator.mediaSession;
-    M.setActionHandler("play",  () => activeMedia().play().catch(()=>{}));
-    M.setActionHandler("pause", () => activeMedia().pause());
-    M.setActionHandler("seekbackward", () => { activeMedia().currentTime = Math.max(0, activeMedia().currentTime - 15); });
-    M.setActionHandler("seekforward",  () => { activeMedia().currentTime += 15; });
-    M.setActionHandler("seekto", d => { if (d.seekTime != null) activeMedia().currentTime = d.seekTime; });
+    M.setActionHandler("play",  () => { activeMedia().play().catch(()=>{}); if (!audioOnly && dualActive()) els.pVideo.play().catch(()=>{}); });
+    M.setActionHandler("pause", () => { els.pAudio.pause(); els.pVideo.pause(); });
+    M.setActionHandler("seekbackward", () => seekBy(-15));
+    M.setActionHandler("seekforward",  () => seekBy(15));
+    M.setActionHandler("seekto", d => { if (d.seekTime != null) seekTo(d.seekTime); });
   }catch(_){}
 }
 
 document.addEventListener("visibilitychange", () => {
   if (!els.scrim.classList.contains("open")) return;
   if (document.hidden){
-    if (els.bgAudio.checked && !els.pVideo.paused) goAudio("画面オフ");
-  }else{
-    if (audioMode) goVideo();
+    // 音声要素は既に鳴っているので、映像だけ止めれば音は続く
+    if (dualActive() && !els.pAudio.paused) els.pVideo.pause();
+  }else if (!audioOnly && dualActive() && !els.pAudio.paused){
+    els.pVideo.currentTime = els.pAudio.currentTime;
+    els.pVideo.play().catch(()=>{});
   }
 });
-els.pAudioBtn.addEventListener("click", () => { audioMode ? goVideo() : goAudio("手動"); });
-els.audioVeil.addEventListener("click", goVideo);
+els.pAudioBtn.addEventListener("click", () => { audioOnly ? exitAudioOnly() : enterAudioOnly(); });
+els.audioVeil.addEventListener("click", exitAudioOnly);
+els.bgAudio.addEventListener("change", () => {
+  if (!els.scrim.classList.contains("open")) return;
+  if (els.bgAudio.checked) armDualAudio(els.pVideo.currentSrc || els.pVideo.src);
+  else resetAudioState();
+});
 
 /* ---- プレーヤーのズーム（ピンチ / ホイール / ダブルタップ） ---- */
 const zoom = {s:1, x:0, y:0};
@@ -2374,20 +2421,27 @@ function playerToast(text){
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => els.pToast.classList.remove("on"), 700);
 }
+function seekTo(t){
+  const ref = activeMedia();
+  const dur = isFinite(ref.duration) ? ref.duration : (isFinite(els.pVideo.duration) ? els.pVideo.duration : 0);
+  if (!dur) return 0;
+  t = Math.min(dur - 0.05, Math.max(0, t));
+  if (!audioOnly) els.pVideo.currentTime = t;
+  if (dualActive()) els.pAudio.currentTime = t;
+  return t;
+}
 function seekBy(sec){
-  const v = activeMedia();
-  if (!isFinite(v.duration)) return;
-  v.currentTime = Math.min(v.duration - 0.05, Math.max(0, v.currentTime + sec));
-  playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + (sec > 0 ? sec : sec) + "秒　" + fmtTC(v.currentTime));
+  const t = seekTo(activeMedia().currentTime + sec);
+  playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + sec + "秒　" + fmtTC(t));
 }
 function seekToFraction(p){
-  const v = activeMedia();
-  if (!isFinite(v.duration)) return;
-  v.currentTime = v.duration * p;
-  playerToast(Math.round(p * 100) + "%　" + fmtTC(v.currentTime));
+  const ref = activeMedia();
+  if (!isFinite(ref.duration)) return;
+  const t = seekTo(ref.duration * p);
+  playerToast(Math.round(p * 100) + "%　" + fmtTC(t));
 }
 function nudgeVolume(d){
-  const v = activeMedia();
+  const v = soundEl();
   v.muted = false;
   v.volume = Math.min(1, Math.max(0, v.volume + d));
   playerToast("音量 " + Math.round(v.volume * 100) + "%");
@@ -2414,8 +2468,14 @@ document.addEventListener("keydown", e => {
     case "ArrowUp":    nudgeVolume(0.1); break;
     case "ArrowDown":  nudgeVolume(-0.1); break;
     case " ": case "k": case "K":
-      if (v.paused){ v.play().catch(() => {}); playerToast("再生"); }
-      else { v.pause(); playerToast("一時停止"); }
+      if (v.paused){
+        if (!audioOnly) els.pVideo.play().catch(() => {});
+        if (dualActive()) els.pAudio.play().catch(() => {});
+        playerToast("再生");
+      }else{
+        els.pVideo.pause(); els.pAudio.pause();
+        playerToast("一時停止");
+      }
       break;
     case "+": case ";": case "=":
       setZoom(zoom.s * 1.25); playerToast("拡大 " + Math.round(zoom.s*100) + "%"); break;
@@ -2424,8 +2484,10 @@ document.addEventListener("keydown", e => {
     case "0":
       if (zoom.s > 1.01){ resetZoom(); playerToast("等倍に戻しました"); break; }
       seekToFraction(0); break;
-    case "m": case "M":
-      v.muted = !v.muted; playerToast(v.muted ? "ミュート" : "ミュート解除"); break;
+    case "m": case "M":{
+      const sn = soundEl();
+      sn.muted = !sn.muted; playerToast(sn.muted ? "ミュート" : "ミュート解除"); break;
+    }
     case "Home": seekToFraction(0); break;
     case "End":  seekToFraction(0.99); break;
     case "f": case "F":
