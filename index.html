@@ -288,7 +288,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v16</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v17</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -1990,9 +1990,8 @@ async function openPlayer(file, startAt){
   // 原本をそのままストリーミングする。Range リクエストが効くので
   // 5GB でも先頭から順に落とすわけではない。変換版の生成を待つ必要もない。
   els.pVideo.onerror = null;
-  const src = originalUrl(file);
-  els.pVideo.src = src;
-  armDualAudio(src);                 // 音は最初から音声要素が担当する
+  els.pVideo.src = originalUrl(file);
+  armDualAudio(file);                // 音は最初から音声要素が担当する
   els.pNote.textContent = "原本を再生中";
   if (startAt != null){
     els.pVideo.addEventListener("loadedmetadata", () => {
@@ -2017,7 +2016,7 @@ async function openPlayer(file, startAt){
       };
       const alt = url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
       els.pVideo.src = alt;
-      armDualAudio(alt);
+      armDualAudio(file);
       els.pNote.textContent = "Box の mp4 変換版を再生中";
     }catch(err){
       els.pNote.textContent = "再生できません（" + err.message + "）— 「Box で開く」をお試しください";
@@ -2212,13 +2211,59 @@ function syncAudioTo(t, play){
   if (!play && !els.pAudio.paused) els.pAudio.pause();
 }
 
-function armDualAudio(src){
+// 音声専用のソースを探す。音声だけの形式なら端末が背景再生を許しやすく、
+// 通信量も小さい。無ければ変換版、最後に原本へ落とす。
+async function resolveAudioSrc(file){
+  for (const hint of ["[mp3]", "[mp4]"]){
+    try{
+      const got = await waitForRep(await getRepresentation(file.id, hint) || {}, 3);
+      const url = repContentUrl(got.rep);
+      if (url){
+        audioKind = hint === "[mp3]" ? "mp3（音声のみ）" : "mp4（変換版）";
+        return url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
+      }
+    }catch(_){}
+  }
+  audioKind = "原本";
+  return originalUrl(file);
+}
+
+let audioKind = "";
+let resumeTries = 0;
+
+function watchAudio(){
+  const A = els.pAudio;
+  const note = ev => log(`音声[${ev}] ${document.hidden ? "画面オフ" : "画面オン"} `
+    + `pos=${fmtTC(A.currentTime)} paused=${A.paused} ready=${A.readyState} src=${audioKind}`);
+  ["play","playing","pause","waiting","stalled","suspend","ended","error","abort"]
+    .forEach(ev => A.addEventListener(ev, () => note(ev)));
+
+  // 画面が消えている間に勝手に止められたら、数回だけ復帰を試みる
+  A.addEventListener("pause", () => {
+    if (!document.hidden || audioOnly === false && els.pVideo.paused && !dualActive()) return;
+    if (!els.scrim.classList.contains("open")) return;
+    if (A.ended || resumeTries >= 3) return;
+    const attempt = ++resumeTries;
+    setTimeout(() => {
+      A.play().then(() => log("音声を自動復帰しました (" + attempt + "回目)"))
+              .catch(err => log("音声の自動復帰に失敗: " + err.message));
+    }, 300);
+  });
+  A.addEventListener("playing", () => { resumeTries = 0; });
+}
+
+async function armDualAudio(file){
   stopDual();
-  if (!els.bgAudio.checked || !src) return;
+  if (!els.bgAudio.checked || !file) return;
+  const src = await resolveAudioSrc(file);
+  if (!els.scrim.classList.contains("open")) return;
   els.pAudio.setAttribute("src", src);
   els.pAudio.load();
   els.pVideo.muted = true;          // 音は音声要素が出す
   els.pVideo.volume = 0;
+  els.pNote.textContent = "再生中（音声: " + audioKind + "）";
+  log("音声ソース: " + audioKind);
+  if (!els.pVideo.paused) syncAudioTo(els.pVideo.currentTime, true);
 
   els.pVideo.addEventListener("play",   onVidPlay);
   els.pVideo.addEventListener("pause",  onVidPause);
@@ -2299,6 +2344,7 @@ function updateMediaSession(){
     M.setActionHandler("seekbackward", () => seekBy(-15));
     M.setActionHandler("seekforward",  () => seekBy(15));
     M.setActionHandler("seekto", d => { if (d.seekTime != null) seekTo(d.seekTime); });
+    navigator.mediaSession.playbackState = els.pAudio.paused && els.pVideo.paused ? "paused" : "playing";
   }catch(_){}
 }
 
@@ -2316,7 +2362,7 @@ els.pAudioBtn.addEventListener("click", () => { audioOnly ? exitAudioOnly() : en
 els.audioVeil.addEventListener("click", exitAudioOnly);
 els.bgAudio.addEventListener("change", () => {
   if (!els.scrim.classList.contains("open")) return;
-  if (els.bgAudio.checked) armDualAudio(els.pVideo.currentSrc || els.pVideo.src);
+  if (els.bgAudio.checked && currentFile) armDualAudio(currentFile);
   else resetAudioState();
 });
 
@@ -2548,6 +2594,7 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
 
   loadAuth();
   saveAuth();
+  watchAudio();
   log("ready — marks:", marks.size);
 
   // Box からの折り返し（?code=...）を処理する
