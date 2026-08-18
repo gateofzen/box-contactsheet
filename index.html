@@ -274,7 +274,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v10</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v12</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -2182,12 +2182,28 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
     marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [], dirty:!!rec.dirty});
 
   // 端末に保存された値を優先し、無ければ上の DEFAULTS を使う
-  // ブラウザのフォーム復元は script のあとに走ることがあるので、何度か消す
-  const clearQuery = () => { if (els.q.value && !queryTouched) els.q.value = ""; };
-  clearQuery();
-  setTimeout(clearQuery, 0);
-  setTimeout(clearQuery, 400);
-  window.addEventListener("pageshow", clearQuery);
+  // 検索窓の値がブラウザに復元される問題への対策。
+  // 復元は「HTML を解析して作られた要素」を狙うので、要素ごと作り替えて的を外す。
+  if (els.q.value) log("検索窓に復元された値を破棄しました: " + els.q.value);
+  const fresh = document.createElement("input");
+  for (const a of ["type","name","placeholder","aria-label","autocomplete","autocorrect","spellcheck"]){
+    const v = els.q.getAttribute(a);
+    if (v !== null) fresh.setAttribute(a, v);
+  }
+  fresh.id = "q";
+  fresh.value = "";
+  els.q.replaceWith(fresh);
+  els.q = fresh;
+  els.q.addEventListener("input", () => { queryTouched = true; });
+  els.q.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { buildRail(); applyView(); }, 220); });
+
+  // 念のため、最初の数秒は復元されていないか見張る
+  const guard = setInterval(() => {
+    if (queryTouched) return clearInterval(guard);
+    if (els.q.value){ log("検索窓が後から書き換えられたので消しました: " + els.q.value); els.q.value = ""; }
+  }, 250);
+  setTimeout(() => clearInterval(guard), 4000);
+  window.addEventListener("pageshow", () => { if (!queryTouched) els.q.value = ""; });
   els.clientId.value = localStorage.getItem("bcs_client") || DEFAULTS.clientId;
   els.worker.value   = localStorage.getItem("bcs_worker") || DEFAULTS.worker;
   els.token.value    = localStorage.getItem("bcs_token") || "";
