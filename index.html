@@ -9,329 +9,438 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
-  --ink:#0F1317;
-  --surface:#1A2026;
-  --surface-2:#232C34;
-  --line:#333E48;
-  --line-soft:#28313A;
-  --text:#E6EAED;
-  --muted:#8B99A6;
-  --amber:#E8B04B;
-  --mint:#5FD3C4;
-  --red:#FF6B6B;
+  --ink:#0F1317; --surface:#181E24; --surface-2:#212A31; --line:#333E48; --line-soft:#262F37;
+  --text:#E6EAED; --muted:#8B99A6; --amber:#E8B04B; --mint:#5FD3C4; --red:#FF6B6B;
   --display:"Space Grotesk",system-ui,sans-serif;
   --body:"Inter","Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;
   --mono:"JetBrains Mono",ui-monospace,monospace;
+  --col:340px; --bar:54px;
 }
 *{box-sizing:border-box}
-html,body{margin:0;padding:0}
+html,body{margin:0;padding:0;overscroll-behavior-y:none}
 body{background:var(--ink);color:var(--text);font-family:var(--body);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
 button,input,select{font-family:inherit;font-size:inherit;color:inherit}
-button{cursor:pointer}
+button{cursor:pointer;background:none;border:none;padding:0}
 a{color:var(--mint)}
 :focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+b{font-weight:600}
 
-/* ---------- masthead ---------- */
-.masthead{border-bottom:1px solid var(--line);background:linear-gradient(180deg,#161C22,#12171C);position:sticky;top:0;z-index:40}
-.masthead-in{max-width:1680px;margin:0 auto;padding:14px 20px}
-.brand{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
-.brand h1{font-family:var(--display);font-weight:700;font-size:19px;letter-spacing:.14em;text-transform:uppercase;margin:0}
-.brand .sub{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.05em}
+/* ---------- top bar ---------- */
+.topbar{position:sticky;top:0;z-index:50;background:rgba(18,23,28,.94);
+  backdrop-filter:blur(10px);border-bottom:1px solid var(--line-soft)}
+.topbar-in{max-width:1760px;margin:0 auto;padding:0 12px;height:var(--bar);
+  display:flex;align-items:center;gap:8px}
+.mark{font-family:var(--display);font-weight:700;font-size:13px;letter-spacing:.16em;
+  text-transform:uppercase;white-space:nowrap;color:var(--text)}
+.mark small{display:block;font-family:var(--mono);font-size:8px;letter-spacing:.1em;color:var(--muted);font-weight:400}
+.iconbtn{width:38px;height:38px;flex:none;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--line-soft);border-radius:8px;color:var(--muted);font-size:15px;transition:.14s}
+.iconbtn:hover{border-color:var(--muted);color:var(--text)}
+.iconbtn.on{background:var(--amber);border-color:var(--amber);color:#171208}
+.search{flex:1;min-width:0;display:flex;align-items:center;gap:7px;background:var(--ink);
+  border:1px solid var(--line-soft);border-radius:8px;padding:0 10px;height:38px}
+.search:focus-within{border-color:var(--amber)}
+.search span{color:var(--muted);font-size:13px}
+.search input{flex:1;min-width:0;background:none;border:none;outline:none;font-size:14px;height:36px}
+.crumb{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:34vw}
+.crumb b{color:var(--amber);font-weight:500}
 
-.rack{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:12px}
-.field{display:flex;flex-direction:column;gap:5px}
-.field label{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
-.field input,.field select{background:var(--ink);border:1px solid var(--line);border-radius:3px;padding:8px 10px;font-family:var(--mono);font-size:12px}
-.field input:focus,.field select:focus{border-color:var(--amber);outline:none}
-.w-token{width:min(300px,55vw)}
-.w-id{width:110px}
-.w-num{width:78px}
-.w-search{width:min(460px,72vw)}
+/* progress line */
+.pbar{height:2px;background:transparent}
+.pbar.on{background:linear-gradient(90deg,var(--amber),var(--mint),var(--amber));
+  background-size:200% 100%;animation:slide 1.4s linear infinite}
+@keyframes slide{to{background-position:-200% 0}}
 
-.btn{background:var(--surface-2);border:1px solid var(--line);border-radius:3px;padding:8px 13px;font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;transition:border-color .15s,background .15s}
-.btn:hover{border-color:var(--muted)}
-.btn-go{background:var(--amber);border-color:var(--amber);color:#171208;font-weight:700}
-.btn-go:hover{background:#F2BC5C;border-color:#F2BC5C}
-.btn-stop{border-color:var(--red);color:var(--red)}
-.btn-ghost{background:transparent}
-.btn-sm{padding:5px 9px;font-size:10px}
-.check{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--muted);padding-bottom:9px;white-space:nowrap}
-.check input{accent-color:var(--amber)}
+.statusline{max-width:1760px;margin:0 auto;padding:0 12px;display:flex;gap:14px;align-items:center;
+  font-family:var(--mono);font-size:10.5px;color:var(--muted);min-height:0;overflow:hidden;
+  max-height:0;transition:max-height .18s,padding .18s}
+.statusline.on{max-height:34px;padding:7px 12px}
+.statusline .msg{color:var(--amber)}
+.statusline .msg.err{color:var(--red)}
+.statusline .grow{flex:1}
+.stopbtn{border:1px solid var(--red);color:var(--red);border-radius:6px;padding:3px 9px;font-size:10px}
 
-.hint{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px;letter-spacing:.03em}
-.hint b{color:var(--amber);font-weight:500}
-.setup{margin-top:12px;border:1px solid var(--line-soft);border-radius:4px;background:var(--surface);padding:0 12px}
-.setup summary{padding:8px 0;cursor:pointer;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
-.setup[open]{padding-bottom:10px}
-.setup .rack{margin-top:2px}
+/* ---------- layout ---------- */
+.wrap{max-width:1760px;margin:0 auto;padding:14px 12px 90px;display:grid;
+  grid-template-columns:236px 1fr;gap:20px;align-items:start}
+.content{min-width:0}
 
-/* ---------- tag rail ---------- */
-.rail-tags{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;max-height:78px;overflow-y:auto}
-.chip{
-  background:var(--surface-2);border:1px solid var(--line-soft);border-radius:999px;
-  padding:3px 10px;font-family:var(--mono);font-size:11px;color:var(--muted);
-  display:inline-flex;align-items:center;gap:6px;transition:.13s;
-}
+/* ---------- folder drawer / sidebar ---------- */
+.scrim-bg{position:fixed;inset:0;background:rgba(6,9,12,.6);z-index:59;display:none}
+.scrim-bg.on{display:block}
+.drawer{position:sticky;top:calc(var(--bar) + 14px);max-height:calc(100vh - var(--bar) - 30px);
+  display:flex;flex-direction:column;border:1px solid var(--line-soft);border-radius:10px;
+  background:var(--surface);overflow:hidden}
+.drawer-head{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:10px 10px 9px;border-bottom:1px solid var(--line-soft);
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.drawer-head button{color:var(--muted);font-size:13px;padding:2px 5px;border-radius:5px}
+.drawer-head button:hover{color:var(--amber)}
+#tree{overflow-y:auto;padding:7px 5px 10px;font-family:var(--mono);font-size:11.5px;flex:1}
+.node{display:flex;align-items:center;gap:1px;border-radius:6px}
+.node:hover{background:var(--surface-2)}
+.node.on{background:var(--amber)}
+.node.on .nname,.node.on .ncount,.node.on .twist{color:#171208}
+.node.on .nname{font-weight:700}
+.twist{width:18px;flex:none;color:var(--muted);font-size:9px;padding:6px 0;line-height:1}
+.twist.leaf{visibility:hidden}
+.twist.busy{color:var(--amber);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.25}}
+.nname{flex:1;text-align:left;padding:6px 2px;color:var(--text);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ncount{color:var(--muted);padding-right:7px;font-size:10px}
+.vcount{display:none}
+.kids{margin-left:12px;border-left:1px solid var(--line-soft);padding-left:2px}
+.tree-empty{padding:10px;color:var(--muted)}
+.drawer-foot{border-top:1px solid var(--line-soft);padding:8px 10px;font-family:var(--mono);
+  font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drawer-foot b{color:var(--amber);font-weight:500}
+
+/* ---------- chips ---------- */
+.chiprow{display:flex;gap:6px;overflow-x:auto;padding-bottom:10px;scrollbar-width:none}
+.chiprow::-webkit-scrollbar{display:none}
+.chip{flex:none;background:var(--surface-2);border:1px solid var(--line-soft);border-radius:999px;
+  padding:4px 11px;font-family:var(--mono);font-size:11px;color:var(--muted);
+  display:inline-flex;align-items:center;gap:6px;transition:.13s;white-space:nowrap}
 .chip:hover{border-color:var(--muted);color:var(--text)}
 .chip.active{background:var(--amber);border-color:var(--amber);color:#171208;font-weight:700}
-.chip .n{opacity:.65;font-size:10px}
+.chip .n{opacity:.6;font-size:10px}
 .chip.fav{color:var(--amber)}
 .chip.fav.active{color:#171208}
 
-/* ---------- status ---------- */
-.statusbar{border-top:1px solid var(--line-soft);margin-top:12px;padding-top:9px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;font-family:var(--mono);font-size:11px;color:var(--muted)}
-.stat b{color:var(--text);font-weight:500}
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:middle}
-.dot.on{background:var(--mint)}
-.dot.off{background:var(--red)}
-.dot.busy{background:var(--amber);animation:pulse 1s infinite}
-@keyframes pulse{50%{opacity:.25}}
-.msg{color:var(--amber)}
-.msg.err{color:var(--red)}
-
-/* ---------- bulk bar ---------- */
-.bulkbar{
-  position:sticky;top:0;z-index:35;display:none;gap:10px;flex-wrap:wrap;align-items:center;
-  background:var(--amber);color:#171208;padding:9px 20px;font-family:var(--mono);font-size:11px;
-}
-.bulkbar.on{display:flex}
-.bulkbar input[type=text]{background:#171208;color:#F0E6D2;border:none;border-radius:3px;padding:6px 9px;font-family:var(--mono);font-size:11px;width:190px}
-.bulkbar .btn{background:#171208;border-color:#171208;color:#F0E6D2}
-.bulkbar b{font-weight:700}
-
 /* ---------- grid ---------- */
-main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
-.layout{display:grid;grid-template-columns:250px 1fr;gap:26px;align-items:start}
-.layout.solo{grid-template-columns:1fr}
-.layout.solo .tree{display:none}
-.tree{
-  position:sticky;top:0;max-height:calc(100vh - 40px);overflow-y:auto;
-  border:1px solid var(--line-soft);border-radius:4px;background:var(--surface);
-  padding:10px 4px 12px;font-family:var(--mono);font-size:11px;
-}
-.tree-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 8px 9px;
-  border-bottom:1px solid var(--line-soft);margin-bottom:7px;color:var(--muted);
-  letter-spacing:.14em;text-transform:uppercase;font-size:10px}
-.tree-deep{display:flex;align-items:center;gap:5px;text-transform:none;letter-spacing:0;cursor:pointer}
-.tree-deep input{accent-color:var(--amber)}
-.node{display:flex;align-items:center;gap:2px;border-radius:3px}
-.node:hover{background:var(--surface-2)}
-.node.on{background:var(--amber)}
-.node.on .nname,.node.on .ncount{color:#171208}
-.node.on .nname{font-weight:700}
-.twist{width:16px;flex:none;background:none;border:none;color:var(--muted);padding:2px 0;font-size:9px;line-height:1}
-.twist.leaf{visibility:hidden}
-.nname{flex:1;text-align:left;background:none;border:none;padding:4px 2px;color:var(--text);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ncount{color:var(--muted);padding-right:7px;font-size:10px}
-.kids{margin-left:11px;border-left:1px solid var(--line-soft);padding-left:3px}
-.tree-empty{padding:8px;color:var(--muted)}
-.tree-foot{border-top:1px solid var(--line-soft);margin-top:9px;padding:9px 8px 2px;display:flex;flex-direction:column;gap:7px}
-.tree-foot .sel{color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tree-foot .sel b{color:var(--amber);font-weight:500}
-.tree-foot .btn{width:100%;text-align:center}
-.node .vcount{color:var(--amber);font-size:9px;padding-right:6px}
-.node.on .vcount{color:#171208}
-.twist.busy{color:var(--amber);animation:pulse 1s infinite}
-@media (max-width:900px){.layout{grid-template-columns:1fr}.tree{position:static;max-height:220px}}
-.sheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--col,300px),1fr));gap:22px}
-.card{background:var(--surface);border:1px solid var(--line-soft);border-radius:4px;overflow:hidden;display:flex;flex-direction:column;transition:border-color .15s,transform .15s}
-.card:hover{border-color:var(--line);transform:translateY(-2px)}
+.sheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--col),1fr));gap:18px}
+.card{background:var(--surface);border:1px solid var(--line-soft);border-radius:10px;
+  overflow:hidden;display:flex;flex-direction:column;transition:border-color .15s}
+.card:hover{border-color:var(--line)}
 .card.picked{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber) inset}
 
-.strip{position:relative;background:#000;cursor:pointer;border-bottom:1px solid var(--line-soft)}
-.rail{height:9px;background:repeating-linear-gradient(90deg,var(--surface-2) 0 6px,transparent 6px 14px);background-color:#0B0E11}
+.strip{position:relative;background:#000;cursor:pointer}
 .hero{position:relative;aspect-ratio:16/9;background:#0B0E11;overflow:hidden}
 .hero img{width:100%;height:100%;object-fit:cover;display:block}
-.hero .tc{position:absolute;right:6px;bottom:6px;font-family:var(--mono);font-size:11px;padding:2px 6px;background:rgba(0,0,0,.7);color:var(--amber);border-radius:2px}
-.frames{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line-soft);aspect-ratio:80/9}
+.hero .tc{position:absolute;right:7px;bottom:7px;font-family:var(--mono);font-size:11px;
+  padding:2px 7px;background:rgba(0,0,0,.72);color:#fff;border-radius:4px}
+.rail{display:none}
+.frames{display:grid;grid-template-columns:repeat(5,1fr);gap:2px;background:var(--line-soft);
+  aspect-ratio:80/9;border-top:2px solid var(--surface)}
 .frames.solo{grid-template-columns:1fr;aspect-ratio:16/9}
 .frames img{width:100%;height:100%;object-fit:cover;display:block;background:#000}
 .frames .slot{position:relative;overflow:hidden;background:#0B0E11;cursor:pointer}
-.frames .slot::after{content:attr(data-tc);position:absolute;left:0;bottom:0;font-family:var(--mono);font-size:9px;padding:1px 3px;background:rgba(0,0,0,.65);color:var(--amber);opacity:0;transition:opacity .12s}
+.frames .slot::after{content:attr(data-tc);position:absolute;left:0;bottom:0;font-family:var(--mono);
+  font-size:9px;padding:1px 3px;background:rgba(0,0,0,.65);color:var(--amber);opacity:0;transition:opacity .12s}
 .strip:hover .slot::after{opacity:1}
 .frames .slot.sel{outline:2px solid var(--amber);outline-offset:-2px}
-.frames .slot:hover{outline:1px solid var(--amber);outline-offset:-1px}
-.strip .placeholder{position:absolute;inset:9px 0 0;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--muted);pointer-events:none}
+.strip .placeholder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--muted);pointer-events:none}
 .strip .fail{color:var(--red)}
-.hq{position:absolute;left:7px;bottom:7px;z-index:3;background:rgba(11,14,17,.82);border:1px solid rgba(139,153,166,.45);border-radius:3px;padding:3px 8px;font-family:var(--mono);font-size:10px;color:var(--muted);opacity:0;transition:opacity .13s}
-.card:hover .hq{opacity:1}
-.hq:hover{border-color:var(--amber);color:var(--amber)}
-.hq.done{color:var(--mint);border-color:rgba(95,211,196,.45);opacity:1}
 
-.overlay{position:absolute;top:13px;display:flex;gap:5px;z-index:2}
-.overlay.left{left:7px}
-.overlay.right{right:7px}
-.ob{
-  background:rgba(11,14,17,.78);border:1px solid rgba(139,153,166,.4);border-radius:3px;
-  width:26px;height:26px;display:flex;align-items:center;justify-content:center;
-  font-family:var(--mono);font-size:13px;line-height:1;color:var(--muted);padding:0;
-}
+.overlay{position:absolute;top:8px;display:flex;gap:6px;z-index:2}
+.overlay.left{left:8px}
+.overlay.right{right:8px}
+.ob{background:rgba(11,14,17,.72);border:1px solid rgba(255,255,255,.18);border-radius:7px;
+  width:30px;height:30px;display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:13px;line-height:1;color:#fff;opacity:.55;transition:.14s}
+.card:hover .ob{opacity:1}
 .ob:hover{border-color:var(--amber);color:var(--amber)}
-.ob.on{background:var(--amber);border-color:var(--amber);color:#171208}
+.ob.on{background:var(--amber);border-color:var(--amber);color:#171208;opacity:1}
+.hq{position:absolute;left:8px;bottom:8px;z-index:3;background:rgba(11,14,17,.72);
+  border:1px solid rgba(255,255,255,.18);border-radius:7px;padding:4px 9px;
+  font-family:var(--mono);font-size:10px;color:#fff;opacity:0;transition:.14s}
+.card:hover .hq{opacity:.85}
+.hq:hover{opacity:1;border-color:var(--amber);color:var(--amber)}
+.hq.done{color:var(--mint);border-color:rgba(95,211,196,.5);opacity:.85}
 
-.meta{padding:11px 12px 12px}
-.name{font-family:var(--display);font-weight:500;font-size:13px;line-height:1.35;word-break:break-all;margin:0 0 6px}
-.tags{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--mono);font-size:10px;color:var(--muted)}
-.tags .dur{color:var(--amber)}
-.tags .fd{color:var(--mint)}
-.tags .fd:hover{text-decoration:underline}
-.taglist{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;align-items:center}
-.tg{background:var(--surface-2);border:1px solid var(--line-soft);border-radius:3px;padding:2px 6px;font-family:var(--mono);font-size:10px;color:var(--mint);display:inline-flex;align-items:center;gap:5px}
+.meta{padding:10px 12px 11px}
+.name{font-family:var(--display);font-weight:500;font-size:13.5px;line-height:1.4;
+  word-break:break-word;margin:0}
+.taglist{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center}
+.tg{background:var(--surface-2);border:1px solid var(--line-soft);border-radius:5px;padding:2px 7px;
+  font-family:var(--mono);font-size:10px;color:var(--mint);display:inline-flex;align-items:center;gap:5px}
 .tg x{cursor:pointer;color:var(--muted);font-style:normal}
 .tg x:hover{color:var(--red)}
-.tg-add{background:transparent;border:1px dashed var(--line);border-radius:3px;padding:2px 7px;font-family:var(--mono);font-size:10px;color:var(--muted)}
+.tg-add{border:1px dashed var(--line);border-radius:5px;padding:2px 8px;font-family:var(--mono);
+  font-size:10px;color:var(--muted)}
 .tg-add:hover{border-color:var(--amber);color:var(--amber)}
-.tg-in{background:var(--ink);border:1px solid var(--amber);border-radius:3px;padding:2px 6px;font-family:var(--mono);font-size:10px;width:120px}
+.tg-in{background:var(--ink);border:1px solid var(--amber);border-radius:5px;padding:2px 6px;
+  font-family:var(--mono);font-size:10px;width:120px}
 
-.sentinel{height:60px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;color:var(--muted)}
-.empty{border:1px dashed var(--line);border-radius:4px;padding:46px 24px;text-align:center}
-.empty h2{font-family:var(--display);font-size:16px;letter-spacing:.06em;margin:0 0 8px}
-.empty p{color:var(--muted);margin:4px 0;font-size:13px}
+/* per-card details */
+.cardinfo{margin-top:7px}
+.cardinfo summary{list-style:none;font-family:var(--mono);font-size:10px;color:var(--muted);
+  cursor:pointer;padding:2px 0;display:flex;align-items:center;gap:5px}
+.cardinfo summary::-webkit-details-marker{display:none}
+.cardinfo summary::before{content:"▸";transition:transform .15s;display:inline-block}
+.cardinfo[open] summary::before{transform:rotate(90deg)}
+.cardinfo .rows{display:flex;flex-direction:column;gap:2px;padding:5px 0 2px;
+  font-family:var(--mono);font-size:10px;color:var(--muted)}
+.cardinfo .rows .dur{color:var(--amber)}
+.cardinfo .rows .fd{color:var(--mint);cursor:pointer;text-align:left}
+
+.sentinel{padding:26px 0;text-align:center;font-family:var(--mono);font-size:11px;color:var(--muted)}
+.empty{border:1px dashed var(--line);border-radius:10px;padding:44px 22px;text-align:center}
+.empty h2{font-family:var(--display);font-size:16px;letter-spacing:.04em;margin:0 0 10px}
+.empty p{color:var(--muted);margin:5px 0;font-size:13px}
 .empty code{font-family:var(--mono);font-size:12px;color:var(--amber)}
 
+/* ---------- settings ---------- */
+.panel{margin-top:20px;border:1px solid var(--line-soft);border-radius:10px;background:var(--surface)}
+.panel>summary{list-style:none;padding:12px 14px;cursor:pointer;font-family:var(--mono);font-size:10px;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:7px}
+.panel>summary::-webkit-details-marker{display:none}
+.panel>summary::before{content:"▸";transition:transform .15s;display:inline-block}
+.panel[open]>summary::before{transform:rotate(90deg)}
+.panel-body{padding:2px 14px 16px;border-top:1px solid var(--line-soft)}
+.group{padding:13px 0;border-bottom:1px solid var(--line-soft)}
+.group:last-child{border-bottom:none}
+.group h4{margin:0 0 9px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--amber);font-weight:500}
+.group p.note{margin:6px 0 0;font-size:11.5px;color:var(--muted);line-height:1.55}
+.rack{display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end}
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.field input,.field select{background:var(--ink);border:1px solid var(--line);border-radius:6px;
+  padding:7px 9px;font-family:var(--mono);font-size:12px}
+.field input:focus,.field select:focus{border-color:var(--amber);outline:none}
+.w-token{width:min(320px,72vw)} .w-id{width:120px} .w-num{width:78px} .w-search{width:min(240px,70vw)}
+.btn{background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:7px 12px;
+  font-family:var(--mono);font-size:11px;transition:.14s}
+.btn:hover{border-color:var(--muted)}
+.btn-go{background:var(--amber);border-color:var(--amber);color:#171208;font-weight:700}
+.btn-go:hover{background:#F2BC5C}
+.btn-stop{border-color:var(--red);color:var(--red)}
+.btn-sm{padding:5px 9px;font-size:10px}
+.check{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;
+  color:var(--muted);padding-bottom:8px;white-space:nowrap;cursor:pointer}
+.check input{accent-color:var(--amber)}
+.debug{margin-top:12px;font-family:var(--mono);font-size:11px}
+.debug summary{cursor:pointer;color:var(--muted);padding:6px 0}
+.debug pre{margin:0;padding:8px 0;white-space:pre-wrap;color:var(--muted);max-height:260px;overflow:auto}
+
+/* ---------- bulk bar ---------- */
+.bulkbar{position:fixed;left:0;right:0;bottom:0;z-index:55;display:none;gap:8px;flex-wrap:wrap;
+  align-items:center;background:var(--amber);color:#171208;padding:10px 12px;
+  font-family:var(--mono);font-size:11px;padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+.bulkbar.on{display:flex}
+.bulkbar input[type=text]{background:#171208;color:#F0E6D2;border:none;border-radius:6px;
+  padding:6px 9px;font-family:var(--mono);font-size:11px;width:150px}
+.bulkbar .btn{background:#171208;border-color:#171208;color:#F0E6D2}
+
 /* ---------- player ---------- */
-.scrim{position:fixed;inset:0;background:rgba(6,9,12,.9);z-index:60;display:none;align-items:center;justify-content:center;padding:24px}
+.scrim{position:fixed;inset:0;background:rgba(6,9,12,.93);z-index:70;display:none;
+  align-items:center;justify-content:center;padding:16px}
 .scrim.open{display:flex}
-.player{background:var(--surface);border:1px solid var(--line);border-radius:5px;width:min(1180px,100%);max-height:100%;display:flex;flex-direction:column;overflow:hidden}
-.player-bar{display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--line-soft)}
-.player-bar .t{font-family:var(--display);font-size:13px;font-weight:500;flex:1;word-break:break-all}
-.player video{width:100%;max-height:68vh;background:#000;display:block}
-.player-foot{padding:10px 14px;font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;gap:16px;flex-wrap:wrap}
+.player{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  width:min(1180px,100%);max-height:100%;display:flex;flex-direction:column;overflow:hidden}
+.player-bar{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line-soft)}
+.player-bar .t{font-family:var(--display);font-size:13px;font-weight:500;flex:1;
+  word-break:break-word;min-width:0}
+.player video{width:100%;max-height:66vh;background:#000;display:block}
+.player-foot{padding:9px 12px;font-family:var(--mono);font-size:10.5px;color:var(--muted);
+  display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.player-foot .keys{color:var(--line);font-size:9.5px;flex:1;text-align:right}
+.ptoast{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  background:rgba(11,14,17,.88);border:1px solid var(--amber);color:var(--amber);
+  font-family:var(--mono);font-size:15px;padding:9px 18px;border-radius:8px;
+  opacity:0;pointer-events:none;transition:opacity .12s;z-index:5;white-space:nowrap}
+.ptoast.on{opacity:1}
 
-.debug{margin-top:20px;border:1px solid var(--line-soft);border-radius:4px;background:var(--surface);font-family:var(--mono);font-size:11px}
-.debug summary{padding:9px 12px;cursor:pointer;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-.debug pre{margin:0;padding:0 12px 12px;white-space:pre-wrap;color:var(--muted);max-height:280px;overflow:auto}
-
-@media (max-width:640px){.sheet{grid-template-columns:1fr}.w-token,.w-search{width:100%}}
+/* ---------- mobile ---------- */
+@media (max-width:860px){
+  :root{--col:100%}
+  .wrap{grid-template-columns:1fr;padding:12px 10px 100px;gap:12px}
+  .drawer{position:fixed;top:0;left:0;bottom:0;width:min(310px,86vw);z-index:60;
+    border-radius:0;border-left:none;border-top:none;border-bottom:none;
+    transform:translateX(-102%);transition:transform .22s ease;max-height:none}
+  .drawer.open{transform:translateX(0)}
+  .drawer-head{padding-top:calc(10px + env(safe-area-inset-top))}
+  .mark small{display:none}
+  .crumb{max-width:none;flex:1;font-size:10.5px}
+  .card{border-radius:12px}
+  .name{font-size:15px}
+  .ob{opacity:1;width:34px;height:34px}
+  .hq{opacity:.8}
+  .player{max-height:100%;border-radius:10px}
+  .player video{max-height:52vh}
+  .player-foot .keys{display:none}
+  .scrim{padding:8px}
+}
+@media (min-width:861px){ .m-only{display:none!important} }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
 <body>
 
-<header class="masthead">
-  <div class="masthead-in">
-    <div class="brand">
-      <h1>Contact&nbsp;Sheet</h1>
-      <span class="sub">Box 動画ライブラリ / 1動画 = 5フレーム / <b id="ver">v9</b></span>
+<header class="topbar">
+  <div class="topbar-in">
+    <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v10</small></div>
+    <div class="search">
+      <span>⌕</span>
+      <input id="q" type="search" placeholder="動画を絞り込む" aria-label="絞り込み">
     </div>
-
-    <div class="rack">
-      <button id="login" class="btn btn-go">Box でログイン</button>
-      <button id="logout" class="btn btn-ghost" hidden>ログアウト</button>
-      <div class="field"><label for="folder">フォルダ ID</label>
-        <input id="folder" class="w-id" type="text" value="0" inputmode="numeric"></div>
-      <div class="field"><label for="depth">階層</label>
-        <input id="depth" class="w-num" type="number" value="6" min="0" max="30"></div>
-      <label class="check"><input id="recurse" type="checkbox" checked> サブフォルダ</label>
-      <label class="check"><input id="sync" type="checkbox" checked> タグを Box に保存</label>
-      <button id="scan" class="btn btn-go">スキャン</button>
-      <button id="cancel" class="btn btn-stop" hidden>中止</button>
-    </div>
-
-    <details class="setup" id="setupBox">
-      <summary>接続設定（初回のみ）</summary>
-      <div class="rack">
-        <div class="field"><label for="clientId">クライアント ID</label>
-          <input id="clientId" class="w-token" type="text" placeholder="Box 開発者コンソールの Client ID" autocomplete="off"></div>
-        <div class="field"><label for="worker">Worker URL</label>
-          <input id="worker" class="w-token" type="text" placeholder="https://xxx.workers.dev" autocomplete="off"></div>
-        <div class="field"><label for="token">開発者トークン（予備）</label>
-          <input id="token" class="w-token" type="password" placeholder="ログインを使う場合は空でよい" autocomplete="off"></div>
-        <div class="field"><label for="cacheFolder">共有サムネイル置き場</label>
-          <input id="cacheFolder" class="w-id" type="text" placeholder="自動作成" inputmode="numeric"></div>
-        <label class="check"><input id="shareThumbs" type="checkbox" checked> サムネイルを Box に共有</label>
-      </div>
-      <p class="hint">
-        リダイレクト URI には <b id="redirUri"></b> を Box 側に登録してください。
-        ログインすると60日間有効なリフレッシュトークンが保存され、以後アクセストークンは自動で更新されます。
-      </p>
-    </details>
-
-    <div class="rack">
-      <div class="field"><label for="q">検索</label>
-        <input id="q" class="w-search" type="search" placeholder="例: 心停止 #症例 -#済 ext:mp4"></div>
-      <div class="field"><label for="sort">並び順</label>
-        <select id="sort">
-          <option value="name">名前</option>
-          <option value="modified">更新が新しい順</option>
-          <option value="size">サイズが大きい順</option>
-          <option value="fav">お気に入り優先</option>
-        </select></div>
-      <div class="field"><label for="col">カード幅</label>
-        <input id="col" class="w-num" type="number" value="380" min="200" max="900" step="20"></div>
-      <div class="field"><label for="fw">フレーム幅</label>
-        <input id="fw" class="w-num" type="number" value="160" min="40" max="640" step="10"></div>
-      <div class="field"><label for="conc">同時取得</label>
-        <input id="conc" class="w-num" type="number" value="4" min="1" max="12"></div>
-      <label class="check"><input id="autohq" type="checkbox"> 常に高画質</label>
-      <button id="exportBtn" class="btn btn-ghost">書き出し</button>
-      <button id="importBtn" class="btn btn-ghost">読み込み</button>
-      <button id="refresh" class="btn btn-ghost">一覧を再取得</button>
-      <button id="clear" class="btn btn-ghost">サムネイル削除</button>
-      <input id="importFile" type="file" accept="application/json" hidden>
-    </div>
-
-    <p class="hint">
-      検索: そのまま入力＝ファイル名 ／ <b>#タグ</b> ／ <b>fav</b> お気に入り ／ <b>untagged</b> 未分類 ／
-      <b>ext:mp4</b> 拡張子 ／ 先頭に <b>-</b> で除外。半角スペース区切りで AND 検索。
-    </p>
-
-    <div id="railTags" class="rail-tags"></div>
-
-    <div class="statusbar">
-      <span class="stat"><span id="authDot" class="dot off"></span><span id="authText">未接続</span></span>
-      <span class="stat">動画 <b id="nTotal">0</b></span>
-      <span class="stat">該当 <b id="nHit">0</b></span>
-      <span class="stat">★ <b id="nFav">0</b></span>
-      <span class="stat">サムネ済 <b id="nCached">0</b></span>
-      <span class="stat" id="progress"></span>
-      <span class="stat msg" id="msg"></span>
-    </div>
+    <button id="filterBtn" class="iconbtn" title="タグで絞り込む" aria-label="タグ">☆</button>
+    <button id="advBtn" class="iconbtn" title="設定" aria-label="設定">⚙</button>
+  </div>
+  <div id="pbar" class="pbar"></div>
+  <div id="statusline" class="statusline">
+    <span id="progress"></span>
+    <span id="msg" class="msg"></span>
+    <span class="grow"></span>
+    <button id="cancel" class="stopbtn" hidden>読み込みを中止</button>
+    <button id="prefetch" class="stopbtn" hidden>取得を中止</button>
   </div>
 </header>
 
+<div id="backdrop" class="scrim-bg"></div>
+
+<div class="wrap">
+  <aside id="treePane" class="drawer">
+    <div class="drawer-head">
+      <span>フォルダ</span>
+      <span>
+        <button id="treeReload" title="Box から取り直す">⟳</button>
+        <button id="drawerClose" class="m-only" title="閉じる">✕</button>
+      </span>
+    </div>
+    <div id="tree"></div>
+    <div class="drawer-foot">表示中: <b id="selName">—</b></div>
+  </aside>
+
+  <div class="content" id="layout">
+    <div id="chiprow" class="chiprow" hidden>
+      <div id="railTags" style="display:contents"></div>
+    </div>
+
+    <div id="sheet" class="sheet"></div>
+    <div id="sentinel" class="sentinel"></div>
+
+    <div id="empty" class="empty">
+      <h2>フォルダを選んでください</h2>
+      <p>左のフォルダ一覧から選ぶと、その中の動画がサムネイル付きで並びます。</p>
+      <p class="m-only">左上の ☰ からフォルダを開けます。</p>
+    </div>
+
+    <details class="panel" id="advBox">
+      <summary>設定とメンテナンス</summary>
+      <div class="panel-body">
+
+        <div class="group">
+          <h4>読み込み</h4>
+          <div class="rack">
+            <label class="check"><input id="recurse" type="checkbox" checked> サブフォルダも読む</label>
+            <div class="field"><label for="depth">何階層まで</label>
+              <input id="depth" class="w-num" type="number" value="6" min="0" max="30"></div>
+            <label class="check"><input id="autothumb" type="checkbox" checked> 開いたら自動でサムネイル取得</label>
+            <button id="loadFolder" class="btn btn-sm">選択中のフォルダを開き直す</button>
+          </div>
+          <p class="note">フォルダをクリックすると、その中身を読み込んでサムネイルまで自動で揃えます。ここは動きを変えたいときだけ触ってください。</p>
+        </div>
+
+        <div class="group">
+          <h4>見た目</h4>
+          <div class="rack">
+            <div class="field"><label for="col">カードの幅</label>
+              <input id="col" class="w-num" type="number" value="340" min="200" max="900" step="20"></div>
+            <div class="field"><label for="sort">並び順</label>
+              <select id="sort">
+                <option value="name">名前</option>
+                <option value="modified">更新が新しい順</option>
+                <option value="size">サイズが大きい順</option>
+                <option value="fav">お気に入り優先</option>
+              </select></div>
+          </div>
+        </div>
+
+        <div class="group">
+          <h4>データを作り直す</h4>
+          <div class="rack">
+            <button id="refresh" class="btn btn-sm">Box から一覧を取り直す</button>
+            <button id="scan" class="btn btn-sm">いま開いているフォルダを再読込</button>
+            <button id="clear" class="btn btn-sm">サムネイルを捨てて作り直す</button>
+          </div>
+          <p class="note">
+            <b>一覧を取り直す</b>は、Box に動画やフォルダを追加したとき。サムネイルは残ります。<br>
+            <b>サムネイルを捨てる</b>は、絵が乱れているときや、コマ幅を変えたとき。タグとお気に入りは消えません。
+          </p>
+        </div>
+
+        <div class="group">
+          <h4>画質と速度</h4>
+          <div class="rack">
+            <label class="check"><input id="autohq" type="checkbox"> 常に高画質で作る（遅い）</label>
+            <div class="field"><label for="conc">同時取得</label>
+              <input id="conc" class="w-num" type="number" value="4" min="1" max="12"></div>
+            <div class="field"><label for="fw">コマ幅 px</label>
+              <input id="fw" class="w-num" type="number" value="160" min="40" max="640" step="10"></div>
+          </div>
+          <p class="note">通常はコマ幅 160 のままで構いません。個別に高画質化したいときは、カードにマウスを載せて左下の「⤢ 高画質」を押してください。</p>
+        </div>
+
+        <div class="group">
+          <h4>タグとお気に入り</h4>
+          <div class="rack">
+            <label class="check"><input id="sync" type="checkbox" checked> タグを Box に保存して端末間で共有</label>
+            <label class="check"><input id="shareThumbs" type="checkbox" checked> サムネイルも Box に置いて共有</label>
+            <button id="exportBtn" class="btn btn-sm">書き出し</button>
+            <button id="importBtn" class="btn btn-sm">読み込み</button>
+            <input id="importFile" type="file" accept="application/json" hidden>
+          </div>
+        </div>
+
+        <details class="panel" id="setupBox" style="margin-top:6px;border:none;background:none">
+          <summary style="padding-left:0">接続設定</summary>
+          <div class="panel-body" style="padding-left:0;padding-right:0">
+            <div class="rack">
+              <button id="login" class="btn btn-sm btn-go">Box でログイン</button>
+              <button id="logout" class="btn btn-sm" hidden>ログアウト</button>
+              <span class="check"><span id="authDot" class="dot"></span><span id="authText">未接続</span></span>
+            </div>
+            <div class="rack" style="margin-top:10px">
+              <div class="field"><label for="clientId">クライアント ID</label>
+                <input id="clientId" class="w-token" type="text" autocomplete="off"></div>
+              <div class="field"><label for="worker">Worker URL</label>
+                <input id="worker" class="w-token" type="text" autocomplete="off"></div>
+            </div>
+            <div class="rack" style="margin-top:10px">
+              <div class="field"><label for="folder">起点フォルダ ID</label>
+                <input id="folder" class="w-id" type="text" value="0" inputmode="numeric"></div>
+              <div class="field"><label for="cacheFolder">共有サムネイル置き場</label>
+                <input id="cacheFolder" class="w-id" type="text" placeholder="自動作成" inputmode="numeric"></div>
+              <div class="field"><label for="token">開発者トークン（予備）</label>
+                <input id="token" class="w-token" type="password" autocomplete="off"></div>
+            </div>
+            <p class="note">リダイレクト URI には <b id="redirUri"></b> を Box に登録してください。</p>
+          </div>
+        </details>
+
+        <div class="group">
+          <h4>状態</h4>
+          <div class="rack" style="font-family:var(--mono);font-size:11px;color:var(--muted);gap:18px">
+            <span>動画 <b id="nTotal">0</b></span>
+            <span>表示中 <b id="nHit">0</b></span>
+            <span>★ <b id="nFav">0</b></span>
+            <span>サムネ済 <b id="nCached">0</b></span>
+          </div>
+          <details class="debug"><summary>診断ログ</summary><pre id="log"></pre></details>
+        </div>
+
+      </div>
+    </details>
+  </div>
+</div>
+
 <div id="bulkbar" class="bulkbar">
-  <span><b id="bulkN">0</b> 件を選択中</span>
-  <input id="bulkTag" type="text" placeholder="付けるタグ" list="tagOptions">
-  <button id="bulkAdd" class="btn btn-sm">タグを付ける</button>
-  <button id="bulkDel" class="btn btn-sm">タグを外す</button>
-  <button id="bulkFav" class="btn btn-sm">★ を付ける</button>
-  <button id="bulkUnfav" class="btn btn-sm">★ を外す</button>
-  <button id="bulkAll" class="btn btn-sm">表示中すべて選択</button>
-  <button id="bulkNone" class="btn btn-sm">選択を解除</button>
+  <span><b id="bulkN">0</b> 件</span>
+  <input id="bulkTag" type="text" placeholder="タグ名" list="tagOptions">
+  <button id="bulkAdd" class="btn btn-sm">付ける</button>
+  <button id="bulkDel" class="btn btn-sm">外す</button>
+  <button id="bulkFav" class="btn btn-sm">★</button>
+  <button id="bulkUnfav" class="btn btn-sm">★解除</button>
+  <button id="bulkAll" class="btn btn-sm">表示中すべて</button>
+  <button id="bulkNone" class="btn btn-sm">解除</button>
 </div>
 <datalist id="tagOptions"></datalist>
-
-<main>
-  <div class="layout" id="layout">
-    <aside class="tree" id="treePane">
-      <div class="tree-head">
-        <span>Box フォルダ</span>
-        <button id="treeReload" class="btn btn-sm btn-ghost" title="Box から取り直す">⟳</button>
-      </div>
-      <div id="tree"></div>
-      <div class="tree-foot">
-        <div class="sel">選択中: <b id="selName">—</b></div>
-        <button id="loadFolder" class="btn btn-sm btn-go">このフォルダを読み込む</button>
-        <button id="prefetch" class="btn btn-sm">サムネイル一括取得</button>
-      </div>
-    </aside>
-
-    <div class="content">
-      <div id="sheet" class="sheet"></div>
-      <div id="sentinel" class="sentinel"></div>
-
-      <div id="empty" class="empty">
-        <h2>まだ何も読み込まれていません</h2>
-        <p>「接続設定」でクライアント ID と Worker URL を入れ、「Box でログイン」を押してください。</p>
-        <p>フォルダ ID はルート（すべてのファイル）が <code>0</code>。個別フォルダは Box の URL 末尾の数字です。</p>
-      </div>
-
-      <details class="debug"><summary>診断ログ</summary><pre id="log"></pre></details>
-    </div>
-  </div>
-</main>
 
 <div id="scrim" class="scrim" role="dialog" aria-modal="true" aria-label="動画プレーヤー">
   <div class="player">
@@ -342,7 +451,11 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
       <button id="pClose" class="btn btn-ghost">閉じる</button>
     </div>
     <video id="pVideo" controls playsinline preload="metadata"></video>
-    <div class="player-foot"><span id="pMeta"></span><span id="pNote"></span></div>
+    <div class="player-foot">
+      <span id="pMeta"></span><span id="pNote"></span>
+      <span class="keys">← → 10秒 ／ Shift+← → 60秒 ／ J L 30秒 ／ Space 再生 ／ ↑ ↓ 音量 ／ 0–9 位置 ／ F ★</span>
+    </div>
+    <div id="pToast" class="ptoast"></div>
   </div>
 </div>
 
@@ -388,11 +501,12 @@ const K_FAV = "csFav", K_TAGS = "csTags";
 const $ = id => document.getElementById(id);
 const els = {};
 ["token","folder","depth","recurse","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq",
- "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName","loadFolder","prefetch","cacheFolder","shareThumbs","ver",
- "exportBtn","importBtn","importFile","authDot","authText","nTotal","nHit","nFav","nCached",
- "progress","msg","log","sheet","sentinel","empty","railTags","bulkbar","bulkN","bulkTag",
- "bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
- "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote"].forEach(k => els[k] = $(k));
+ "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
+ "loadFolder","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
+ "advBox","advBtn","filterBtn","chiprow","statusline","pbar","exportBtn","importBtn","importFile",
+ "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
+ "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
+ "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -411,7 +525,17 @@ function log(...a){
   if (logLines.length > 400) logLines.shift();
   els.log.textContent = logLines.join("\n");
 }
-function say(t, err){ els.msg.textContent = t || ""; els.msg.classList.toggle("err", !!err); }
+function say(t, err){
+  els.msg.textContent = t || "";
+  els.msg.classList.toggle("err", !!err);
+  syncStatusLine();
+}
+function setBusy(on){ els.pbar.classList.toggle("on", !!on); syncStatusLine(); }
+function syncStatusLine(){
+  const has = !!(els.progress.textContent || els.msg.textContent
+    || !els.cancel.hidden || !els.prefetch.hidden);
+  els.statusline.classList.toggle("on", has);
+}
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /* ============ IndexedDB ============ */
@@ -781,6 +905,8 @@ function folderRow(id, depth){
   name.addEventListener("click", () => {
     selectFolder(id);
     if (!fopen.has(id)) toggleFolder(id);
+    closeDrawer();
+    openSelectedFolder();          // クリック = そのフォルダを表示する
   });
 
   const vc = document.createElement("span");
@@ -812,6 +938,17 @@ async function initTree(rootId, force){
   renderTree();
 }
 
+// フォルダを開く一連の流れ（読み込み → サムネイル）をここに集約する
+async function openSelectedFolder(){
+  if (!fsel) return;
+  els.folder.value = fsel;
+  saveSettings();
+  await ensureFresh();
+  if (!await checkAuth()) return;
+  await scan();
+  if (els.autothumb.checked && files.length) prefetchThumbs();
+}
+
 /* ============ サムネイル一括取得 ============ */
 let batchRunning = false, batchStop = false;
 
@@ -821,7 +958,7 @@ async function prefetchThumbs(){
   if (!list.length) return say("対象がありません。先にフォルダを読み込んでください。", true);
 
   batchRunning = true; batchStop = false;
-  els.prefetch.textContent = "一括取得を中止";
+  els.prefetch.hidden = false; setBusy(true);
   let done = 0, ok = 0, pend = 0;
 
   await Promise.all(list.map(f => pool.push(async () => {
@@ -831,15 +968,17 @@ async function prefetchThumbs(){
     done++;
     if (rec && rec.ok) ok++; else if (rec && rec.pending) pend++;
     els.progress.textContent =
-      `サムネイル一括取得 ${done}/${list.length}（完了 ${ok}${pend ? " / Box 生成待ち " + pend : ""}）`;
+      `サムネイル ${done}/${list.length}${pend ? "（Box 生成待ち " + pend + "）" : ""}`;
+    syncStatusLine();
     if (cardById.has(f.id)) await paintThumbs(f, true);
   })));
 
   batchRunning = false;
-  els.prefetch.textContent = "サムネイル一括取得";
+  els.prefetch.hidden = true; setBusy(false);
   els.progress.textContent = batchStop
-    ? `中止しました（${done}/${list.length} まで完了）`
-    : `一括取得が終わりました — 完了 ${ok} / ${list.length}` + (pend ? `、${pend} 本は Box が生成中` : "");
+    ? `中止しました（${done}/${list.length}）`
+    : `${files.length} 本の動画` + (pend ? `　※ ${pend} 本は Box が生成中` : "");
+  syncStatusLine();
   log(`prefetch done: ${ok}/${list.length}, pending ${pend}`);
 }
 
@@ -920,7 +1059,7 @@ async function scan(){
   if (scanAbort) scanAbort.abort();
   const ctl = new AbortController();
   scanAbort = ctl;
-  els.scan.disabled = true; els.cancel.hidden = false;
+  els.scan.disabled = true; els.cancel.hidden = false; setBusy(true); syncStatusLine();
   els.authDot.className = "dot busy"; say("");
   files = []; cardById.clear(); picked.clear(); els.sheet.innerHTML = ""; rendered = 0;
 
@@ -948,11 +1087,11 @@ async function scan(){
           files.push({id:e.id, name:e.name, size:e.size, modified:e.modified_at, path:node.path});
         }
       }
-      els.progress.textContent = `走査中 — フォルダ ${folders} / 残り ${queue.length} / 動画 ${files.length}`;
+      setBusy(true); els.progress.textContent = `走査中 — フォルダ ${folders} / 残り ${queue.length} / 動画 ${files.length}`;
       els.nTotal.textContent = files.length;
       await sleep(0);
     }
-    els.progress.textContent = `走査完了 — フォルダ ${folders} 件`;
+    els.progress.textContent = `${files.length} 本の動画（フォルダ ${folders} 件）`; setBusy(false);
     log("scan done:", files.length, "videos /", folders, "folders");
   }catch(err){
     if (err.name === "AbortError"){ els.progress.textContent = `中止（動画 ${files.length} 本まで）`; }
@@ -960,7 +1099,7 @@ async function scan(){
   }finally{
     // 表示の更新は最新の走査だけが行う。
     // ただしボタンの復帰は無条件（押せないまま固まるのを防ぐ）。
-    els.scan.disabled = false; els.cancel.hidden = true;
+    els.scan.disabled = false; els.cancel.hidden = true; setBusy(false); syncStatusLine();
     if (scanAbort === ctl){
       scanAbort = null;
       setAuth(true); buildRail(); applyView();
@@ -1321,6 +1460,7 @@ function buildRail(){
     els.railTags.appendChild(c);
   });
 
+  els.chiprow.hidden = !files.length && els.chiprow.hidden;
   els.tagOptions.innerHTML = "";
   [...counts.keys()].sort((a,b)=>a.localeCompare(b,"ja")).forEach(t => {
     const o = document.createElement("option"); o.value = t; els.tagOptions.appendChild(o);
@@ -1432,7 +1572,13 @@ function makeCard(file){
 
   const meta = document.createElement("div");
   meta.className = "meta";
-  meta.innerHTML = '<p class="name"></p><div class="tags"><span class="dur"></span><span class="sz"></span><span class="dt"></span><span class="fd"></span></div><div class="taglist"></div>';
+  meta.innerHTML =
+    '<p class="name"></p>' +
+    '<div class="taglist"></div>' +
+    '<details class="cardinfo"><summary>詳細</summary><div class="rows">' +
+      '<span class="dur"></span><span class="sz"></span><span class="dt"></span>' +
+      '<button class="fd"></button>' +
+    '</div></details>';
   meta.querySelector(".name").textContent = file.name;
   meta.querySelector(".sz").textContent = fmtSize(file.size);
   meta.querySelector(".dt").textContent = fmtDate(file.modified);
@@ -1440,13 +1586,14 @@ function makeCard(file){
   if (file.path){
     fd.textContent = "▸ " + file.path.split("/").filter(Boolean).slice(-1)[0];
     fd.title = file.path;
-    fd.style.cursor = "pointer";
     fd.addEventListener("click", () => {
       const leaf = file.path.split("/").filter(Boolean).slice(-1)[0];
       els.q.value = "folder:" + leaf.toLowerCase();
       buildRail(); applyView();
       window.scrollTo({top:0, behavior:"smooth"});
     });
+  }else{
+    fd.remove();
   }
 
   card.appendChild(strip); card.appendChild(meta);
@@ -1739,14 +1886,30 @@ els.logout.addEventListener("click", () => {
 });
 els.cancel.addEventListener("click", () => scanAbort && scanAbort.abort());
 
-els.loadFolder.addEventListener("click", async () => {
+els.loadFolder.addEventListener("click", () => {
   if (!fsel) return say("フォルダを選んでください", true);
-  els.folder.value = fsel;
-  saveSettings();
-  await ensureFresh();
-  if (await checkAuth()) scan();
+  openSelectedFolder();
 });
-els.prefetch.addEventListener("click", prefetchThumbs);
+els.prefetch.addEventListener("click", prefetchThumbs);   // 実行中は中止ボタンとして働く
+
+/* ---- 引き出し（モバイルのフォルダ一覧） ---- */
+function openDrawer(){ els.treePane.classList.add("open"); els.backdrop.classList.add("on"); }
+function closeDrawer(){ els.treePane.classList.remove("open"); els.backdrop.classList.remove("on"); }
+els.drawerBtn.addEventListener("click", openDrawer);
+els.drawerClose.addEventListener("click", closeDrawer);
+els.backdrop.addEventListener("click", closeDrawer);
+
+/* ---- 上部アイコン ---- */
+els.advBtn.addEventListener("click", () => {
+  els.advBox.open = !els.advBox.open;
+  els.advBtn.classList.toggle("on", els.advBox.open);
+  if (els.advBox.open && els.advBox.scrollIntoView) els.advBox.scrollIntoView({behavior:"smooth", block:"start"});
+});
+els.filterBtn.addEventListener("click", () => {
+  const show = els.chiprow.hidden;
+  els.chiprow.hidden = !show;
+  els.filterBtn.classList.toggle("on", show);
+});
 els.treeReload.addEventListener("click", async () => {
   const typed = els.folder.value.trim();
   say("Box からフォルダを取り直しています…");
@@ -1762,16 +1925,21 @@ els.treeReload.addEventListener("click", async () => {
 // Box に動画を追加したときはこちらを使う。
 els.refresh.addEventListener("click", async () => {
   await idbClearStore("folders");
+  cacheReady = null;
   say("Box から一覧を取り直しています…");
-  if (await checkAuth()) scan();
+  await initTree(els.folder.value.trim() || "0", true);
+  await openSelectedFolder();
+  say("");
 });
 
 // サムネイルだけ捨てる。フレーム幅を変えたときの作り直し用。
 els.clear.addEventListener("click", async () => {
   await idbClearStore("thumbs");
   cachedCount = 0; els.nCached.textContent = "0";
-  say("サムネイルを削除しました。一覧・タグ・お気に入りは残っています。");
+  say("サムネイルを作り直しています…");
   applyView();
+  if (files.length) await prefetchThumbs();
+  say("");
 });
 let qTimer = null;
 els.q.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { buildRail(); applyView(); }, 220); });
@@ -1784,10 +1952,72 @@ els.col.addEventListener("input", () => {
 els.pClose.addEventListener("click", closePlayer);
 els.pFav.addEventListener("click", () => { if (currentFile) setFav(currentFile.id, !getMark(currentFile.id).fav); });
 els.scrim.addEventListener("click", e => { if (e.target === els.scrim) closePlayer(); });
+/* ---- プレーヤーのキーボード操作 ---- */
+let toastTimer = null;
+function playerToast(text){
+  els.pToast.textContent = text;
+  els.pToast.classList.add("on");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => els.pToast.classList.remove("on"), 700);
+}
+function seekBy(sec){
+  const v = els.pVideo;
+  if (!isFinite(v.duration)) return;
+  v.currentTime = Math.min(v.duration - 0.05, Math.max(0, v.currentTime + sec));
+  playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + (sec > 0 ? sec : sec) + "秒　" + fmtTC(v.currentTime));
+}
+function seekToFraction(p){
+  const v = els.pVideo;
+  if (!isFinite(v.duration)) return;
+  v.currentTime = v.duration * p;
+  playerToast(Math.round(p * 100) + "%　" + fmtTC(v.currentTime));
+}
+function nudgeVolume(d){
+  const v = els.pVideo;
+  v.muted = false;
+  v.volume = Math.min(1, Math.max(0, v.volume + d));
+  playerToast("音量 " + Math.round(v.volume * 100) + "%");
+}
+
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape" && els.scrim.classList.contains("open")) closePlayer();
-  if (e.key === "f" && els.scrim.classList.contains("open") && currentFile && e.target === document.body)
-    setFav(currentFile.id, !getMark(currentFile.id).fav);
+  const open = els.scrim.classList.contains("open");
+
+  if (e.key === "Escape" && open){ closePlayer(); return; }
+  if (!open) return;
+
+  // 文字入力中はショートカットを効かせない
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+
+  const v = els.pVideo;
+  const big = e.shiftKey;      // Shift 併用で大きく動かす
+
+  switch (e.key){
+    case "ArrowRight": seekBy(big ? 60 : 10); break;
+    case "ArrowLeft":  seekBy(big ? -60 : -10); break;
+    case "l": case "L": seekBy(30); break;
+    case "j": case "J": seekBy(-30); break;
+    case "ArrowUp":    nudgeVolume(0.1); break;
+    case "ArrowDown":  nudgeVolume(-0.1); break;
+    case " ": case "k": case "K":
+      if (v.paused){ v.play().catch(() => {}); playerToast("再生"); }
+      else { v.pause(); playerToast("一時停止"); }
+      break;
+    case "m": case "M":
+      v.muted = !v.muted; playerToast(v.muted ? "ミュート" : "ミュート解除"); break;
+    case "Home": seekToFraction(0); break;
+    case "End":  seekToFraction(0.99); break;
+    case "f": case "F":
+      if (currentFile){
+        setFav(currentFile.id, !getMark(currentFile.id).fav);
+        playerToast(getMark(currentFile.id).fav ? "★ お気に入りに追加" : "★ 解除");
+      }
+      break;
+    default:
+      if (e.key >= "0" && e.key <= "9"){ seekToFraction(Number(e.key) / 10); break; }
+      return;   // 対象外のキーは既定動作のまま
+  }
+  e.preventDefault();   // 矢印やスペースでのページスクロールを止める
 });
 new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.length) renderMore(); },
   {rootMargin:"400px"}).observe(els.sentinel);
