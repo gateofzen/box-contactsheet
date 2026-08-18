@@ -17,7 +17,7 @@
   --col:340px; --bar:54px;
 }
 *{box-sizing:border-box}
-html,body{margin:0;padding:0;overscroll-behavior-y:none}
+html,body{margin:0;padding:0}   /* 引っ張って更新を邪魔しない */
 body{background:var(--ink);color:var(--text);font-family:var(--body);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
 button,input,select{font-family:inherit;font-size:inherit;color:inherit}
 button{cursor:pointer;background:none;border:none;padding:0}
@@ -77,7 +77,7 @@ b{font-weight:600}
   font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
 .drawer-head button{color:var(--muted);font-size:13px;padding:2px 5px;border-radius:5px}
 .drawer-head button:hover{color:var(--amber)}
-#tree{overflow-y:auto;padding:7px 5px 10px;font-family:var(--mono);font-size:11.5px;flex:1}
+#tree{overflow-y:auto;overscroll-behavior:contain;padding:7px 5px 10px;font-family:var(--mono);font-size:11.5px;flex:1}
 .node{display:flex;align-items:center;gap:1px;border-radius:6px}
 .node:hover{background:var(--surface-2)}
 .node.on{background:var(--amber)}
@@ -227,7 +227,7 @@ b{font-weight:600}
 .bulkbar .btn{background:#171208;border-color:#171208;color:#F0E6D2}
 
 /* ---------- player ---------- */
-.scrim{position:fixed;inset:0;background:rgba(6,9,12,.93);z-index:70;display:none;
+.scrim{position:fixed;inset:0;background:rgba(6,9,12,.93);z-index:70;overscroll-behavior:none;display:none;
   align-items:center;justify-content:center;padding:16px}
 .scrim.open{display:flex}
 .player{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:12px;
@@ -261,9 +261,6 @@ b{font-weight:600}
 .audioveil .big{font-family:var(--display);font-size:17px;color:var(--amber);margin-bottom:8px}
 .audioveil .sub{font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.7}
 #pAudio{display:none}
-.zreset{position:absolute;right:10px;top:10px;z-index:4;background:rgba(11,14,17,.8);
-  border:1px solid var(--amber);color:var(--amber);border-radius:7px;padding:5px 10px;
-  font-family:var(--mono);font-size:11px}
 .player-foot{padding:9px 12px;font-family:var(--mono);font-size:10.5px;color:var(--muted);
   display:flex;gap:14px;flex-wrap:wrap;align-items:center}
 .player-foot .keys{color:var(--line);font-size:9.5px;flex:1;text-align:right}
@@ -311,8 +308,7 @@ b{font-weight:600}
   .scrim{padding:0}
   .player{border-radius:0;max-height:100vh}
   .player video{max-height:calc(100vh - 96px)}
-  .zreset{padding:8px 13px;font-size:12px}
-  .player-foot .keys{display:none}
+    .player-foot .keys{display:none}
   .scrim{padding:8px}
 }
 @media (min-width:861px){ .m-only{display:none!important} }
@@ -324,7 +320,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v39</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v40</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -517,7 +513,6 @@ b{font-weight:600}
     <div id="vzoom" class="vzoom">
       <video id="pVideo" controls playsinline preload="metadata"
              controlsList="nodownload noremoteplayback"></video>
-      <button id="zoomReset" class="zreset" hidden>100%</button>
       <div id="audioVeil" class="audioveil" hidden>
         <div>
           <div class="big">🎧 音声のみ再生中</div>
@@ -582,7 +577,7 @@ const els = {};
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
- "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom","zoomReset",
+ "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom",
  "pAudio","pAudioBtn","audioVeil","bgAudio"].forEach(k => els[k] = $(k));
 
 let files = [];
@@ -2691,8 +2686,6 @@ function applyZoom(){
   els.pVideo.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})`;
   const on = zoom.s > 1.01;
   els.vzoom.classList.toggle("zoomed", on);
-  els.zoomReset.hidden = !on;
-  els.zoomReset.textContent = Math.round(zoom.s * 100) + "%　⟲";
 
   // 拡大中だけ画面いっぱいに広げる（全画面 API は使わないので端末の挙動を邪魔しない）
   const card = els.scrim.querySelector(".player");
@@ -2816,7 +2809,6 @@ window.addEventListener("orientationchange", () => setTimeout(applyZoom, 300));
   });
   window.addEventListener("mouseup", () => { mdrag = null; });
 
-  els.zoomReset.addEventListener("click", e => { e.stopPropagation(); resetZoom(); });
 })();
 
 /* ---- プレーヤーのキーボード操作 ---- */
