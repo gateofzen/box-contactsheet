@@ -314,7 +314,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v34</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v35</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -2034,45 +2034,60 @@ async function openPlayer(file, startAt){
   els.pMeta.textContent = [fmtSize(file.size), fmtDate(file.modified), file.path].filter(Boolean).join("  ·  ");
   els.pFav.style.color = getMark(file.id).fav ? "var(--amber)" : "";
 
-  // 原本をそのままストリーミングする。Range リクエストが効くので
-  // 5GB でも先頭から順に落とすわけではない。変換版の生成を待つ必要もない。
   els.pVideo.onerror = null;
-  els.pVideo.src = originalUrl(file);
-  armDualAudio(file);                // 音は最初から音声要素が担当する
-  els.pNote.textContent = "原本を再生中";
+  els.pVideo.muted = false;
+  els.pVideo.volume = userVolume || 1;
+  els.pVol.value = String(userVolume || 1);
   wantPlay = true;
   pendingStart = (startAt != null) ? startAt : null;
-  if (pendingStart != null){
-    els.pVideo.addEventListener("loadedmetadata", applyPendingStart, {once:true});
-    // 音声の準備がどうしても整わない場合の保険
-    setTimeout(() => {
-      if (pendingStart != null){
-        log("音声の準備を待てないため、映像だけ開始位置へ移動します");
-        const dur = els.pVideo.duration;
-        if (isFinite(dur)){ const t = dur * pendingStart; pendingStart = null; seekTo(t); }
-      }
-      if (wantPlay && els.pVideo.paused && !audioOnly) els.pVideo.play().catch(()=>{});
-    }, 8000);
-  }
-  els.pVideo.play().catch(() => {});
 
-  // 原本のコーデックをブラウザが扱えないときだけ、Box の変換版に切り替える
+  // 区間配信が使えるなら、そちらで再生する（シークが速い）。
+  // 映像も音声も同じ要素で鳴らすので、同期処理は一切要らない。
+  (async () => {
+    let usedDash = false;
+    if (els.dashVideoOpt.checked){
+      try{
+        if (await dashMain.start(file, els.pVideo, ["video","audio"])){
+          if (await waitFor(() => els.pVideo.readyState >= 2, 5000)){
+            usedDash = true; videoKind = "DASH";
+            els.pNote.textContent = "再生中（区間配信）";
+            log("区間配信で再生します");
+          }else throw new Error("再生可能になりません");
+        }else throw new Error("開始できません");
+      }catch(err){
+        log("区間配信は使えません: " + err.message);
+        dashMain.stop();
+      }
+    }
+    if (!usedDash){
+      videoKind = "原本";
+      els.pVideo.src = originalUrl(file);
+      els.pNote.textContent = "原本を再生中";
+    }
+    if (pendingStart != null){
+      if (isFinite(els.pVideo.duration)) applyPendingStart();
+      else els.pVideo.addEventListener("loadedmetadata", applyPendingStart, {once:true});
+    }
+    els.pVideo.play().catch(() => {});
+    updateMediaSession();
+  })();
+
+  // 原本のコーデックをブラウザが扱えないときは Box の変換版に切り替える
   els.pVideo.onerror = async () => {
+    if (videoKind === "DASH") return;
     const code = els.pVideo.error ? els.pVideo.error.code : "?";
-    log("原本の再生に失敗 (code " + code + ")", file.name, "→ mp4 変換版を試します");
+    log("原本の再生に失敗 (code " + code + ") → mp4 変換版を試します");
     els.pNote.textContent = "原本を再生できないため変換版を準備しています…";
     try{
       const got = await waitForRep(await getRepresentation(file.id, "[mp4]") || {}, 8);
       const url = repContentUrl(got.rep);
       if (!url) throw new Error(got.pending
-        ? "Box が変換版を生成中です。数分後にもう一度開いてください"
+        ? "Box が変換版を生成中です。数分後にもう一度お試しください"
         : "この動画には変換版がありません");
       els.pVideo.onerror = () => {
         els.pNote.textContent = "変換版も再生できません — 「Box で開く」をお試しください";
       };
-      const alt = url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
-      els.pVideo.src = alt;
-      armDualAudio(file);
+      els.pVideo.src = url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
       els.pNote.textContent = "Box の mp4 変換版を再生中";
     }catch(err){
       els.pNote.textContent = "再生できません（" + err.message + "）— 「Box で開く」をお試しください";
@@ -2080,6 +2095,7 @@ async function openPlayer(file, startAt){
     }
   };
 }
+
 function closePlayer(){
   if (fsElement()){ try{ (document.exitFullscreen||document.webkitExitFullscreen).call(document); }catch(_){} }
   resetZoom();
@@ -2248,11 +2264,10 @@ els.col.addEventListener("input", () => {
 els.pClose.addEventListener("click", closePlayer);
 els.pFav.addEventListener("click", () => { if (currentFile) setFav(currentFile.id, !getMark(currentFile.id).fav); });
 els.scrim.addEventListener("click", e => { if (e.target === els.scrim) closePlayer(); });
-/* ============ DASH の区間配信で再生する（音声・映像とも） ============ */
-// Box の dash 表現は音声と映像が別々の流れに分かれ、数秒ごとの区間に刻まれている。
-//  ・音声だけを <audio> に流す → 映像トラックを含まないので画面オフでも鳴り続ける
-//  ・映像だけを <video> に流す → 飛んだ先の 1 区間（数百 KB）を取るだけで済むので
-//    5GB の原本を読み直すのに比べてシークが桁違いに速い
+/* ============ DASH の区間配信 ============ */
+// 方針: 通常は「映像要素ひとつ」で音声も映像も再生する（同期処理が要らない）。
+//       背景再生したいときだけ、別の音声要素に音声トラックだけを流す。
+//       2 つを同時に鳴らして同期させることはしない。
 
 let mpdCache = {id:null, xml:null, url:null};
 
@@ -2283,125 +2298,120 @@ async function getMpd(file){
 function mpdDuration(xml){
   const d = xml.documentElement.getAttribute("mediaPresentationDuration") || "";
   const m = /P(?:.*?T)?(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?/.exec(d);
-  if (!m) return Infinity;
+  if (!m) return 0;
   return (Number(m[1]||0)*3600) + (Number(m[2]||0)*60) + Number(m[3]||0);
 }
 
-function createDashStream(kind){          // kind は "audio" か "video"
+// manifest から 1 トラック分の定義を取り出す
+function parseTrack(xml, manifestUrl, kind){
+  const sets = [...xml.getElementsByTagName("AdaptationSet")];
+  const belongs = a =>
+    (a.getAttribute("mimeType") || "").startsWith(kind) ||
+    (a.getAttribute("contentType") || "") === kind ||
+    [...a.getElementsByTagName("Representation")]
+      .some(r => (r.getAttribute("mimeType") || "").startsWith(kind));
+  const aset = sets.find(belongs);
+  if (!aset) return null;
+
+  const reps = [...aset.getElementsByTagName("Representation")];
+  if (!reps.length) return null;
+
+  let rep = reps[0];
+  if (kind === "video"){
+    const usable = reps.filter(r => Number(r.getAttribute("height") || 0) <= 1080);
+    rep = (usable.length ? usable : reps).reduce((best, r) =>
+      Number(r.getAttribute("bandwidth")||0) > Number(best.getAttribute("bandwidth")||0) ? r : best);
+  }
+
+  const codecs = rep.getAttribute("codecs") || aset.getAttribute("codecs") || "";
+  const st = rep.getElementsByTagName("SegmentTemplate")[0]
+          || aset.getElementsByTagName("SegmentTemplate")[0];
+  if (!st) return null;
+
+  const timescale = Number(st.getAttribute("timescale") || 1);
+  const segDur = Number(st.getAttribute("duration") || 0) / timescale;
+  const start = Number(st.getAttribute("startNumber") || 1);
+  const repId = rep.getAttribute("id") || "";
+  const bw = rep.getAttribute("bandwidth") || "";
+  const fill = p => p.replace(/\$RepresentationID\$/g, repId).replace(/\$Bandwidth\$/g, bw);
+  const initPath  = fill(st.getAttribute("initialization") || "");
+  const mediaPath = fill(st.getAttribute("media") || "");
+  if (!initPath || !mediaPath || !segDur) return null;
+
   return {
-    kind,
-    ms: null, sb: null, el: null, segs: null,
-    next: 0, busy: false, again: false, stopped: true, ready: false,
-    gen: 0, retry: 0, justSeeked: false,
+    kind, codecs, segDur, start,
+    label: kind === "video"
+      ? `${rep.getAttribute("width")||"?"}x${rep.getAttribute("height")||"?"} ${Math.round(Number(bw)/1000)} kbps`
+      : `${codecs} ${Math.round(Number(bw)/1000)} kbps`,
+    init: new URL(initPath, manifestUrl).href,
+    template: n => new URL(mediaPath.replace(/\$Number(%0\d+d)?\$/g, m => {
+      const pad = /%0(\d+)d/.exec(m);
+      return pad ? String(n).padStart(Number(pad[1]), "0") : String(n);
+    }), manifestUrl).href,
+  };
+}
 
-    async start(file, mediaEl){
+// ひとつの MediaSource に、指定されたトラックをまとめて流す
+function createDashEngine(name){
+  return {
+    name, ms:null, el:null, tracks:[], duration:0, stopped:true, ready:false,
+
+    async start(file, mediaEl, kinds){
       this.stop();
-      this.el = mediaEl;
-      this.stopped = false;
+      this.el = mediaEl; this.stopped = false;
 
-      const info = await this.loadManifest(file);
-      if (!info) return false;
-      this.segs = info;
+      const mpd = await getMpd(file);
+      if (!mpd) return false;
+      this.duration = mpdDuration(mpd.xml);
 
-      const mime = `${this.kind}/mp4; codecs="${info.codecs}"`;
-      if (!("MediaSource" in window) || !MediaSource.isTypeSupported(mime)){
-        log("この端末は " + mime + " を扱えません");
-        return false;
+      const defs = [];
+      for (const kind of kinds){
+        const t = parseTrack(mpd.xml, mpd.url, kind);
+        if (!t){ log(`${name}: ${kind} のトラックがありません`); return false; }
+        const mime = `${kind}/mp4; codecs="${t.codecs}"`;
+        if (!("MediaSource" in window) || !MediaSource.isTypeSupported(mime)){
+          log(`${name}: ${mime} を扱えません`); return false;
+        }
+        t.mime = mime;
+        defs.push(t);
       }
 
       this.ms = new MediaSource();
       mediaEl.src = URL.createObjectURL(this.ms);
       await new Promise(res => this.ms.addEventListener("sourceopen", res, {once:true}));
       if (this.stopped) return false;
+      if (this.duration) try{ this.ms.duration = this.duration; }catch(_){}
 
-      this.sb = this.ms.addSourceBuffer(mime);
-      this.sb.mode = "segments";
-      if (isFinite(info.duration) && info.duration){
-        try{ this.ms.duration = info.duration; }catch(_){}
+      this.tracks = [];
+      for (const d of defs){
+        const sb = this.ms.addSourceBuffer(d.mime);
+        sb.mode = "segments";
+        const tr = Object.assign({}, d, {
+          sb, next:d.start, busy:false, again:false, gen:0, retry:0, justSeeked:false,
+          count: d.segDur ? Math.ceil(this.duration / d.segDur) : 0
+        });
+        this.tracks.push(tr);
+        await this.append(tr, await this.fetchSeg(d.init));
+        log(`${name}: ${d.kind} ${d.label} / 1 区間 ${d.segDur.toFixed(1)} 秒`);
       }
 
-      await this.append(await this.fetchSeg(info.init));
-      this.next = info.start;
       this.ready = true;
-
-      this.sb.addEventListener("updateend", () => this.pump());
-      mediaEl.addEventListener("timeupdate", () => this.pump());
-      mediaEl.addEventListener("progress",   () => this.pump());
-      mediaEl.addEventListener("waiting",    () => this.pump());
-      mediaEl.addEventListener("seeking",    () => this.onSeek());
-      document.addEventListener("visibilitychange", () => this.pump());
-      this.pump();
-
-      log(`${this.kind === "audio" ? "音声" : "映像"}ストリーム開始: ${info.codecs} / `
-        + `${info.count} 区間 / 1 区間 ${info.segDur.toFixed(1)} 秒`);
+      const kick = () => this.pumpAll();
+      mediaEl.addEventListener("timeupdate", kick);
+      mediaEl.addEventListener("progress", kick);
+      mediaEl.addEventListener("waiting", kick);
+      mediaEl.addEventListener("seeking", () => this.onSeek());
+      document.addEventListener("visibilitychange", kick);
+      this.tracks.forEach(t => t.sb.addEventListener("updateend", kick));
+      this.pumpAll();
       return true;
     },
 
     stop(){
-      this.stopped = true; this.ready = false; this.gen++;
+      this.stopped = true; this.ready = false;
+      this.tracks.forEach(t => { t.gen++; });
       try{ if (this.ms && this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
-      this.ms = null; this.sb = null; this.segs = null;
-      this.next = 0; this.busy = false; this.again = false;
-    },
-
-    async loadManifest(file){
-      const mpd = await getMpd(file);
-      if (!mpd) return null;
-      const xml = mpd.xml, manifestUrl = mpd.url;
-
-      const sets = [...xml.getElementsByTagName("AdaptationSet")];
-      const belongs = a =>
-        (a.getAttribute("mimeType") || "").startsWith(this.kind) ||
-        (a.getAttribute("contentType") || "") === this.kind ||
-        [...a.getElementsByTagName("Representation")]
-          .some(r => (r.getAttribute("mimeType") || "").startsWith(this.kind));
-      const aset = sets.find(belongs);
-      if (!aset){ log(`manifest に ${this.kind} の流れが見つかりません`); return null; }
-
-      const reps = [...aset.getElementsByTagName("Representation")];
-      if (!reps.length){ log(`${this.kind} の Representation がありません`); return null; }
-
-      // 映像は画質の良いものを選ぶ（縦 1080 以内で最大帯域）
-      let rep = reps[0];
-      if (this.kind === "video"){
-        const usable = reps.filter(r => Number(r.getAttribute("height") || 0) <= 1080);
-        rep = (usable.length ? usable : reps)
-          .reduce((best, r) => Number(r.getAttribute("bandwidth")||0) > Number(best.getAttribute("bandwidth")||0) ? r : best);
-        log(`映像の画質: ${rep.getAttribute("width")||"?"}x${rep.getAttribute("height")||"?"} `
-          + `${Math.round(Number(rep.getAttribute("bandwidth")||0)/1000)} kbps`);
-      }
-
-      const codecs = rep.getAttribute("codecs") || aset.getAttribute("codecs")
-                   || (this.kind === "audio" ? "mp4a.40.2" : "avc1.4d401f");
-      const st = rep.getElementsByTagName("SegmentTemplate")[0]
-              || aset.getElementsByTagName("SegmentTemplate")[0];
-      if (!st){ log("SegmentTemplate 形式ではないため対応できません"); return null; }
-
-      const timescale = Number(st.getAttribute("timescale") || 1);
-      const segDur = Number(st.getAttribute("duration") || 0) / timescale;
-      const start = Number(st.getAttribute("startNumber") || 1);
-      const repId = rep.getAttribute("id") || "";
-      const bw = rep.getAttribute("bandwidth") || "";
-      const fill = p => p.replace(/\$RepresentationID\$/g, repId).replace(/\$Bandwidth\$/g, bw);
-      const initPath  = fill(st.getAttribute("initialization") || "");
-      const mediaPath = fill(st.getAttribute("media") || "");
-      if (!initPath || !mediaPath || !segDur){
-        log("manifest の記述が想定と異なります"); return null;
-      }
-
-      let duration = mpdDuration(xml);
-      if ((!isFinite(duration) || !duration) && els.pVideo && isFinite(els.pVideo.duration))
-        duration = els.pVideo.duration;
-      const count = segDur ? Math.ceil(duration / segDur) : 0;
-
-      return {
-        init: new URL(initPath, manifestUrl).href,
-        template: n => new URL(mediaPath.replace(/\$Number(%0\d+d)?\$/g, m => {
-          const pad = /%0(\d+)d/.exec(m);
-          return pad ? String(n).padStart(Number(pad[1]), "0") : String(n);
-        }), manifestUrl).href,
-        start, count, segDur, codecs, timescale, duration
-      };
+      this.ms = null; this.tracks = []; this.duration = 0;
     },
 
     auth(url){ return url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token()); },
@@ -2417,393 +2427,134 @@ function createDashStream(kind){          // kind は "audio" か "video"
       return r.arrayBuffer();
     },
 
-    append(buf){
+    append(tr, buf){
       return new Promise((res, rej) => {
-        if (!this.sb) return rej(new Error("バッファがありません"));
-        const done = () => { this.sb.removeEventListener("updateend", done); res(); };
-        this.sb.addEventListener("updateend", done);
-        try{ this.sb.appendBuffer(buf); }
-        catch(err){ this.sb.removeEventListener("updateend", done); rej(err); }
+        if (!tr.sb) return rej(new Error("バッファがありません"));
+        const done = () => { tr.sb.removeEventListener("updateend", done); res(); };
+        tr.sb.addEventListener("updateend", done);
+        try{ tr.sb.appendBuffer(buf); }
+        catch(err){ tr.sb.removeEventListener("updateend", done); rej(err); }
       });
     },
 
-    bufferedAhead(){
-      const el = this.el;
-      if (!el || !this.sb || !this.sb.buffered.length) return 0;
-      const t = el.currentTime;
-      for (let i = 0; i < this.sb.buffered.length; i++){
-        if (this.sb.buffered.start(i) <= t + 0.1 && t <= this.sb.buffered.end(i) + 0.1)
-          return this.sb.buffered.end(i) - t;
+    aheadOf(tr){
+      if (!this.el || !tr.sb || !tr.sb.buffered.length) return 0;
+      const t = this.el.currentTime;
+      for (let i = 0; i < tr.sb.buffered.length; i++){
+        if (tr.sb.buffered.start(i) <= t + 0.1 && t <= tr.sb.buffered.end(i) + 0.1)
+          return tr.sb.buffered.end(i) - t;
       }
       return 0;
     },
 
-    // 先読みの秒数。飛んだ直後は少なめにして、映り出すまでを短くする。
-    target(){
-      if (this.justSeeked) return this.kind === "video" ? 8 : 12;
-      if (this.kind === "video") return 45;          // 映像は重いので控えめ
+    targetOf(tr){
+      if (tr.justSeeked) return tr.kind === "video" ? 8 : 12;
+      if (tr.kind === "video") return 45;
       return document.hidden ? 300 : 90;
     },
 
-    async pump(){
-      if (this.busy){ this.again = true; return; }
-      if (!this.ready || this.stopped || !this.sb) return;
-      const last = this.segs.start + this.segs.count - 1;
-      const gen = this.gen;
+    pumpAll(){ this.tracks.forEach(t => this.pump(t)); },
 
-      this.busy = true; this.again = false;
+    async pump(tr){
+      if (tr.busy){ tr.again = true; return; }
+      if (!this.ready || this.stopped || !tr.sb) return;
+      const last = tr.start + tr.count - 1;
+      const gen = tr.gen;
+
+      tr.busy = true; tr.again = false;
       try{
-        while (!this.stopped && this.gen === gen
-               && this.next <= last && this.bufferedAhead() < this.target()){
-          const buf = await this.fetchSeg(this.segs.template(this.next));
-          if (this.stopped || this.gen !== gen) break;
-          await this.append(buf);
-          this.next++;
-          this.retry = 0;
-          await this.trim();
+        while (!this.stopped && tr.gen === gen && tr.next <= last && this.aheadOf(tr) < this.targetOf(tr)){
+          const buf = await this.fetchSeg(tr.template(tr.next));
+          if (this.stopped || tr.gen !== gen) break;
+          await this.append(tr, buf);
+          tr.next++; tr.retry = 0;
+          await this.trim(tr);
         }
-        if (!this.stopped && this.next > last){
+        if (!this.stopped && this.tracks.every(t => t.next > t.start + t.count - 1)){
           try{ if (this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
         }
       }catch(err){
         if (!this.stopped){
-          log(`${this.kind} 区間の取得に失敗: ` + err.message);
-          this.retry++;
-          if (this.retry <= 20){
-            const wait = Math.min(15000, 1000 * this.retry);
-            setTimeout(() => { if (!this.stopped) this.pump(); }, wait);
-          }else log(`${this.kind} の取得を諦めました（連続 20 回失敗）`);
+          log(`${this.name}: ${tr.kind} 区間の取得に失敗 ` + err.message);
+          tr.retry++;
+          if (tr.retry <= 20) setTimeout(() => { if (!this.stopped) this.pump(tr); }, Math.min(15000, 1000*tr.retry));
         }
       }finally{
-        this.busy = false;
-        if (this.again && !this.stopped){ this.again = false; this.pump(); }
+        tr.busy = false;
+        if (tr.again && !this.stopped){ tr.again = false; this.pump(tr); }
       }
     },
 
-    async trim(){
-      if (!this.sb || this.sb.updating || !this.sb.buffered.length) return;
+    async trim(tr){
+      if (!tr.sb || tr.sb.updating || !tr.sb.buffered.length) return;
       const t = this.el.currentTime;
-      const start = this.sb.buffered.start(0);
-      const keep = this.kind === "video" ? 60 : 180;
-      if (t - start > keep + 60){
-        try{ this.sb.remove(start, t - keep); }catch(_){}
-      }
+      const start = tr.sb.buffered.start(0);
+      const keep = tr.kind === "video" ? 60 : 180;
+      if (t - start > keep + 60){ try{ tr.sb.remove(start, t - keep); }catch(_){} }
     },
 
     onSeek(){
-      if (!this.ready || !this.segs) return;
-      if (this.bufferedAhead() > 3) return;      // 既に持っていれば取り直さない
-      const t = this.el.currentTime;
-
-      // 走行中の先読みを打ち切り、飛んだ先を最優先で取る
-      this.gen++;
-      this.next = this.segs.start + Math.max(0, Math.floor(t / this.segs.segDur));
-      if (this.sb && !this.sb.updating){ try{ this.sb.abort(); }catch(_){} }
-      this.again = false;
-      this.justSeeked = true;
-      setTimeout(() => { this.justSeeked = false; this.pump(); }, 1500);
-      this.pump();
+      if (!this.ready) return;
+      for (const tr of this.tracks){
+        if (this.aheadOf(tr) > 3) continue;
+        tr.gen++;
+        tr.next = tr.start + Math.max(0, Math.floor(this.el.currentTime / tr.segDur));
+        if (tr.sb && !tr.sb.updating){ try{ tr.sb.abort(); }catch(_){} }
+        tr.again = false;
+        tr.justSeeked = true;
+        setTimeout(() => { tr.justSeeked = false; this.pump(tr); }, 1500);
+        this.pump(tr);
+      }
     }
   };
 }
 
-const dashAudio = createDashStream("audio");
-const dashVideo = createDashStream("video");
+const dashMain  = createDashEngine("本編");     // 映像要素（音声＋映像）
+const dashAudio = createDashEngine("音声のみ"); // 音声要素（音声だけ）
 
-/* ---- 画面オフでも音声を続ける ---- */
-// Android は画面が消えると <video> を止める。しかも、消えた「後」に
-// 音声を鳴らし始めることも制限される。そこで最初から音声要素に音を担当させ、
-// 映像は消音して絵だけを出す。画面が消えても鳴り続けているものは止まらない。
-let audioOnly = false;          // 利用者が 🎧 を押した状態
-let pendingStart = null;        // コマをクリックして指定された開始位置（0〜1）
+/* ---- 音声のみ再生（背景再生用） ---- */
+// 通常は映像要素だけで再生する（同期処理なし）。
+// 🎧 を押したときだけ、音声要素に音声トラックだけを流して映像を止める。
+// 画面が点いている間に切り替えるので確実に鳴り出し、そのまま画面を消せる。
 
-// 音声と映像の両方が受け付けられる状態になってから開始位置へ飛ぶ
+let audioOnly = false;
+let wantPlay = false;
+let pendingStart = null;
+let posterUrlForSession = null;
+let userVolume = Number(localStorage.getItem("bcs_volume") || 1);
+let videoKind = "原本";
+
+function activeMedia(){ return audioOnly ? els.pAudio : els.pVideo; }
+function soundEl(){ return activeMedia(); }
+
 function applyPendingStart(){
   if (pendingStart == null) return;
-  const dur = isFinite(els.pVideo.duration) ? els.pVideo.duration
-            : (isFinite(els.pAudio.duration) ? els.pAudio.duration : 0);
+  const dur = isFinite(els.pVideo.duration) ? els.pVideo.duration : 0;
   if (!dur) return;
-  // 音声を使う設定なら、音声が受け付けられるようになるまで待つ。
-  // 先に映像だけ飛ばすと、あとから 0 秒の音声に引き戻される。
-  if (els.bgAudio.checked && !dashAudio.ready && !els.pAudio.getAttribute("src")) return;
   const t = dur * pendingStart;
   pendingStart = null;
-  seekTo(t);
+  els.pVideo.currentTime = t;
   log("開始位置: " + fmtTC(t));
 }
-let posterUrlForSession = null;
-let driftTimer = null;
 
-function dualActive(){ return els.bgAudio.checked && (dashAudio.ready || !!els.pAudio.getAttribute("src")); }
-function soundEl(){ return dualActive() ? els.pAudio : els.pVideo; }
-function activeMedia(){ return dualActive() ? els.pAudio : els.pVideo; }
-
-// 映像と音声の再生位置を合わせる
-function syncAudioTo(t, play){
-  if (!dualActive()) return;
-  if (Math.abs(els.pAudio.currentTime - t) > 0.3) els.pAudio.currentTime = t;
-  if (play && els.pAudio.paused) els.pAudio.play().catch(err => log("音声の再生に失敗: " + err.message));
-  if (!play && !els.pAudio.paused) els.pAudio.pause();
+function seekTo(t){
+  const m = activeMedia();
+  const dur = isFinite(m.duration) ? m.duration : 0;
+  if (!dur) return 0;
+  t = Math.min(dur - 0.05, Math.max(0, t));
+  m.currentTime = t;
+  return t;
 }
-
-// 音声専用のソースを探す。音声だけの形式なら端末が背景再生を許しやすく、
-// 通信量も小さい。無ければ変換版、最後に原本へ落とす。
-async function resolveAudioSrc(file){
-  for (const hint of ["[mp3]", "[mp4]"]){
-    try{
-      const got = await waitForRep(await getRepresentation(file.id, hint) || {}, 6);
-      const url = repContentUrl(got.rep);
-      if (url){
-        audioKind = hint === "[mp3]" ? "mp3（音声のみ）" : "mp4（変換版）";
-        log("音声用に " + hint + " を採用");
-        return url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
-      }
-    }catch(_){}
-  }
-  audioKind = "";
-  return null;          // 音声だけの軽い版が無いなら二重取得はしない
+function seekBy(sec){
+  const t = seekTo(activeMedia().currentTime + sec);
+  playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + sec + "秒　" + fmtTC(t));
 }
-
-let audioKind = "";
-let videoKind = "原本";
-let resumeTries = 0;
-
-function watchAudio(){
-  const A = els.pAudio;
-  const note = ev => log(`音声[${ev}] ${document.hidden ? "画面オフ" : "画面オン"} `
-    + `pos=${fmtTC(A.currentTime)} paused=${A.paused} ready=${A.readyState} src=${audioKind}`);
-  ["play","playing","pause","waiting","stalled","suspend","ended","error","abort"]
-    .forEach(ev => A.addEventListener(ev, () => note(ev)));
-  A.addEventListener("error", () => {
-    const e = A.error;
-    log("音声要素のエラー: code=" + (e && e.code) + " " + (e && e.message || ""));
-    if (dualActive()) fallbackToVideoAudio("音声要素のエラー");
-  });
-
-  // 画面が消えている間に止められたら数回だけ復帰を試みる。
-  // 端末が止め続ける場合はすぐ諦める（再生成功で回数を戻さないこと）。
-  A.addEventListener("pause", () => {
-    if (!document.hidden || !els.scrim.classList.contains("open") || A.ended) return;
-    if (resumeTries >= 3){
-      if (resumeTries === 3){
-        resumeTries++;
-        log("端末が背景での音声再生を許可しないため、復帰を諦めました");
-      }
-      return;
-    }
-    const attempt = ++resumeTries;
-    setTimeout(() => {
-      A.play().then(() => log("音声を自動復帰しました (" + attempt + "回目)"))
-              .catch(err => log("音声の自動復帰に失敗: " + err.message));
-    }, 300);
-  });
-  // 画面が点いている間だけ回数を戻す
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) resumeTries = 0; });
+function seekToFraction(p){
+  const m = activeMedia();
+  if (!isFinite(m.duration)) return;
+  const t = seekTo(m.duration * p);
+  playerToast(Math.round(p * 100) + "%　" + fmtTC(t));
 }
-
-async function armDualAudio(file){
-  stopDual();
-  if (!els.bgAudio.checked || !file) return;
-
-  // 1) DASH の音声だけを流す（映像トラックを含まないので背景再生できる）
-  try{
-    if (await dashAudio.start(file, els.pAudio)){
-      audioKind = "DASH 音声のみ";
-      bindDual();
-      if (pendingStart != null) applyPendingStart();
-      if (wantPlay && els.pAudio.paused)
-        els.pAudio.play().catch(err => log("音声の再生に失敗: " + err.message));
-      startAudioWatchdog();
-      startAudioProgressWatch();
-      els.pNote.textContent = "再生中（音声: DASH 音声のみ・背景再生可）";
-
-      // 映像も区間配信に切り替える。原本は 1 秒あたり約 2MB あり、
-      // 飛ぶたびに大量に読み直すため反応が鈍い。
-      if (els.dashVideoOpt.checked){
-        const keep = els.pVideo.currentTime;
-        try{
-          if (await dashVideo.start(file, els.pVideo)){
-            // 実際に絵が出せるところまで確認してから採用する。
-            // 空のまま差し替えると位置が 0 に戻り、再生バーも効かなくなる。
-            if (keep > 0) els.pVideo.currentTime = keep;
-            const usable = await waitFor(() => els.pVideo.readyState >= 2, 4000);
-            if (usable){
-              videoKind = "DASH";
-              els.pNote.textContent = "再生中（区間配信・背景再生可）";
-              log("映像を区間配信に切り替えました");
-            }else{
-              throw new Error("区間配信の映像が再生可能になりません");
-            }
-          }else{
-            throw new Error("区間配信の映像を開始できません");
-          }
-        }catch(err){
-          log("映像は原本のままにします: " + err.message);
-          dashVideo.stop();
-          videoKind = "原本";
-          els.pVideo.src = originalUrl(file);
-          if (keep > 0){
-            els.pVideo.addEventListener("loadedmetadata", () => {
-              els.pVideo.currentTime = keep;
-              if (wantPlay) els.pVideo.play().catch(()=>{});
-            }, {once:true});
-          }
-        }
-      }
-
-      if (wantPlay && els.pVideo.paused) els.pVideo.play().catch(()=>{});
-      if (!els.pVideo.paused) syncAudioTo(els.pVideo.currentTime, true);
-      return;
-    }
-  }catch(err){ log("DASH 音声を使えません: " + err.message); dashAudio.stop(); }
-
-  // 2) だめなら音声用の軽いファイルを探す
-  const src = await resolveAudioSrc(file);
-  if (!els.scrim.classList.contains("open")) return;
-  if (!src){
-    // 変換版が無い動画。原本を 2 本読むと通信が詰まるので映像だけで再生する。
-    log("音声専用のソースが無いため、通常再生にします（背景再生は使えません）");
-    els.pNote.textContent = "原本を再生中（背景再生は使えません）";
-    return;
-  }
-  els.pAudio.setAttribute("src", src);
-  els.pAudio.load();
-  els.pNote.textContent = "再生中（音声: " + audioKind + "）";
-  log("音声ソース: " + audioKind);
-  bindDual();
-  if (!els.pVideo.paused) syncAudioTo(els.pVideo.currentTime, true);
-}
-
-// 映像と音声を連動させる。
-// 基準は「音声」。映像は原本を読んでいて待ちが入りやすく、
-// そちらに合わせると音声が何度も巻き戻って同じ箇所を繰り返してしまう。
-let syncing = false;                 // こちらが位置を書き換えている最中の印
-let seekTarget = null;               // 利用者が指定した行き先（音声が追いつくまで保持）
-let seekTargetAt = 0;
-
-let wantPlay = false;           // 利用者が再生を望んでいるか（待機中も保持する）
-
-let volSyncing = false;
-let userVolume = Number(localStorage.getItem("bcs_volume") || 1);   // 利用者が決めた音量
-
-function bindDual(){
-  // 音は音声要素が出す。こちらは確実に鳴る状態にしておく。
-  els.pAudio.muted = false;
-  els.pAudio.volume = userVolume;
-  els.pVol.value = String(userVolume);
-  volSyncing = true;
-  els.pVideo.muted = true;
-  els.pVideo.volume = 1;            // スライダーは満位置にしておく
-  setTimeout(() => { volSyncing = false; }, 50);
-  els.pVideo.addEventListener("volumechange", onVidVolume);
-  log(`音量: 音声要素 vol=${els.pAudio.volume} muted=${els.pAudio.muted}`);
-  els.pVideo.addEventListener("play",   onVidPlay);
-  els.pVideo.addEventListener("pause",  onVidPause);
-  els.pVideo.addEventListener("seeked", onVidSeek);
-
-  // 音声が区間を取りに行っている間は映像も待たせる。
-  // 待たせないと映像だけ先に進み、補正で引き戻されて同じ数秒を繰り返す。
-  els.pAudio.addEventListener("seeking", onAudStall);
-  els.pAudio.addEventListener("waiting", onAudStall);
-  els.pAudio.addEventListener("playing", onAudReady);
-
-  clearInterval(driftTimer);
-  driftTimer = setInterval(() => {
-    if (audioOnly || syncing) return;
-    if (els.pVideo.paused || els.pAudio.paused) return;
-    if (els.pAudio.seeking || els.pAudio.readyState < 3) return;   // 音声が準備中
-    if (seekTarget != null) return;                                 // 行き先へ移動中
-    const d = els.pVideo.currentTime - els.pAudio.currentTime;
-    if (Math.abs(d) > 0.7) alignVideo();
-  }, 2000);
-}
-
-// 音声が「再生中」と言いながら実際には進んでいない場合に備える見張り。
-// 進まないまま映像だけ流れると、無音のまま気づけない。
-let progressTimer = null, lastAudioTime = -1, stuckCount = 0;
-
-function startAudioProgressWatch(){
-  clearInterval(progressTimer);
-  lastAudioTime = -1; stuckCount = 0;
-  progressTimer = setInterval(() => {
-    if (!els.scrim.classList.contains("open") || !dualActive()) return;
-    if (els.pAudio.paused || !wantPlay) { lastAudioTime = els.pAudio.currentTime; return; }
-
-    const t = els.pAudio.currentTime;
-    if (lastAudioTime < 0){ lastAudioTime = t; return; }   // 初回は基準を取るだけ
-    const buffered = els.pAudio.buffered.length
-      ? `${els.pAudio.buffered.start(0).toFixed(0)}–${els.pAudio.buffered.end(els.pAudio.buffered.length-1).toFixed(0)}`
-      : "なし";
-    if (Math.abs(t - lastAudioTime) < 0.2){
-      stuckCount++;
-      log(`音声が進んでいません (${stuckCount}) t=${fmtTC(t)} ready=${els.pAudio.readyState} `
-        + `buffered=${buffered} vol=${els.pAudio.volume} muted=${els.pAudio.muted}`);
-      if (stuckCount >= 2) fallbackToVideoAudio("音声が進まない");
-    }else{
-      if (stuckCount) log(`音声の進行を確認 t=${fmtTC(t)} buffered=${buffered}`);
-      stuckCount = 0;
-    }
-    lastAudioTime = t;
-  }, 2000);
-}
-
-// 音声の分離をやめ、映像自身の音で普通に再生する
-function fallbackToVideoAudio(reason){
-  clearInterval(progressTimer); progressTimer = null;
-  log("音声連携を解除します（理由: " + reason + "）");
-  say("音声を分離できなかったため通常再生にしました（背景再生は使えません）");
-  const t = els.pVideo.currentTime;
-  const wasDashVideo = dashVideo.ready;
-  stopDual();                       // 映像の消音が解除される
-  els.pVideo.muted = false;
-  els.pVideo.volume = userVolume || 1;
-  els.pNote.textContent = "原本を再生中（背景再生は使えません）";
-  if (wasDashVideo && currentFile){
-    // 区間配信の映像には音声トラックが無いので、原本に戻す
-    videoKind = "原本";
-    els.pVideo.src = originalUrl(currentFile);
-    els.pVideo.addEventListener("loadedmetadata", () => {
-      els.pVideo.currentTime = t;
-      if (wantPlay) els.pVideo.play().catch(()=>{});
-    }, {once:true});
-    return;
-  }
-  if (wantPlay && els.pVideo.paused){
-    els.pVideo.currentTime = t;
-    els.pVideo.play().catch(err => log("再生に失敗: " + err.message));
-  }
-}
-
-// 音声がどうしても鳴らない場合の最後の砦。
-// 10 秒経っても両方止まっていたら音声連携を諦め、映像だけで普通に再生する。
-let watchdogTimer = null;
-function startAudioWatchdog(){
-  clearTimeout(watchdogTimer);
-  watchdogTimer = setTimeout(() => {
-    if (!els.scrim.classList.contains("open")) return;
-    if (!wantPlay || audioOnly) return;
-    if (!els.pAudio.paused) return;                  // 音声は鳴っている
-    log("音声が鳴らないため、音声連携をやめて通常再生に切り替えます");
-    say("音声を分離できなかったため、通常再生にしました（背景再生は使えません）");
-    stopDual();                                       // ここで映像の消音も解除される
-    els.pNote.textContent = "原本を再生中（背景再生は使えません）";
-    els.pVideo.play().catch(err => log("再生に失敗: " + err.message));
-  }, 10000);
-}
-
-// 映像の音量スライダーは、実際に音を出している音声要素へ橋渡しする。
-// 映像の音を鳴らすと二重になるので、映像は常に消音のままにする。
-function onVidVolume(){
-  // 映像の音を鳴らすと音声要素と二重になるので、消音に戻すだけ。
-  // 音量そのものはプレーヤー上部のつまみで決める。
-  if (volSyncing || audioOnly || !dualActive()) return;
-  if (!els.pVideo.muted){
-    volSyncing = true;
-    els.pVideo.muted = true;
-    setTimeout(() => { volSyncing = false; }, 50);
-  }
-}
-
 function setVolume(v){
   userVolume = Math.max(0, Math.min(1, v));
   localStorage.setItem("bcs_volume", String(userVolume));
@@ -2812,137 +2563,61 @@ function setVolume(v){
   sn.volume = userVolume;
   if (els.pVol.value !== String(userVolume)) els.pVol.value = String(userVolume);
 }
-
-// 映像を音声の位置に合わせる（音は触らない）。
-// ただし利用者が指定した行き先へ音声がまだ届いていない間は動かさない。
-// ここで動かすと、シークバーが押した位置から元へ戻ってしまう。
-function alignVideo(){
-  if (seekTarget != null){
-    if (Math.abs(els.pAudio.currentTime - seekTarget) > 1.5){
-      // 6 秒待っても音声が届かないなら、映像だけ先に進める
-      if (Date.now() - seekTargetAt > 6000){
-        log("音声が行き先に届かないので、映像を先に進めます");
-        seekTarget = null;
-        if (wantPlay && els.pVideo.paused) els.pVideo.play().catch(()=>{});
-      }
-      return;
-    }
-    seekTarget = null;               // 音声が追いついた
-  }
-  syncing = true;
-  els.pVideo.currentTime = els.pAudio.currentTime;
-  setTimeout(() => { syncing = false; }, 120);
+function nudgeVolume(d){
+  setVolume((soundEl().volume || 0) + d);
+  playerToast("音量 " + Math.round(userVolume * 100) + "%");
 }
 
-// 音声が区間を取りに行っている間は映像も待たせる
-let stallReleaseTimer = null;
-
-function onAudStall(){
-  if (audioOnly || !dualActive()) return;
-  if (!els.pVideo.paused){
-    syncing = true;
-    els.pVideo.pause();
-    setTimeout(() => { syncing = false; }, 100);
-  }
-  if (wantPlay && els.pAudio.paused)
-    els.pAudio.play().catch(err => log("音声の再生に失敗: " + err.message));
-
-  // 音声の準備が長引いても映像は 2 秒で動かす。
-  // 待ち続けると、シークしても何も起きないように見える。
-  clearTimeout(stallReleaseTimer);
-  stallReleaseTimer = setTimeout(() => {
-    if (wantPlay && !audioOnly && els.pVideo.paused){
-      log("音声の準備が長いため、映像を先に進めます");
-      els.pVideo.play().catch(()=>{});
-    }
-  }, 2000);
-}
-
-// 音声が鳴り出したら映像を合わせて再開する
-function onAudReady(){
-  clearTimeout(watchdogTimer);
-  clearTimeout(stallReleaseTimer);
-  if (audioOnly || !dualActive()) return;
-  if (els.pAudio.muted || els.pAudio.volume === 0){
+async function enterAudioOnly(){
+  if (audioOnly || !currentFile) return;
+  const t = els.pVideo.currentTime;
+  els.pAudioBtn.textContent = "…";
+  try{
+    const ok = await dashAudio.start(currentFile, els.pAudio, ["audio"]);
+    if (!ok) throw new Error("音声トラックを取り出せません");
+    els.pAudio.currentTime = t;
     els.pAudio.muted = false;
-    els.pAudio.volume = userVolume || 1;
-    log("音声が無音だったので戻しました");
+    els.pAudio.volume = userVolume;
+    await els.pAudio.play();
+    els.pVideo.pause();
+    audioOnly = true;
+    els.audioVeil.hidden = false;
+    els.pAudioBtn.classList.add("btn-go");
+    els.pNote.textContent = "音声のみ再生中（画面を消しても続きます）";
+    log("音声のみ再生に切り替え " + fmtTC(t));
+  }catch(err){
+    log("音声のみ再生に失敗: " + err.message);
+    say("この動画は音声のみ再生に対応していません: " + err.message, true);
+    dashAudio.stop();
+  }finally{
+    els.pAudioBtn.textContent = "🎧";
   }
-  if (pendingStart != null) applyPendingStart();
-  alignVideo();
-  if (wantPlay && els.pVideo.paused) els.pVideo.play().catch(()=>{});
-}
-function onVidPlay(){
-  if (!syncing) wantPlay = true;
-  if (audioOnly) return;
-  if (els.pAudio.paused) els.pAudio.play().catch(err => log("音声の再生に失敗: " + err.message));
-}
-function onVidPause(){
-  if (syncing || document.hidden) return;      // こちらの都合で止めた分は意思ではない
-  wantPlay = false;
-  if (!audioOnly) els.pAudio.pause();
-}
-function onVidSeek(){
-  // こちらが合わせにいったときの seeked は無視する（無限に往復するため）
-  if (audioOnly || syncing) return;
-  seekTarget = els.pVideo.currentTime;
-  seekTargetAt = Date.now();
-  syncAudioTo(seekTarget, wantPlay);
 }
 
-function stopDual(){
-  clearTimeout(watchdogTimer);
-  dashVideo.stop();
-  clearTimeout(stallReleaseTimer);
-  clearInterval(progressTimer); progressTimer = null;
-  dashAudio.stop();
-  els.pAudio.removeEventListener("seeking", onAudStall);
-  els.pAudio.removeEventListener("waiting", onAudStall);
-  els.pAudio.removeEventListener("playing", onAudReady);
-  clearInterval(driftTimer); driftTimer = null;
-  els.pVideo.removeEventListener("play", onVidPlay);
-  els.pVideo.removeEventListener("pause", onVidPause);
-  els.pVideo.removeEventListener("seeked", onVidSeek);
-  els.pAudio.pause();
-  els.pAudio.removeAttribute("src");
-  els.pAudio.load();
-  els.pVideo.removeEventListener("volumechange", onVidVolume);
-  els.pVideo.muted = false;
-  els.pVideo.volume = userVolume || 1;
-}
-
-// 🎧 映像を止めて音だけにする（通信量を抑えたいときにも使える）
-function enterAudioOnly(){
-  if (!dualActive()){
-    say("設定で「画面を消しても音声を続ける」を有効にしてください", true);
-    return;
-  }
-  audioOnly = true;
-  syncAudioTo(els.pVideo.currentTime, true);
-  els.pVideo.pause();
-  els.audioVeil.hidden = false;
-  els.pAudioBtn.classList.add("btn-go");
-  els.pNote.textContent = "音声のみ再生中";
-  updateMediaSession();
-}
 function exitAudioOnly(){
   if (!audioOnly) return;
-  // 位置合わせで音声が一瞬止まるので、再生中かどうかは先に控えておく
-  const wasPlaying = !els.pAudio.paused;
   const t = els.pAudio.currentTime;
+  const playing = !els.pAudio.paused;
+  els.pAudio.pause();
+  dashAudio.stop();
+  els.pAudio.removeAttribute("src");
   audioOnly = false;
   els.audioVeil.hidden = true;
   els.pAudioBtn.classList.remove("btn-go");
-  els.pNote.textContent = "原本を再生中";
+  els.pNote.textContent = videoKind === "DASH" ? "再生中（区間配信）" : "原本を再生中";
   els.pVideo.currentTime = t;
-  if (wasPlaying) els.pVideo.play().catch(()=>{});   // 再生すると音声も追従する
-  updateMediaSession();
+  if (playing) els.pVideo.play().catch(()=>{});
 }
+
 function resetAudioState(){
   audioOnly = false;
   els.audioVeil.hidden = true;
   els.pAudioBtn.classList.remove("btn-go");
-  stopDual();
+  els.pAudio.pause();
+  dashAudio.stop();
+  els.pAudio.removeAttribute("src");
+  els.pVideo.muted = false;
+  els.pVideo.volume = userVolume || 1;
 }
 
 // ロック画面や通知領域に曲名と操作ボタンを出す
@@ -2958,38 +2633,30 @@ function updateMediaSession(){
       artwork: art
     });
     const M = navigator.mediaSession;
-    M.setActionHandler("play",  () => { activeMedia().play().catch(()=>{}); if (!audioOnly && dualActive()) els.pVideo.play().catch(()=>{}); });
-    M.setActionHandler("pause", () => { els.pAudio.pause(); els.pVideo.pause(); });
+    M.setActionHandler("play",  () => { wantPlay = true; activeMedia().play().catch(()=>{}); });
+    M.setActionHandler("pause", () => { wantPlay = false; activeMedia().pause(); });
     M.setActionHandler("seekbackward", () => seekBy(-15));
     M.setActionHandler("seekforward",  () => seekBy(15));
     M.setActionHandler("seekto", d => { if (d.seekTime != null) seekTo(d.seekTime); });
-    navigator.mediaSession.playbackState = els.pAudio.paused && els.pVideo.paused ? "paused" : "playing";
   }catch(_){}
 }
 
-document.addEventListener("visibilitychange", () => {
-  if (!els.scrim.classList.contains("open")) return;
-  if (document.hidden){
-    // 音声要素は既に鳴っているので、映像だけ止めれば音は続く
-    if (dualActive() && !els.pAudio.paused) els.pVideo.pause();
-  }else if (!audioOnly && dualActive() && !els.pAudio.paused){
-    // 映像を音声に合わせる。ここで出る通知を利用者の操作と取り違えると、
-    // 音声を巻き戻してしまい同じ箇所を繰り返す。
-    syncing = true;
-    els.pVideo.currentTime = els.pAudio.currentTime;
-    els.pVideo.play().catch(()=>{});
-    setTimeout(() => { syncing = false; }, 600);
-  }
-});
 els.pAudioBtn.addEventListener("click", () => { audioOnly ? exitAudioOnly() : enterAudioOnly(); });
-els.pFull.addEventListener("click", toggleFullscreen);
-els.pVol.addEventListener("input", () => setVolume(Number(els.pVol.value)));
 els.audioVeil.addEventListener("click", exitAudioOnly);
-els.bgAudio.addEventListener("change", () => {
-  if (!els.scrim.classList.contains("open")) return;
-  if (els.bgAudio.checked && currentFile) armDualAudio(currentFile);
-  else resetAudioState();
-});
+els.pVideo.addEventListener("play",  () => { wantPlay = true;  updateMediaSession(); });
+els.pVideo.addEventListener("pause", () => { wantPlay = false; });
+
+// 条件が満たされるまで待つ（上限つき）
+function waitFor(cond, ms){
+  return new Promise(res => {
+    if (cond()) return res(true);
+    const t0 = Date.now();
+    const id = setInterval(() => {
+      if (cond()){ clearInterval(id); res(true); }
+      else if (Date.now() - t0 > ms){ clearInterval(id); res(false); }
+    }, 100);
+  });
+}
 
 /* ---- プレーヤーのズーム（ピンチ / ホイール / ダブルタップ） ---- */
 const zoom = {s:1, x:0, y:0};
@@ -3132,21 +2799,6 @@ function playerToast(text){
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => els.pToast.classList.remove("on"), 700);
 }
-function seekTo(t){
-  const ref = activeMedia();
-  const dur = isFinite(ref.duration) ? ref.duration : (isFinite(els.pVideo.duration) ? els.pVideo.duration : 0);
-  if (!dur) return 0;
-  t = Math.min(dur - 0.05, Math.max(0, t));
-  syncing = true;
-  seekTarget = t; seekTargetAt = Date.now();
-  if (!audioOnly) els.pVideo.currentTime = t;
-  if (dualActive()) els.pAudio.currentTime = t;
-  setTimeout(() => { syncing = false; }, 120);
-  // 映像は音声が鳴り出すのを待つ。ここで音声を起こさないと双方が待ち合って止まる。
-  if (wantPlay && dualActive() && els.pAudio.paused)
-    els.pAudio.play().catch(err => log("音声の再生に失敗: " + err.message));
-  return t;
-}
 function seekBy(sec){
   const t = seekTo(activeMedia().currentTime + sec);
   playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + sec + "秒　" + fmtTC(t));
@@ -3183,16 +2835,8 @@ document.addEventListener("keydown", e => {
     case "ArrowUp":    nudgeVolume(0.1); break;
     case "ArrowDown":  nudgeVolume(-0.1); break;
     case " ": case "k": case "K":
-      if (v.paused){
-        wantPlay = true;
-        if (!audioOnly) els.pVideo.play().catch(() => {});
-        if (dualActive()) els.pAudio.play().catch(() => {});
-        playerToast("再生");
-      }else{
-        wantPlay = false;
-        els.pVideo.pause(); els.pAudio.pause();
-        playerToast("一時停止");
-      }
+      if (v.paused){ wantPlay = true; v.play().catch(() => {}); playerToast("再生"); }
+      else { wantPlay = false; v.pause(); playerToast("一時停止"); }
       break;
     case "+": case ";": case "=":
       setZoom(zoom.s * 1.25); playerToast("拡大 " + Math.round(zoom.s*100) + "%"); break;
@@ -3267,7 +2911,6 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
 
   loadAuth();
   saveAuth();
-  watchAudio();
   log("ready — marks:", marks.size);
 
   // Box からの折り返し（?code=...）を処理する
