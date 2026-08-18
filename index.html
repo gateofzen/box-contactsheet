@@ -288,7 +288,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v20</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v22</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -731,7 +731,7 @@ function refreshTokens(){
 }
 async function ensureFresh(){
   if (!auth.access || !auth.refresh) return;
-  if (Date.now() < auth.exp - 5*60*1000) return;
+  if (Date.now() < auth.exp - 10*60*1000) return;
   try{ await refreshTokens(); }
   catch(err){
     log("更新に失敗:", err.message);
@@ -2248,7 +2248,10 @@ const dashAudio = {
 
     this.sb.addEventListener("updateend", () => this.pump());
     audioEl.addEventListener("timeupdate", () => this.pump());
+    audioEl.addEventListener("progress",   () => this.pump());
+    audioEl.addEventListener("waiting",    () => this.pump());
     audioEl.addEventListener("seeking", () => this.onSeek());
+    document.addEventListener("visibilitychange", () => this.pump());
     this.pump();
 
     log(`音声ストリーム開始: ${info.codecs} / ${info.count} 区間 / 1 区間 ${info.segDur.toFixed(1)} 秒`);
@@ -2333,7 +2336,18 @@ const dashAudio = {
   auth(url){ return url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token()); },
 
   async fetchSeg(url){
-    const r = await fetch(this.auth(url));
+    // 期限切れはここで直す。1 分ごとのタイマーは画面オフで間引かれるため、
+    // 区間を取りに行くこの経路（再生が続く限り必ず通る）で面倒を見る。
+    await ensureFresh();
+
+    let r = await fetch(this.auth(url));
+    if (r.status === 401){
+      log("音声区間が 401。トークンを更新して取り直します");
+      try{
+        await refreshTokens();
+        r = await fetch(this.auth(url));
+      }catch(err){ throw new Error("トークン更新に失敗: " + err.message); }
+    }
     if (!r.ok) throw new Error("区間 " + r.status);
     return r.arrayBuffer();
   },
@@ -2358,25 +2372,42 @@ const dashAudio = {
     return 0;
   },
 
-  // 先読みが足りなければ次の区間を足す
+  // 先読みが足りなければ次の区間を足す。
+  // 画面オフだとブラウザがタイマーを間引くため、setTimeout で繋がず
+  // ひとつの繰り返しの中で必要な分をまとめて取る。
+  target(){ return document.hidden ? 300 : 90; },   // 先読みの秒数
+
   async pump(){
-    if (this.busy || !this.ready || this.stopped || !this.sb || this.sb.updating) return;
-    if (this.next > this.segs.start + this.segs.count - 1){
-      try{ if (this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
-      return;
-    }
-    if (this.bufferedAhead() > 40) return;
+    if (this.busy || !this.ready || this.stopped || !this.sb) return;
+    const last = this.segs.start + this.segs.count - 1;
 
     this.busy = true;
     try{
-      await this.append(await this.fetchSeg(this.segs.template(this.next)));
-      this.next++;
-      await this.trim();
+      while (!this.stopped && this.next <= last && this.bufferedAhead() < this.target()){
+        const buf = await this.fetchSeg(this.segs.template(this.next));
+        if (this.stopped) break;
+        await this.append(buf);
+        this.next++;
+        this.retry = 0;
+        await this.trim();
+      }
+      if (!this.stopped && this.next > last){
+        try{ if (this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
+      }
     }catch(err){
-      if (!this.stopped) log("音声区間の取得に失敗: " + err.message);
+      if (!this.stopped){
+        log("音声区間の取得に失敗: " + err.message);
+        this.retry = (this.retry || 0) + 1;
+        if (this.retry <= 20){
+          // 通信の一時的な不調とみなして、間を空けて続きから取り直す
+          const wait = Math.min(15000, 1000 * this.retry);
+          setTimeout(() => { if (!this.stopped) this.pump(); }, wait);
+        }else{
+          log("音声の取得を諦めました（連続 20 回失敗）");
+        }
+      }
     }finally{
       this.busy = false;
-      if (!this.stopped && this.bufferedAhead() < 40) setTimeout(() => this.pump(), 0);
     }
   },
 
@@ -2385,8 +2416,8 @@ const dashAudio = {
     if (!this.sb || this.sb.updating || !this.sb.buffered.length) return;
     const t = this.el.currentTime;
     const start = this.sb.buffered.start(0);
-    if (t - start > 180){
-      try{ this.sb.remove(start, t - 120); }catch(_){}
+    if (t - start > 240){
+      try{ this.sb.remove(start, t - 180); }catch(_){}
     }
   },
 
@@ -2615,8 +2646,12 @@ document.addEventListener("visibilitychange", () => {
     // 音声要素は既に鳴っているので、映像だけ止めれば音は続く
     if (dualActive() && !els.pAudio.paused) els.pVideo.pause();
   }else if (!audioOnly && dualActive() && !els.pAudio.paused){
+    // 映像を音声に合わせる。ここで出る通知を利用者の操作と取り違えると、
+    // 音声を巻き戻してしまい同じ箇所を繰り返す。
+    syncing = true;
     els.pVideo.currentTime = els.pAudio.currentTime;
     els.pVideo.play().catch(()=>{});
+    setTimeout(() => { syncing = false; }, 600);
   }
 });
 els.pAudioBtn.addEventListener("click", () => { audioOnly ? exitAudioOnly() : enterAudioOnly(); });
