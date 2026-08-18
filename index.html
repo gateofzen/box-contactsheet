@@ -314,7 +314,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v31</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v32</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -2280,7 +2280,13 @@ const dashAudio = {
 
     this.sb = this.ms.addSourceBuffer(mime);
     this.sb.mode = "segments";
-    if (isFinite(info.duration)) try{ this.ms.duration = info.duration; }catch(_){}
+    let dur = info.duration;
+    if (!isFinite(dur) || !dur) dur = els.pVideo && isFinite(els.pVideo.duration) ? els.pVideo.duration : 0;
+    if (isFinite(dur) && dur){
+      try{ this.ms.duration = dur; }catch(_){}
+    }else{
+      log("音声の総再生時間が不明です。先の位置へ飛べない場合があります。");
+    }
 
     await this.append(await this.fetchSeg(info.init));
     this.next = info.start;
@@ -2624,6 +2630,8 @@ async function armDualAudio(file){
 // 基準は「音声」。映像は原本を読んでいて待ちが入りやすく、
 // そちらに合わせると音声が何度も巻き戻って同じ箇所を繰り返してしまう。
 let syncing = false;                 // こちらが位置を書き換えている最中の印
+let seekTarget = null;               // 利用者が指定した行き先（音声が追いつくまで保持）
+let seekTargetAt = 0;
 
 let wantPlay = false;           // 利用者が再生を望んでいるか（待機中も保持する）
 
@@ -2656,6 +2664,7 @@ function bindDual(){
     if (audioOnly || syncing) return;
     if (els.pVideo.paused || els.pAudio.paused) return;
     if (els.pAudio.seeking || els.pAudio.readyState < 3) return;   // 音声が準備中
+    if (seekTarget != null) return;                                 // 行き先へ移動中
     const d = els.pVideo.currentTime - els.pAudio.currentTime;
     if (Math.abs(d) > 0.7) alignVideo();
   }, 2000);
@@ -2745,8 +2754,22 @@ function setVolume(v){
   if (els.pVol.value !== String(userVolume)) els.pVol.value = String(userVolume);
 }
 
-// 映像を音声の位置に合わせる（音は触らない）
+// 映像を音声の位置に合わせる（音は触らない）。
+// ただし利用者が指定した行き先へ音声がまだ届いていない間は動かさない。
+// ここで動かすと、シークバーが押した位置から元へ戻ってしまう。
 function alignVideo(){
+  if (seekTarget != null){
+    if (Math.abs(els.pAudio.currentTime - seekTarget) > 1.5){
+      // 6 秒待っても音声が届かないなら、映像だけ先に進める
+      if (Date.now() - seekTargetAt > 6000){
+        log("音声が行き先に届かないので、映像を先に進めます");
+        seekTarget = null;
+        if (wantPlay && els.pVideo.paused) els.pVideo.play().catch(()=>{});
+      }
+      return;
+    }
+    seekTarget = null;               // 音声が追いついた
+  }
   syncing = true;
   els.pVideo.currentTime = els.pAudio.currentTime;
   setTimeout(() => { syncing = false; }, 120);
@@ -2803,7 +2826,9 @@ function onVidPause(){
 function onVidSeek(){
   // こちらが合わせにいったときの seeked は無視する（無限に往復するため）
   if (audioOnly || syncing) return;
-  syncAudioTo(els.pVideo.currentTime, wantPlay);
+  seekTarget = els.pVideo.currentTime;
+  seekTargetAt = Date.now();
+  syncAudioTo(seekTarget, wantPlay);
 }
 
 function stopDual(){
@@ -3041,6 +3066,7 @@ function seekTo(t){
   if (!dur) return 0;
   t = Math.min(dur - 0.05, Math.max(0, t));
   syncing = true;
+  seekTarget = t; seekTargetAt = Date.now();
   if (!audioOnly) els.pVideo.currentTime = t;
   if (dualActive()) els.pAudio.currentTime = t;
   setTimeout(() => { syncing = false; }, 120);
