@@ -877,7 +877,11 @@ async function scan(){
   const rootId = els.folder.value.trim() || "0";
   const maxDepth = els.recurse.checked ? Math.max(0, Number(els.depth.value) || 0) : 0;
 
-  scanAbort = new AbortController();
+  // 走査が二重に始まっても壊れないよう、コントローラはローカルに持つ。
+  // 直前の走査が動いていれば打ち切ってから始める。
+  if (scanAbort) scanAbort.abort();
+  const ctl = new AbortController();
+  scanAbort = ctl;
   els.scan.disabled = true; els.cancel.hidden = false;
   els.authDot.className = "dot busy"; say("");
   files = []; cardById.clear(); picked.clear(); els.sheet.innerHTML = ""; rendered = 0;
@@ -887,13 +891,14 @@ async function scan(){
 
   try{
     while (queue.length){
+      if (scanAbort !== ctl) return;      // 新しい走査に追い越された
       const node = queue.shift();
       let entries;
       const cached = await idbGet("folders", node.id);
       if (cached && Date.now() - cached.ts < 6*60*60*1000){
         entries = cached.entries;
       }else{
-        entries = await listFolder(node.id, scanAbort.signal);
+        entries = await listFolder(node.id, ctl.signal);
         await idbPut("folders", {id:node.id, entries, ts:Date.now()});
       }
       folders++;
@@ -915,8 +920,11 @@ async function scan(){
     if (err.name === "AbortError"){ els.progress.textContent = `中止（動画 ${files.length} 本まで）`; }
     else { say(String(err.message||err), true); log("scan error:", err.message); }
   }finally{
-    scanAbort = null; els.scan.disabled = false; els.cancel.hidden = true;
-    setAuth(true); buildRail(); applyView();
+    // 自分が最新の走査だったときだけ後片付けをする
+    if (scanAbort === ctl){
+      scanAbort = null; els.scan.disabled = false; els.cancel.hidden = true;
+      setAuth(true); buildRail(); applyView();
+    }
   }
 }
 
