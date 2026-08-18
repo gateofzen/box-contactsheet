@@ -287,7 +287,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v14</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v15</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -318,7 +318,11 @@ b{font-weight:600}
       </span>
     </div>
     <div id="tree"></div>
-    <div class="drawer-foot">表示中: <b id="selName">—</b></div>
+    <div class="drawer-foot">
+      <div>表示中: <b id="selName">—</b></div>
+      <button id="deepBtn" class="btn btn-sm" style="width:100%;margin-top:8px">
+        配下すべてを取り込む</button>
+    </div>
   </aside>
 
   <div class="content" id="layout">
@@ -344,13 +348,16 @@ b{font-weight:600}
         <div class="group">
           <h4>読み込み</h4>
           <div class="rack">
-            <label class="check"><input id="recurse" type="checkbox" checked> サブフォルダも読む</label>
-            <div class="field"><label for="depth">何階層まで</label>
+            <div class="field"><label for="depth">配下取り込みの階層</label>
               <input id="depth" class="w-num" type="number" value="6" min="0" max="30"></div>
             <label class="check"><input id="autothumb" type="checkbox" checked> 開いたら自動でサムネイル取得</label>
             <button id="loadFolder" class="btn btn-sm">選択中のフォルダを開き直す</button>
           </div>
-          <p class="note">フォルダをクリックすると、その中身を読み込んでサムネイルまで自動で揃えます。ここは動きを変えたいときだけ触ってください。</p>
+          <p class="note">
+            フォルダをクリックすると<b>そのフォルダ直下の動画だけ</b>を表示し、サムネイルまで自動で揃えます。<br>
+            サブフォルダも含めてまとめて処理したいときは、フォルダ一覧の下にある「配下すべてを取り込む」を押してください。
+            そのときの潜る深さがこの階層設定です。
+          </p>
         </div>
 
         <div class="group">
@@ -529,9 +536,9 @@ const K_FAV = "csFav", K_TAGS = "csTags";
 
 const $ = id => document.getElementById(id);
 const els = {};
-["token","folder","depth","recurse","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq",
+["token","folder","depth","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
- "loadFolder","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
+ "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
  "advBox","advBtn","chiprow","statusline","pbar","exportBtn","importBtn","importFile",
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
@@ -1008,7 +1015,7 @@ function folderRow(id, depth){
     selectFolder(id);
     if (!fopen.has(id)) toggleFolder(id);
     closeDrawer();
-    openSelectedFolder();          // クリック = そのフォルダを表示する
+    openSelectedFolder(false);     // クリック = そのフォルダ直下だけを表示する
   });
 
   const vc = document.createElement("span");
@@ -1045,13 +1052,13 @@ async function initTree(rootId, force){
 
 // フォルダを開く一連の流れ（読み込み → サムネイル）をここに集約する
 let openSeq = 0;
-async function openSelectedFolder(){
+async function openSelectedFolder(deep){
   if (!fsel) return;
   const seq = ++openSeq;               // 後から選び直されたら、この回は降りる
   localStorage.setItem("bcs_lastfolder", fsel);   // 起点ではなく「前回見ていた場所」
   await ensureFresh();
   if (!await checkAuth()) return;
-  await scan(fsel);
+  await scan(fsel, deep);
   if (seq !== openSeq) return;         // 別のフォルダに追い越された
   if (els.autothumb.checked && files.length) await prefetchThumbs();
 }
@@ -1167,9 +1174,10 @@ function absorbMetadata(entry){
   idbPut("marks", {id:entry.id, fav:m.fav, tags:m.tags, dirty:false});
 }
 
-async function scan(scanTarget){
+async function scan(scanTarget, deep){
   const rootId = String(scanTarget || els.folder.value.trim() || "0");
-  const maxDepth = els.recurse.checked ? Math.max(0, Number(els.depth.value) || 0) : 0;
+  // 既定は直下のみ。deep のときだけ設定された階層まで潜る。
+  const maxDepth = deep ? Math.max(1, Number(els.depth.value) || 6) : 0;
 
   // 走査が二重に始まっても壊れないよう、コントローラはローカルに持つ。
   // 直前の走査が動いていれば打ち切ってから始める。
@@ -2097,7 +2105,7 @@ els.scan.addEventListener("click", async () => {
   await ensureFresh();
   if (!await checkAuth()) return;
   await initTree(els.folder.value.trim() || "0");
-  scan();
+  scan(undefined, false);
 });
 els.login.addEventListener("click", startLogin);
 els.loginTop.addEventListener("click", startLogin);
@@ -2112,7 +2120,12 @@ els.cancel.addEventListener("click", () => scanAbort && scanAbort.abort());
 
 els.loadFolder.addEventListener("click", () => {
   if (!fsel) return say("フォルダを選んでください", true);
-  openSelectedFolder();
+  openSelectedFolder(false);
+});
+els.deepBtn.addEventListener("click", () => {
+  if (!fsel) return say("フォルダを選んでください", true);
+  closeDrawer();
+  openSelectedFolder(true);
 });
 els.prefetch.addEventListener("click", prefetchThumbs);   // 実行中は中止ボタンとして働く
 
@@ -2148,7 +2161,7 @@ els.refresh.addEventListener("click", async () => {
   resetSharedCache();
   say("Box から一覧を取り直しています…");
   await initTree(els.folder.value.trim() || "0", true);
-  await openSelectedFolder();
+  await openSelectedFolder(false);
   say("");
 });
 
@@ -2514,7 +2527,7 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
     if (last && last !== froot){
       say("前回の続きを読み込んでいます…");
       await revealFolder(last);           // 起点はそのままに、前回の場所まで開く
-      await openSelectedFolder();
+      await openSelectedFolder(false);
     }else{
       say("前回の続きを読み込んでいます…");
       await scan();
