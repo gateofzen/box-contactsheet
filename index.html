@@ -314,7 +314,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v36</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v37</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -2714,31 +2714,11 @@ async function toggleFullscreen(){
       // こうしないと端末側の全画面 UI に取られ、ピンチ操作が届かなくなる。
       await (box.requestFullscreen ? box.requestFullscreen({navigationUI:"hide"})
                                    : box.webkitRequestFullscreen());
-      if (screen.orientation && screen.orientation.lock)
-        screen.orientation.lock("landscape").catch(() => {});
     }
   }catch(err){ log("全画面の切り替えに失敗: " + err.message); }
 }
 
-// 標準ボタンは映像そのものを全画面にする。そのままだと拡大操作が届かないので、
-// こちらの枠（映像＋操作用の覆い）へ移し替える。
-document.addEventListener("fullscreenchange", async () => {
-  if (fsElement() === els.pVideo){
-    try{
-      await (document.exitFullscreen ? document.exitFullscreen() : document.webkitExitFullscreen());
-      await (els.vzoom.requestFullscreen ? els.vzoom.requestFullscreen({navigationUI:"hide"})
-                                         : els.vzoom.webkitRequestFullscreen());
-      if (screen.orientation && screen.orientation.lock)
-        screen.orientation.lock("landscape").catch(() => {});
-      log("全画面をこちらの枠に移しました");
-    }catch(err){ log("全画面の移し替えに失敗: " + err.message); }
-  }
-});
-
 document.addEventListener("fullscreenchange", () => {
-  const on = !!fsElement();
-  if (!on && screen.orientation && screen.orientation.unlock)
-    try{ screen.orientation.unlock(); }catch(_){}
   applyZoom();                      // 表示領域が変わるので範囲を計算し直す
 });
 window.addEventListener("resize", () => applyZoom());
