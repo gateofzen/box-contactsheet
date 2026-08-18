@@ -213,7 +213,7 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
   <div class="masthead-in">
     <div class="brand">
       <h1>Contact&nbsp;Sheet</h1>
-      <span class="sub">Box 動画ライブラリ / 1動画 = 5フレーム</span>
+      <span class="sub">Box 動画ライブラリ / 1動画 = 5フレーム / <b id="ver">v9</b></span>
     </div>
 
     <div class="rack">
@@ -349,6 +349,21 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
 <script>
 "use strict";
 
+/* どこで落ちても分かるように、最初にエラー捕捉を仕掛ける。
+   診断ログの DOM がまだ無い場合に備えて配列に溜めておく。 */
+const bootErrors = [];
+function reportError(where, e){
+  const msg = `[${where}] ` + (e && (e.message || e.reason || e)) +
+              (e && e.filename ? ` @${e.filename}:${e.lineno}` : "");
+  bootErrors.push(msg);
+  const pre = document.getElementById("log");
+  if (pre) pre.textContent = (pre.textContent ? pre.textContent + "\n" : "") + msg;
+  const bar = document.getElementById("msg");
+  if (bar){ bar.textContent = "スクリプトエラー: " + msg; bar.classList.add("err"); }
+}
+window.addEventListener("error", e => reportError("error", e));
+window.addEventListener("unhandledrejection", e => reportError("rejection", e));
+
 /* ==========================================================
  *  初期設定 — ここだけ書き換えて GitHub に置けば、
  *  どの端末でも「Box でログイン」を押すだけで使えます。
@@ -373,7 +388,7 @@ const K_FAV = "csFav", K_TAGS = "csTags";
 const $ = id => document.getElementById(id);
 const els = {};
 ["token","folder","depth","recurse","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq",
- "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName","loadFolder","prefetch",
+ "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName","loadFolder","prefetch","cacheFolder","shareThumbs","ver",
  "exportBtn","importBtn","importFile","authDot","authText","nTotal","nHit","nFav","nCached",
  "progress","msg","log","sheet","sentinel","empty","railTags","bulkbar","bulkN","bulkTag",
  "bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
@@ -943,9 +958,11 @@ async function scan(){
     if (err.name === "AbortError"){ els.progress.textContent = `中止（動画 ${files.length} 本まで）`; }
     else { say(String(err.message||err), true); log("scan error:", err.message); }
   }finally{
-    // 自分が最新の走査だったときだけ後片付けをする
+    // 表示の更新は最新の走査だけが行う。
+    // ただしボタンの復帰は無条件（押せないまま固まるのを防ぐ）。
+    els.scan.disabled = false; els.cancel.hidden = true;
     if (scanAbort === ctl){
-      scanAbort = null; els.scan.disabled = false; els.cancel.hidden = true;
+      scanAbort = null;
       setAuth(true); buildRail(); applyView();
     }
   }
@@ -1777,6 +1794,8 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
 
 /* ============ 起動 ============ */
 (async function init(){
+ try{
+  bootErrors.forEach(m => log(m));
   db = await openDB().catch(() => null);
   for (const rec of await idbAll("marks"))
     marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [], dirty:!!rec.dirty});
@@ -1817,22 +1836,3 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
       }
     }
     sessionStorage.removeItem("bcs_state");
-  }
-
-  if (!auth.access && !els.token.value){
-    els.setupBox.open = !els.clientId.value;
-    setAuth(false, "未接続");
-    return;
-  }
-
-  await ensureFresh();
-  if (await checkAuth()){
-    await initTree(els.folder.value.trim() || "0");
-    say("前回の続きを読み込んでいます…");
-    await scan();
-    say("");
-  }
-})();
-</script>
-</body>
-</html>
