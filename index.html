@@ -371,8 +371,8 @@ window.addEventListener("unhandledrejection", e => reportError("rejection", e));
  *  Worker 側の環境変数にあり、この HTML には一切含まれません）。
  * ========================================================== */
 const DEFAULTS = {
-  clientId: "",                       // 例: "pniv75amaapkk57u84hdu8k..."
-  worker:   "",                       // 例: "https://box-oauth.gateofzen.workers.dev"
+  clientId: "pniv75amaapkk57u84hdu8kew2o1s6zs",
+  worker:   "https://box-oauth.gateofzen.workers.dev",   // 末尾のスラッシュは不要
 };
 
 const API = "https://api.box.com/2.0";
@@ -1836,3 +1836,25 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
       }
     }
     sessionStorage.removeItem("bcs_state");
+  }
+
+  if (!auth.access && !els.token.value){
+    els.setupBox.open = !els.clientId.value;
+    setAuth(false, "未接続");
+    return;
+  }
+
+  await ensureFresh();
+  if (await checkAuth()){
+    await initTree(els.folder.value.trim() || "0");
+    say("前回の続きを読み込んでいます…");
+    await scan();
+    say("");
+  }
+ }catch(err){
+  reportError("init", err);
+ }
+})();
+</script>
+</body>
+</html>
