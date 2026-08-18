@@ -314,7 +314,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v35</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v36</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -499,9 +499,6 @@ b{font-weight:600}
   <div class="player">
     <div class="player-bar">
       <span class="t" id="pTitle"></span>
-      <span class="volbox" title="音量"><span>🔊</span>
-        <input id="pVol" type="range" min="0" max="1" step="0.05" value="1" aria-label="音量"></span>
-      <button id="pFull" class="btn btn-sm" title="全画面">⛶</button>
       <button id="pAudioBtn" class="btn btn-sm" title="音声のみで再生">🎧</button>
       <button id="pFav" class="btn btn-ghost">★</button>
       <a id="pBox" class="btn btn-ghost" target="_blank" rel="noopener">Box で開く</a>
@@ -509,7 +506,7 @@ b{font-weight:600}
     </div>
     <div id="vzoom" class="vzoom">
       <video id="pVideo" controls playsinline preload="metadata"
-             controlsList="nodownload nofullscreen noremoteplayback"></video>
+             controlsList="nodownload noremoteplayback"></video>
       <button id="zoomReset" class="zreset" hidden>100%</button>
       <div id="audioVeil" class="audioveil" hidden>
         <div>
@@ -575,7 +572,7 @@ const els = {};
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
- "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom","zoomReset","pFull","pVol",
+ "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom","zoomReset",
  "pAudio","pAudioBtn","audioVeil","bgAudio"].forEach(k => els[k] = $(k));
 
 let files = [];
@@ -2037,7 +2034,6 @@ async function openPlayer(file, startAt){
   els.pVideo.onerror = null;
   els.pVideo.muted = false;
   els.pVideo.volume = userVolume || 1;
-  els.pVol.value = String(userVolume || 1);
   wantPlay = true;
   pendingStart = (startAt != null) ? startAt : null;
 
@@ -2561,7 +2557,6 @@ function setVolume(v){
   const sn = soundEl();
   sn.muted = false;
   sn.volume = userVolume;
-  if (els.pVol.value !== String(userVolume)) els.pVol.value = String(userVolume);
 }
 function nudgeVolume(d){
   setVolume((soundEl().volume || 0) + d);
@@ -2643,6 +2638,11 @@ function updateMediaSession(){
 
 els.pAudioBtn.addEventListener("click", () => { audioOnly ? exitAudioOnly() : enterAudioOnly(); });
 els.audioVeil.addEventListener("click", exitAudioOnly);
+els.pVideo.addEventListener("volumechange", () => {
+  if (audioOnly) return;
+  userVolume = els.pVideo.muted ? userVolume : els.pVideo.volume;
+  localStorage.setItem("bcs_volume", String(userVolume));
+});
 els.pVideo.addEventListener("play",  () => { wantPlay = true;  updateMediaSession(); });
 els.pVideo.addEventListener("pause", () => { wantPlay = false; });
 
@@ -2720,9 +2720,23 @@ async function toggleFullscreen(){
   }catch(err){ log("全画面の切り替えに失敗: " + err.message); }
 }
 
+// 標準ボタンは映像そのものを全画面にする。そのままだと拡大操作が届かないので、
+// こちらの枠（映像＋操作用の覆い）へ移し替える。
+document.addEventListener("fullscreenchange", async () => {
+  if (fsElement() === els.pVideo){
+    try{
+      await (document.exitFullscreen ? document.exitFullscreen() : document.webkitExitFullscreen());
+      await (els.vzoom.requestFullscreen ? els.vzoom.requestFullscreen({navigationUI:"hide"})
+                                         : els.vzoom.webkitRequestFullscreen());
+      if (screen.orientation && screen.orientation.lock)
+        screen.orientation.lock("landscape").catch(() => {});
+      log("全画面をこちらの枠に移しました");
+    }catch(err){ log("全画面の移し替えに失敗: " + err.message); }
+  }
+});
+
 document.addEventListener("fullscreenchange", () => {
   const on = !!fsElement();
-  els.pFull.classList.toggle("btn-go", on);
   if (!on && screen.orientation && screen.orientation.unlock)
     try{ screen.orientation.unlock(); }catch(_){}
   applyZoom();                      // 表示領域が変わるので範囲を計算し直す
@@ -2845,7 +2859,7 @@ document.addEventListener("keydown", e => {
     case "0":
       if (zoom.s > 1.01){ resetZoom(); playerToast("等倍に戻しました"); break; }
       seekToFraction(0); break;
-    case "F11":
+    case "F11": case "f11":
       toggleFullscreen(); break;
     case "m": case "M":{
       const sn = soundEl();
