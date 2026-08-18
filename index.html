@@ -238,6 +238,9 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
           <input id="worker" class="w-token" type="text" placeholder="https://xxx.workers.dev" autocomplete="off"></div>
         <div class="field"><label for="token">開発者トークン（予備）</label>
           <input id="token" class="w-token" type="password" placeholder="ログインを使う場合は空でよい" autocomplete="off"></div>
+        <div class="field"><label for="cacheFolder">共有サムネイル置き場</label>
+          <input id="cacheFolder" class="w-id" type="text" placeholder="自動作成" inputmode="numeric"></div>
+        <label class="check"><input id="shareThumbs" type="checkbox" checked> サムネイルを Box に共有</label>
       </div>
       <p class="hint">
         リダイレクト URI には <b id="redirUri"></b> を Box 側に登録してください。
@@ -346,11 +349,25 @@ main{max-width:1680px;margin:0 auto;padding:22px 20px 80px}
 <script>
 "use strict";
 
+/* ==========================================================
+ *  初期設定 — ここだけ書き換えて GitHub に置けば、
+ *  どの端末でも「Box でログイン」を押すだけで使えます。
+ *  どちらも秘密情報ではありません（クライアントシークレットは
+ *  Worker 側の環境変数にあり、この HTML には一切含まれません）。
+ * ========================================================== */
+const DEFAULTS = {
+  clientId: "",                       // 例: "pniv75amaapkk57u84hdu8k..."
+  worker:   "",                       // 例: "https://box-oauth.gateofzen.workers.dev"
+};
+
 const API = "https://api.box.com/2.0";
 const VIDEO_EXT = new Set(["mp4","m4v","mov","avi","mkv","wmv","flv","webm","mpg","mpeg","mts","m2ts","ts","3gp","ogv","vob","mxf","asf"]);
+const FRAME_COUNT = 5;
 const SAMPLE_POINTS = [0.08,0.29,0.50,0.71,0.92];
 const PAGE_SIZE = 60;
 const MD_SCOPE = "global", MD_TPL = "properties";
+const CACHE_FOLDER_NAME = "_ContactSheetCache";
+const UPLOAD_API = "https://upload.box.com/api/2.0";
 const K_FAV = "csFav", K_TAGS = "csTags";
 
 const $ = id => document.getElementById(id);
@@ -525,6 +542,7 @@ function saveSettings(){
   localStorage.setItem("bcs_worker", els.worker.value.trim());
   localStorage.setItem("bcs_token", els.token.value.trim());
   localStorage.setItem("bcs_folder", els.folder.value.trim());
+  localStorage.setItem("bcs_cachefolder", els.cacheFolder.value.trim());
 }
 
 /* ============ Box API ============ */
@@ -1034,6 +1052,124 @@ async function captureFromVideo(src, points){
   return {frames, duration: dur, w: canvas.width, h: canvas.height};
 }
 
+/* ============ Box 共有サムネイルキャッシュ ============ */
+// 5 コマを 1 枚に連結した JPEG を Box の専用フォルダに置き、
+// 端末間で使い回す。ファイル名は「動画ID~秒数.jpg」。
+let cacheFolderId = null;
+const cacheIndex = new Map();      // 動画ID -> {id, dur}
+let cacheReady = null;
+
+async function ensureCacheFolder(){
+  if (cacheFolderId) return cacheFolderId;
+
+  const typed = els.cacheFolder.value.trim() || localStorage.getItem("bcs_cachefolder") || "";
+  if (typed){ cacheFolderId = typed; els.cacheFolder.value = typed; return cacheFolderId; }
+
+  // ルート直下に同名フォルダがあれば再利用する（端末が違っても同じ場所になる）
+  const items = await listFolder("0");
+  const hit = items.find(e => e.type === "folder" && e.name === CACHE_FOLDER_NAME);
+  if (hit){ cacheFolderId = hit.id; }
+  else{
+    const r = await fetch(API + "/folders", {
+      method:"POST",
+      headers:{Authorization:"Bearer " + token(), "Content-Type":"application/json"},
+      body: JSON.stringify({name: CACHE_FOLDER_NAME, parent:{id:"0"}})
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) cacheFolderId = d.id;
+    else if (r.status === 409 && d.context_info && d.context_info.conflicts)
+      cacheFolderId = d.context_info.conflicts[0].id;      // 同名が既にある
+    else throw new Error("共有フォルダを作れません: " + r.status);
+    log("共有サムネイルフォルダ: " + cacheFolderId);
+  }
+  els.cacheFolder.value = cacheFolderId;
+  localStorage.setItem("bcs_cachefolder", cacheFolderId);
+  return cacheFolderId;
+}
+
+async function loadCacheIndex(force){
+  if (cacheReady && !force) return cacheReady;
+  cacheReady = (async () => {
+    if (!els.shareThumbs.checked) return;
+    await ensureCacheFolder();
+    cacheIndex.clear();
+    const entries = await listFolder(cacheFolderId);
+    for (const e of entries){
+      if (e.type !== "file") continue;
+      const m = /^(\d+)~(\d+)\.jpg$/.exec(e.name);
+      if (m) cacheIndex.set(m[1], {id:e.id, dur: Number(m[2]) || null});
+    }
+    log(`共有サムネイル: ${cacheIndex.size} 本ぶんが Box にあります`);
+  })().catch(err => { log("共有キャッシュの読み込みに失敗:", err.message); });
+  return cacheReady;
+}
+
+// 5 コマを横に連結して 1 枚にする
+async function composeSheet(frames){
+  const bmps = await Promise.all(frames.map(b => createImageBitmap(b)));
+  const w = Math.max(...bmps.map(b => b.width));
+  const h = Math.max(...bmps.map(b => b.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = w * bmps.length; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  bmps.forEach((b,i) => { ctx.drawImage(b, i*w, 0, w, h); b.close && b.close(); });
+  return new Promise(r => canvas.toBlob(r, "image/jpeg", .85));
+}
+
+// 連結された 1 枚を 5 コマに戻す
+async function splitSheet(blob, n){
+  const bmp = await createImageBitmap(blob);
+  const w = Math.round(bmp.width / n), h = bmp.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  const out = [];
+  for (let i = 0; i < n; i++){
+    ctx.clearRect(0,0,w,h);
+    ctx.drawImage(bmp, i*w, 0, w, h, 0, 0, w, h);
+    out.push(await new Promise(r => canvas.toBlob(r, "image/jpeg", .9)));
+  }
+  bmp.close && bmp.close();
+  return out;
+}
+
+async function fetchSharedThumbs(file){
+  const hit = cacheIndex.get(file.id);
+  if (!hit) return null;
+  const r = await fetch(`${API}/files/${hit.id}/content`, {headers:{Authorization:"Bearer " + token()}});
+  if (!r.ok) throw new Error("共有サムネイルの取得 " + r.status);
+  const frames = await splitSheet(await r.blob(), FRAME_COUNT);
+  return {id:file.id, frames, total:0, interval:null, duration:hit.dur || null,
+          ok:true, pending:false, hq:true, shared:true, ts:Date.now()};
+}
+
+async function uploadSharedThumbs(file, rec){
+  if (!els.shareThumbs.checked) return;
+  if (!rec.ok || rec.frames.length !== FRAME_COUNT) return;
+  try{
+    await ensureCacheFolder();
+    const dur = Math.round(rec.duration || (rec.interval && rec.total ? rec.interval * rec.total : 0));
+    const name = `${file.id}~${dur}.jpg`;
+    const sheet = await composeSheet(rec.frames);
+    const existing = cacheIndex.get(file.id);
+
+    const url = existing ? `${UPLOAD_API}/files/${existing.id}/content` : `${UPLOAD_API}/files/content`;
+    const fd = new FormData();
+    fd.append("attributes", JSON.stringify(existing ? {name} : {name, parent:{id:cacheFolderId}}));
+    fd.append("file", sheet, name);
+
+    const r = await fetch(url, {method:"POST", headers:{Authorization:"Bearer " + token()}, body: fd});
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.entries && d.entries[0]){
+      cacheIndex.set(file.id, {id: d.entries[0].id, dur});
+    }else if (r.status === 409 && d.context_info && d.context_info.conflicts){
+      cacheIndex.set(file.id, {id: d.context_info.conflicts.id || d.context_info.conflicts[0].id, dur});
+    }else if (!r.ok){
+      log("共有サムネイルの保存に失敗", file.name, r.status);
+    }
+  }catch(err){ log("共有サムネイルの保存に失敗", file.name, err.message); }
+}
+
 async function buildHiRes(file){
   const rec = {id:file.id, frames:[], total:0, interval:null, ok:false, pending:false, hq:true, duration:null, ts:Date.now()};
   const cap = await captureFromVideo(originalUrl(file), SAMPLE_POINTS);
@@ -1042,6 +1178,7 @@ async function buildHiRes(file){
   rec.ok = true;
   log(`高画質 ${file.name} → ${cap.w}x${cap.h} × 5 コマ`);
   await idbPut("thumbs", rec);
+  await uploadSharedThumbs(file, rec);
   return rec;
 }
 
@@ -1055,6 +1192,17 @@ async function buildThumbs(file){
     try{ return await buildHiRes(file); }
     catch(err){ log("高画質に失敗、filmstrip に戻します:", file.name, err.message); }
     if (cached && cached.ok) return cached;
+  }
+
+  // 他の端末が作ったものが Box にあれば、それを 1 回落として使う
+  if (els.shareThumbs.checked){
+    await loadCacheIndex();
+    if (cacheIndex.has(file.id)){
+      try{
+        const shared = await fetchSharedThumbs(file);
+        if (shared){ await idbPut("thumbs", shared); return shared; }
+      }catch(err){ log("共有サムネイルを使えません", file.name, err.message); }
+    }
   }
 
   const frameW = Math.max(40, Number(els.fw.value) || 160);
@@ -1082,7 +1230,10 @@ async function buildThumbs(file){
     rec.pending = true;   // 通信エラーは一時的なものとして扱う
   }
   // 生成待ちのものは保存しない（保存すると二度と再試行されないため）
-  if (!rec.pending) await idbPut("thumbs", rec);
+  if (!rec.pending){
+    await idbPut("thumbs", rec);
+    await uploadSharedThumbs(file, rec);
+  }
   return rec;
 }
 
@@ -1630,10 +1781,12 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   for (const rec of await idbAll("marks"))
     marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [], dirty:!!rec.dirty});
 
-  els.clientId.value = localStorage.getItem("bcs_client") || "";
-  els.worker.value   = localStorage.getItem("bcs_worker") || "";
+  // 端末に保存された値を優先し、無ければ上の DEFAULTS を使う
+  els.clientId.value = localStorage.getItem("bcs_client") || DEFAULTS.clientId;
+  els.worker.value   = localStorage.getItem("bcs_worker") || DEFAULTS.worker;
   els.token.value    = localStorage.getItem("bcs_token") || "";
   els.folder.value   = localStorage.getItem("bcs_folder") || "0";
+  els.cacheFolder.value = localStorage.getItem("bcs_cachefolder") || "";
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   document.documentElement.style.setProperty("--col", els.col.value + "px");
   els.redirUri.textContent = redirectUri();
