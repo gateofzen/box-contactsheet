@@ -695,6 +695,8 @@ async function loadChildren(id, force){
   }
 
   node.videos = entries.filter(isVideo).length;
+  log(`フォルダ「${node.name}」(${id}): 項目 ${entries.length} / サブフォルダ `
+      + `${entries.filter(e => e.type === "folder").length} / 動画 ${node.videos}`);
   node.kids = entries.filter(e => e.type === "folder")
     .sort((a,b) => a.name.localeCompare(b.name, "ja"))
     .map(e => { ensureNode(e.id, e.name); return e.id; });
@@ -764,12 +766,15 @@ function folderRow(id, depth){
   return wrap;
 }
 
-async function initTree(rootId){
+// 指定した ID をツリーの起点に張り替える。
+// 起点の切り替えは常に行う（過去に子として見たことがあるかは無関係）。
+async function initTree(rootId, force){
   froot = rootId || "0";
-  ensureNode(froot, await fetchFolderName(froot));
+  const node = ensureNode(froot);
+  if (!node.name || node.name === froot) node.name = await fetchFolderName(froot);
   fopen.add(froot);
-  if (!fsel) selectFolder(froot);
-  try{ await loadChildren(froot); }
+  selectFolder(froot);
+  try{ await loadChildren(froot, force); }
   catch(err){ log("フォルダツリーの初期化に失敗:", err.message); }
   renderTree();
 }
@@ -1555,7 +1560,7 @@ els.scan.addEventListener("click", async () => {
   saveSettings();
   await ensureFresh();
   if (!await checkAuth()) return;
-  if (!fnode.has(els.folder.value.trim() || "0")) await initTree(els.folder.value.trim() || "0");
+  await initTree(els.folder.value.trim() || "0");
   scan();
 });
 els.login.addEventListener("click", startLogin);
@@ -1575,10 +1580,14 @@ els.loadFolder.addEventListener("click", async () => {
 });
 els.prefetch.addEventListener("click", prefetchThumbs);
 els.treeReload.addEventListener("click", async () => {
-  const target = fsel || froot;
+  const typed = els.folder.value.trim();
   say("Box からフォルダを取り直しています…");
-  try{ await loadChildren(target, true); say(""); }
-  catch(err){ say("取り直しに失敗しました: " + err.message, true); }
+  try{
+    // フォルダ ID 欄が今の起点と違うなら、そちらへ張り替える
+    if (typed && typed !== froot) await initTree(typed, true);
+    else await loadChildren(fsel || froot, true);
+    say("");
+  }catch(err){ say("取り直しに失敗しました: " + err.message, true); }
 });
 
 // ファイル一覧だけ取り直す。サムネイルは温存されるので、
