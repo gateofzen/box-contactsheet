@@ -288,7 +288,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v22</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v23</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -2009,10 +2009,9 @@ async function openPlayer(file, startAt){
   els.pVideo.src = originalUrl(file);
   armDualAudio(file);                // 音は最初から音声要素が担当する
   els.pNote.textContent = "原本を再生中";
-  if (startAt != null){
-    els.pVideo.addEventListener("loadedmetadata", () => {
-      if (isFinite(els.pVideo.duration)) els.pVideo.currentTime = els.pVideo.duration * startAt;
-    }, {once:true});
+  pendingStart = (startAt != null) ? startAt : null;
+  if (pendingStart != null){
+    els.pVideo.addEventListener("loadedmetadata", applyPendingStart, {once:true});
   }
   els.pVideo.play().catch(() => {});
 
@@ -2439,6 +2438,20 @@ const dashAudio = {
 // 音声を鳴らし始めることも制限される。そこで最初から音声要素に音を担当させ、
 // 映像は消音して絵だけを出す。画面が消えても鳴り続けているものは止まらない。
 let audioOnly = false;          // 利用者が 🎧 を押した状態
+let pendingStart = null;        // コマをクリックして指定された開始位置（0〜1）
+
+// 音声と映像の両方が受け付けられる状態になってから開始位置へ飛ぶ
+function applyPendingStart(){
+  if (pendingStart == null) return;
+  const dur = isFinite(els.pVideo.duration) ? els.pVideo.duration
+            : (isFinite(els.pAudio.duration) ? els.pAudio.duration : 0);
+  if (!dur) return;
+  if (dualActive() && !dashAudio.ready && els.pAudio.readyState < 1) return;  // 音声待ち
+  const t = dur * pendingStart;
+  pendingStart = null;
+  seekTo(t);
+  log("開始位置: " + fmtTC(t));
+}
 let posterUrlForSession = null;
 let driftTimer = null;
 
@@ -2512,6 +2525,7 @@ async function armDualAudio(file){
     if (await dashAudio.start(file, els.pAudio)){
       audioKind = "DASH 音声のみ";
       bindDual();
+      if (pendingStart != null) applyPendingStart();
       els.pNote.textContent = "再生中（音声: DASH 音声のみ・背景再生可）";
       if (!els.pVideo.paused) syncAudioTo(els.pVideo.currentTime, true);
       return;
@@ -2540,23 +2554,56 @@ async function armDualAudio(file){
 // そちらに合わせると音声が何度も巻き戻って同じ箇所を繰り返してしまう。
 let syncing = false;                 // こちらが位置を書き換えている最中の印
 
+let videoShouldPlay = false;
+
 function bindDual(){
   els.pVideo.muted = true;          // 音は音声要素が出す
   els.pVideo.volume = 0;
   els.pVideo.addEventListener("play",   onVidPlay);
   els.pVideo.addEventListener("pause",  onVidPause);
   els.pVideo.addEventListener("seeked", onVidSeek);
+
+  // 音声が区間を取りに行っている間は映像も待たせる。
+  // 待たせないと映像だけ先に進み、補正で引き戻されて同じ数秒を繰り返す。
+  els.pAudio.addEventListener("seeking", onAudStall);
+  els.pAudio.addEventListener("waiting", onAudStall);
+  els.pAudio.addEventListener("playing", onAudReady);
+
   clearInterval(driftTimer);
   driftTimer = setInterval(() => {
-    if (audioOnly || els.pVideo.paused || els.pAudio.paused || syncing) return;
+    if (audioOnly || syncing) return;
+    if (els.pVideo.paused || els.pAudio.paused) return;
+    if (els.pAudio.seeking || els.pAudio.readyState < 3) return;   // 音声が準備中
     const d = els.pVideo.currentTime - els.pAudio.currentTime;
-    if (Math.abs(d) > 0.7){
-      // 映像の側を音声に合わせる（音は途切れない）
-      syncing = true;
-      els.pVideo.currentTime = els.pAudio.currentTime;
-      setTimeout(() => { syncing = false; }, 250);
-    }
+    if (Math.abs(d) > 0.7) alignVideo();
   }, 2000);
+}
+
+// 映像を音声の位置に合わせる（音は触らない）
+function alignVideo(){
+  syncing = true;
+  els.pVideo.currentTime = els.pAudio.currentTime;
+  setTimeout(() => { syncing = false; }, 300);
+}
+
+function onAudStall(){
+  if (audioOnly || !dualActive()) return;
+  if (!els.pVideo.paused){
+    videoShouldPlay = true;
+    syncing = true;
+    els.pVideo.pause();
+    setTimeout(() => { syncing = false; }, 100);
+  }
+}
+
+function onAudReady(){
+  if (audioOnly || !dualActive()) return;
+  alignVideo();
+  if (videoShouldPlay){
+    videoShouldPlay = false;
+    els.pVideo.play().catch(()=>{});
+  }
+  if (pendingStart != null) applyPendingStart();
 }
 function onVidPlay(){
   if (audioOnly) return;
@@ -2573,6 +2620,10 @@ function onVidSeek(){
 
 function stopDual(){
   dashAudio.stop();
+  videoShouldPlay = false;
+  els.pAudio.removeEventListener("seeking", onAudStall);
+  els.pAudio.removeEventListener("waiting", onAudStall);
+  els.pAudio.removeEventListener("playing", onAudReady);
   clearInterval(driftTimer); driftTimer = null;
   els.pVideo.removeEventListener("play", onVidPlay);
   els.pVideo.removeEventListener("pause", onVidPause);
