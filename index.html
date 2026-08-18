@@ -314,7 +314,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v32</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v33</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -2247,257 +2247,267 @@ els.col.addEventListener("input", () => {
 els.pClose.addEventListener("click", closePlayer);
 els.pFav.addEventListener("click", () => { if (currentFile) setFav(currentFile.id, !getMark(currentFile.id).fav); });
 els.scrim.addEventListener("click", e => { if (e.target === els.scrim) closePlayer(); });
-/* ============ 音声だけを取り出して流す（DASH + MSE） ============ */
-// Box の dash 表現は音声と映像が別々の流れに分かれている。
-// 音声の流れだけを <audio> に流し込めば、映像トラックを含まない
-// 純粋な音声再生になるため、Android でも画面オフで鳴り続ける。
+/* ============ DASH の区間配信で再生する（音声・映像とも） ============ */
+// Box の dash 表現は音声と映像が別々の流れに分かれ、数秒ごとの区間に刻まれている。
+//  ・音声だけを <audio> に流す → 映像トラックを含まないので画面オフでも鳴り続ける
+//  ・映像だけを <video> に流す → 飛んだ先の 1 区間（数百 KB）を取るだけで済むので
+//    5GB の原本を読み直すのに比べてシークが桁違いに速い
 
-const dashAudio = {
-  ms: null, sb: null, el: null,
-  segs: null,          // {init, template, start, count, segDur, codecs, timescale, duration}
-  next: 0, busy: false, stopped: true, ready: false,
+let mpdCache = {id:null, xml:null, url:null};
 
-  async start(file, audioEl){
-    this.stop();
-    this.el = audioEl;
-    this.stopped = false;
+async function getMpd(file){
+  if (mpdCache.id === file.id && mpdCache.xml) return mpdCache;
+  let repInfo;
+  try{
+    repInfo = await waitForRep(await getRepresentation(file.id, "[dash]") || {}, 6);
+  }catch(err){ log("dash 表現の取得に失敗: " + err.message); return null; }
 
-    const info = await this.loadManifest(file);
-    if (!info) return false;
-    this.segs = info;
-
-    const mime = `audio/mp4; codecs="${info.codecs}"`;
-    if (!("MediaSource" in window) || !MediaSource.isTypeSupported(mime)){
-      log("この端末は " + mime + " を扱えません");
-      return false;
-    }
-
-    this.ms = new MediaSource();
-    audioEl.src = URL.createObjectURL(this.ms);
-
-    await new Promise(res => this.ms.addEventListener("sourceopen", res, {once:true}));
-    if (this.stopped) return false;
-
-    this.sb = this.ms.addSourceBuffer(mime);
-    this.sb.mode = "segments";
-    let dur = info.duration;
-    if (!isFinite(dur) || !dur) dur = els.pVideo && isFinite(els.pVideo.duration) ? els.pVideo.duration : 0;
-    if (isFinite(dur) && dur){
-      try{ this.ms.duration = dur; }catch(_){}
-    }else{
-      log("音声の総再生時間が不明です。先の位置へ飛べない場合があります。");
-    }
-
-    await this.append(await this.fetchSeg(info.init));
-    this.next = info.start;
-    this.ready = true;
-
-    this.sb.addEventListener("updateend", () => this.pump());
-    audioEl.addEventListener("timeupdate", () => this.pump());
-    audioEl.addEventListener("progress",   () => this.pump());
-    audioEl.addEventListener("waiting",    () => this.pump());
-    audioEl.addEventListener("seeking", () => this.onSeek());
-    document.addEventListener("visibilitychange", () => this.pump());
-    this.pump();
-
-    log(`音声ストリーム開始: ${info.codecs} / ${info.count} 区間 / 1 区間 ${info.segDur.toFixed(1)} 秒`);
-    return true;
-  },
-
-  stop(){
-    this.stopped = true; this.ready = false;
-    try{ if (this.ms && this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
-    this.ms = null; this.sb = null; this.segs = null; this.next = 0; this.busy = false;
-  },
-
-  // dash 表現の manifest を取って、音声の流れの定義を抜き出す
-  async loadManifest(file){
-    let repInfo;
-    try{
-      repInfo = await waitForRep(await getRepresentation(file.id, "[dash]") || {}, 6);
-    }catch(err){ log("dash 表現の取得に失敗: " + err.message); return null; }
-
-    const tmpl = repInfo && repInfo.rep && repInfo.rep.content && repInfo.rep.content.url_template;
-    if (!tmpl){
-      log(repInfo && repInfo.pending ? "dash 表現を Box が生成中です" : "この動画に dash 表現がありません");
-      return null;
-    }
-    const manifestUrl = tmpl.replace("{+asset_path}", "manifest.mpd");
-
-    const r = await fetch(this.auth(manifestUrl));
-    if (!r.ok){ log("manifest の取得に失敗: " + r.status); return null; }
-    const xml = new DOMParser().parseFromString(await r.text(), "application/xml");
-
-    if (xml.getElementsByTagName("ContentProtection").length){
-      log("この dash は暗号化されています（DRM）。音声だけの取り出しはできません。");
-      return null;
-    }
-    const sets = [...xml.getElementsByTagName("AdaptationSet")];
-    const aset = sets.find(a =>
-      (a.getAttribute("mimeType") || "").startsWith("audio") ||
-      (a.getAttribute("contentType") || "") === "audio" ||
-      [...a.getElementsByTagName("Representation")]
-        .some(r2 => (r2.getAttribute("mimeType") || "").startsWith("audio")));
-    if (!aset){ log("manifest に音声の流れが見つかりません"); return null; }
-
-    const rep = [...aset.getElementsByTagName("Representation")][0];
-    if (!rep){ log("音声の Representation がありません"); return null; }
-
-    const codecs = rep.getAttribute("codecs") || aset.getAttribute("codecs") || "mp4a.40.2";
-    const st = aset.getElementsByTagName("SegmentTemplate")[0]
-            || rep.getElementsByTagName("SegmentTemplate")[0];
-    if (!st){ log("SegmentTemplate 形式ではないため対応できません"); return null; }
-
-    const timescale = Number(st.getAttribute("timescale") || 1);
-    const segDur = Number(st.getAttribute("duration") || 0) / timescale;
-    const start = Number(st.getAttribute("startNumber") || 1);
-    const repId = rep.getAttribute("id") || "";
-    const bw = rep.getAttribute("bandwidth") || "";
-
-    const fill = p => p.replace(/\$RepresentationID\$/g, repId)
-                       .replace(/\$Bandwidth\$/g, bw);
-    const initPath  = fill(st.getAttribute("initialization") || "");
-    const mediaPath = fill(st.getAttribute("media") || "");
-    if (!initPath || !mediaPath || !segDur){
-      log("manifest の記述が想定と異なります"); return null;
-    }
-
-    const duration = this.mpdDuration(xml);
-    const count = segDur ? Math.ceil(duration / segDur) : 0;
-
-    return {
-      base: manifestUrl,
-      init: new URL(initPath, manifestUrl).href,
-      template: (n) => new URL(mediaPath.replace(/\$Number(%0\d+d)?\$/g, m => {
-        const pad = /%0(\d+)d/.exec(m);
-        return pad ? String(n).padStart(Number(pad[1]), "0") : String(n);
-      }), manifestUrl).href,
-      start, count, segDur, codecs, timescale, duration
-    };
-  },
-
-  mpdDuration(xml){
-    const d = xml.documentElement.getAttribute("mediaPresentationDuration") || "";
-    const m = /P(?:.*?T)?(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?/.exec(d);
-    if (!m) return Infinity;
-    return (Number(m[1]||0)*3600) + (Number(m[2]||0)*60) + Number(m[3]||0);
-  },
-
-  auth(url){ return url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token()); },
-
-  async fetchSeg(url){
-    // 期限切れはここで直す。1 分ごとのタイマーは画面オフで間引かれるため、
-    // 区間を取りに行くこの経路（再生が続く限り必ず通る）で面倒を見る。
-    await ensureFresh();
-
-    let r = await fetch(this.auth(url));
-    if (r.status === 401){
-      log("音声区間が 401。トークンを更新して取り直します");
-      try{
-        await refreshTokens();
-        r = await fetch(this.auth(url));
-      }catch(err){ throw new Error("トークン更新に失敗: " + err.message); }
-    }
-    if (!r.ok) throw new Error("区間 " + r.status);
-    return r.arrayBuffer();
-  },
-
-  append(buf){
-    return new Promise((res, rej) => {
-      if (!this.sb) return rej(new Error("バッファがありません"));
-      const done = () => { this.sb.removeEventListener("updateend", done); res(); };
-      this.sb.addEventListener("updateend", done);
-      const onErr = () => { this.sb.removeEventListener("updateend", done); rej(new Error("区間の展開に失敗")); };
-      this.sb.addEventListener("error", onErr, {once:true});
-      try{ this.sb.appendBuffer(buf); }catch(err){ this.sb.removeEventListener("updateend", done); rej(err); }
-    });
-  },
-
-  bufferedAhead(){
-    const el = this.el;
-    if (!el || !this.sb || !this.sb.buffered.length) return 0;
-    const t = el.currentTime;
-    for (let i = 0; i < this.sb.buffered.length; i++){
-      if (this.sb.buffered.start(i) <= t + 0.1 && t <= this.sb.buffered.end(i) + 0.1)
-        return this.sb.buffered.end(i) - t;
-    }
-    return 0;
-  },
-
-  // 先読みが足りなければ次の区間を足す。
-  // 画面オフだとブラウザがタイマーを間引くため、setTimeout で繋がず
-  // ひとつの繰り返しの中で必要な分をまとめて取る。
-  // 先読みの秒数。飛んだ直後は少なめにして、鳴り出すまでを短くする。
-  target(){
-    if (this.justSeeked) return 12;
-    return document.hidden ? 300 : 90;
-  },
-
-  async pump(){
-    if (this.busy){ this.again = true; return; }   // 走っている先読みに合図だけ残す
-    if (!this.ready || this.stopped || !this.sb) return;
-    const last = this.segs.start + this.segs.count - 1;
-    const gen = this.gen || 0;
-
-    this.busy = true; this.again = false;
-    try{
-      while (!this.stopped && (this.gen || 0) === gen
-             && this.next <= last && this.bufferedAhead() < this.target()){
-        const buf = await this.fetchSeg(this.segs.template(this.next));
-        if (this.stopped || (this.gen || 0) !== gen) break;   // シークで打ち切られた
-        await this.append(buf);
-        this.next++;
-        this.retry = 0;
-        await this.trim();
-      }
-      if (!this.stopped && this.next > last){
-        try{ if (this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
-      }
-    }catch(err){
-      if (!this.stopped){
-        log("音声区間の取得に失敗: " + err.message);
-        this.retry = (this.retry || 0) + 1;
-        if (this.retry <= 20){
-          // 通信の一時的な不調とみなして、間を空けて続きから取り直す
-          const wait = Math.min(15000, 1000 * this.retry);
-          setTimeout(() => { if (!this.stopped) this.pump(); }, wait);
-        }else{
-          log("音声の取得を諦めました（連続 20 回失敗）");
-        }
-      }
-    }finally{
-      this.busy = false;
-      if (this.again && !this.stopped){ this.again = false; this.pump(); }
-    }
-  },
-
-  // 後ろに溜まった分を捨ててメモリを抑える
-  async trim(){
-    if (!this.sb || this.sb.updating || !this.sb.buffered.length) return;
-    const t = this.el.currentTime;
-    const start = this.sb.buffered.start(0);
-    if (t - start > 240){
-      try{ this.sb.remove(start, t - 180); }catch(_){}
-    }
-  },
-
-  onSeek(){
-    if (!this.ready || !this.segs) return;
-    const t = this.el.currentTime;
-    if (this.bufferedAhead() > 3) return;         // 既に持っていれば何もしない
-
-    // 古い位置の先読みを打ち切り、飛んだ先を最優先で取りに行く
-    this.gen = (this.gen || 0) + 1;
-    this.next = this.segs.start + Math.max(0, Math.floor(t / this.segs.segDur));
-    if (this.sb && !this.sb.updating){
-      try{ this.sb.abort(); }catch(_){}
-    }
-    this.again = false;
-    this.justSeeked = true;
-    setTimeout(() => { this.justSeeked = false; this.pump(); }, 1500);
-    this.pump();
+  const tmpl = repInfo && repInfo.rep && repInfo.rep.content && repInfo.rep.content.url_template;
+  if (!tmpl){
+    log(repInfo && repInfo.pending ? "dash 表現を Box が生成中です" : "この動画に dash 表現がありません");
+    return null;
   }
-};
+  const url = tmpl.replace("{+asset_path}", "manifest.mpd");
+  const r = await fetch(url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token()));
+  if (!r.ok){ log("manifest の取得に失敗: " + r.status); return null; }
+  const xml = new DOMParser().parseFromString(await r.text(), "application/xml");
+  if (xml.getElementsByTagName("ContentProtection").length){
+    log("この dash は暗号化されています（DRM）。区間配信は使えません。");
+    return null;
+  }
+  mpdCache = {id:file.id, xml, url};
+  return mpdCache;
+}
+
+function mpdDuration(xml){
+  const d = xml.documentElement.getAttribute("mediaPresentationDuration") || "";
+  const m = /P(?:.*?T)?(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?/.exec(d);
+  if (!m) return Infinity;
+  return (Number(m[1]||0)*3600) + (Number(m[2]||0)*60) + Number(m[3]||0);
+}
+
+function createDashStream(kind){          // kind は "audio" か "video"
+  return {
+    kind,
+    ms: null, sb: null, el: null, segs: null,
+    next: 0, busy: false, again: false, stopped: true, ready: false,
+    gen: 0, retry: 0, justSeeked: false,
+
+    async start(file, mediaEl){
+      this.stop();
+      this.el = mediaEl;
+      this.stopped = false;
+
+      const info = await this.loadManifest(file);
+      if (!info) return false;
+      this.segs = info;
+
+      const mime = `${this.kind}/mp4; codecs="${info.codecs}"`;
+      if (!("MediaSource" in window) || !MediaSource.isTypeSupported(mime)){
+        log("この端末は " + mime + " を扱えません");
+        return false;
+      }
+
+      this.ms = new MediaSource();
+      mediaEl.src = URL.createObjectURL(this.ms);
+      await new Promise(res => this.ms.addEventListener("sourceopen", res, {once:true}));
+      if (this.stopped) return false;
+
+      this.sb = this.ms.addSourceBuffer(mime);
+      this.sb.mode = "segments";
+      if (isFinite(info.duration) && info.duration){
+        try{ this.ms.duration = info.duration; }catch(_){}
+      }
+
+      await this.append(await this.fetchSeg(info.init));
+      this.next = info.start;
+      this.ready = true;
+
+      this.sb.addEventListener("updateend", () => this.pump());
+      mediaEl.addEventListener("timeupdate", () => this.pump());
+      mediaEl.addEventListener("progress",   () => this.pump());
+      mediaEl.addEventListener("waiting",    () => this.pump());
+      mediaEl.addEventListener("seeking",    () => this.onSeek());
+      document.addEventListener("visibilitychange", () => this.pump());
+      this.pump();
+
+      log(`${this.kind === "audio" ? "音声" : "映像"}ストリーム開始: ${info.codecs} / `
+        + `${info.count} 区間 / 1 区間 ${info.segDur.toFixed(1)} 秒`);
+      return true;
+    },
+
+    stop(){
+      this.stopped = true; this.ready = false; this.gen++;
+      try{ if (this.ms && this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
+      this.ms = null; this.sb = null; this.segs = null;
+      this.next = 0; this.busy = false; this.again = false;
+    },
+
+    async loadManifest(file){
+      const mpd = await getMpd(file);
+      if (!mpd) return null;
+      const xml = mpd.xml, manifestUrl = mpd.url;
+
+      const sets = [...xml.getElementsByTagName("AdaptationSet")];
+      const belongs = a =>
+        (a.getAttribute("mimeType") || "").startsWith(this.kind) ||
+        (a.getAttribute("contentType") || "") === this.kind ||
+        [...a.getElementsByTagName("Representation")]
+          .some(r => (r.getAttribute("mimeType") || "").startsWith(this.kind));
+      const aset = sets.find(belongs);
+      if (!aset){ log(`manifest に ${this.kind} の流れが見つかりません`); return null; }
+
+      const reps = [...aset.getElementsByTagName("Representation")];
+      if (!reps.length){ log(`${this.kind} の Representation がありません`); return null; }
+
+      // 映像は画質の良いものを選ぶ（縦 1080 以内で最大帯域）
+      let rep = reps[0];
+      if (this.kind === "video"){
+        const usable = reps.filter(r => Number(r.getAttribute("height") || 0) <= 1080);
+        rep = (usable.length ? usable : reps)
+          .reduce((best, r) => Number(r.getAttribute("bandwidth")||0) > Number(best.getAttribute("bandwidth")||0) ? r : best);
+        log(`映像の画質: ${rep.getAttribute("width")||"?"}x${rep.getAttribute("height")||"?"} `
+          + `${Math.round(Number(rep.getAttribute("bandwidth")||0)/1000)} kbps`);
+      }
+
+      const codecs = rep.getAttribute("codecs") || aset.getAttribute("codecs")
+                   || (this.kind === "audio" ? "mp4a.40.2" : "avc1.4d401f");
+      const st = rep.getElementsByTagName("SegmentTemplate")[0]
+              || aset.getElementsByTagName("SegmentTemplate")[0];
+      if (!st){ log("SegmentTemplate 形式ではないため対応できません"); return null; }
+
+      const timescale = Number(st.getAttribute("timescale") || 1);
+      const segDur = Number(st.getAttribute("duration") || 0) / timescale;
+      const start = Number(st.getAttribute("startNumber") || 1);
+      const repId = rep.getAttribute("id") || "";
+      const bw = rep.getAttribute("bandwidth") || "";
+      const fill = p => p.replace(/\$RepresentationID\$/g, repId).replace(/\$Bandwidth\$/g, bw);
+      const initPath  = fill(st.getAttribute("initialization") || "");
+      const mediaPath = fill(st.getAttribute("media") || "");
+      if (!initPath || !mediaPath || !segDur){
+        log("manifest の記述が想定と異なります"); return null;
+      }
+
+      let duration = mpdDuration(xml);
+      if ((!isFinite(duration) || !duration) && els.pVideo && isFinite(els.pVideo.duration))
+        duration = els.pVideo.duration;
+      const count = segDur ? Math.ceil(duration / segDur) : 0;
+
+      return {
+        init: new URL(initPath, manifestUrl).href,
+        template: n => new URL(mediaPath.replace(/\$Number(%0\d+d)?\$/g, m => {
+          const pad = /%0(\d+)d/.exec(m);
+          return pad ? String(n).padStart(Number(pad[1]), "0") : String(n);
+        }), manifestUrl).href,
+        start, count, segDur, codecs, timescale, duration
+      };
+    },
+
+    auth(url){ return url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token()); },
+
+    async fetchSeg(url){
+      await ensureFresh();
+      let r = await fetch(this.auth(url));
+      if (r.status === 401){
+        try{ await refreshTokens(); r = await fetch(this.auth(url)); }
+        catch(err){ throw new Error("トークン更新に失敗: " + err.message); }
+      }
+      if (!r.ok) throw new Error("区間 " + r.status);
+      return r.arrayBuffer();
+    },
+
+    append(buf){
+      return new Promise((res, rej) => {
+        if (!this.sb) return rej(new Error("バッファがありません"));
+        const done = () => { this.sb.removeEventListener("updateend", done); res(); };
+        this.sb.addEventListener("updateend", done);
+        try{ this.sb.appendBuffer(buf); }
+        catch(err){ this.sb.removeEventListener("updateend", done); rej(err); }
+      });
+    },
+
+    bufferedAhead(){
+      const el = this.el;
+      if (!el || !this.sb || !this.sb.buffered.length) return 0;
+      const t = el.currentTime;
+      for (let i = 0; i < this.sb.buffered.length; i++){
+        if (this.sb.buffered.start(i) <= t + 0.1 && t <= this.sb.buffered.end(i) + 0.1)
+          return this.sb.buffered.end(i) - t;
+      }
+      return 0;
+    },
+
+    // 先読みの秒数。飛んだ直後は少なめにして、映り出すまでを短くする。
+    target(){
+      if (this.justSeeked) return this.kind === "video" ? 8 : 12;
+      if (this.kind === "video") return 45;          // 映像は重いので控えめ
+      return document.hidden ? 300 : 90;
+    },
+
+    async pump(){
+      if (this.busy){ this.again = true; return; }
+      if (!this.ready || this.stopped || !this.sb) return;
+      const last = this.segs.start + this.segs.count - 1;
+      const gen = this.gen;
+
+      this.busy = true; this.again = false;
+      try{
+        while (!this.stopped && this.gen === gen
+               && this.next <= last && this.bufferedAhead() < this.target()){
+          const buf = await this.fetchSeg(this.segs.template(this.next));
+          if (this.stopped || this.gen !== gen) break;
+          await this.append(buf);
+          this.next++;
+          this.retry = 0;
+          await this.trim();
+        }
+        if (!this.stopped && this.next > last){
+          try{ if (this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
+        }
+      }catch(err){
+        if (!this.stopped){
+          log(`${this.kind} 区間の取得に失敗: ` + err.message);
+          this.retry++;
+          if (this.retry <= 20){
+            const wait = Math.min(15000, 1000 * this.retry);
+            setTimeout(() => { if (!this.stopped) this.pump(); }, wait);
+          }else log(`${this.kind} の取得を諦めました（連続 20 回失敗）`);
+        }
+      }finally{
+        this.busy = false;
+        if (this.again && !this.stopped){ this.again = false; this.pump(); }
+      }
+    },
+
+    async trim(){
+      if (!this.sb || this.sb.updating || !this.sb.buffered.length) return;
+      const t = this.el.currentTime;
+      const start = this.sb.buffered.start(0);
+      const keep = this.kind === "video" ? 60 : 180;
+      if (t - start > keep + 60){
+        try{ this.sb.remove(start, t - keep); }catch(_){}
+      }
+    },
+
+    onSeek(){
+      if (!this.ready || !this.segs) return;
+      if (this.bufferedAhead() > 3) return;      // 既に持っていれば取り直さない
+      const t = this.el.currentTime;
+
+      // 走行中の先読みを打ち切り、飛んだ先を最優先で取る
+      this.gen++;
+      this.next = this.segs.start + Math.max(0, Math.floor(t / this.segs.segDur));
+      if (this.sb && !this.sb.updating){ try{ this.sb.abort(); }catch(_){} }
+      this.again = false;
+      this.justSeeked = true;
+      setTimeout(() => { this.justSeeked = false; this.pump(); }, 1500);
+      this.pump();
+    }
+  };
+}
+
+const dashAudio = createDashStream("audio");
+const dashVideo = createDashStream("video");
 
 /* ---- 画面オフでも音声を続ける ---- */
 // Android は画面が消えると <video> を止める。しかも、消えた「後」に
@@ -2554,6 +2564,7 @@ async function resolveAudioSrc(file){
 }
 
 let audioKind = "";
+let videoKind = "原本";
 let resumeTries = 0;
 
 function watchAudio(){
@@ -2604,6 +2615,19 @@ async function armDualAudio(file){
       startAudioWatchdog();
       startAudioProgressWatch();
       els.pNote.textContent = "再生中（音声: DASH 音声のみ・背景再生可）";
+
+      // 映像も区間配信に切り替える。原本は 1 秒あたり約 2MB あり、
+      // 飛ぶたびに大量に読み直すため反応が鈍い。
+      try{
+        const keep = els.pVideo.currentTime;
+        if (await dashVideo.start(file, els.pVideo)){
+          videoKind = "DASH";
+          if (keep > 0) els.pVideo.currentTime = keep;
+          els.pNote.textContent = "再生中（区間配信・背景再生可）";
+        }
+      }catch(err){ log("DASH 映像を使えません: " + err.message); dashVideo.stop(); }
+
+      if (wantPlay && els.pVideo.paused) els.pVideo.play().catch(()=>{});
       if (!els.pVideo.paused) syncAudioTo(els.pVideo.currentTime, true);
       return;
     }
@@ -2705,10 +2729,21 @@ function fallbackToVideoAudio(reason){
   log("音声連携を解除します（理由: " + reason + "）");
   say("音声を分離できなかったため通常再生にしました（背景再生は使えません）");
   const t = els.pVideo.currentTime;
+  const wasDashVideo = dashVideo.ready;
   stopDual();                       // 映像の消音が解除される
   els.pVideo.muted = false;
   els.pVideo.volume = userVolume || 1;
   els.pNote.textContent = "原本を再生中（背景再生は使えません）";
+  if (wasDashVideo && currentFile){
+    // 区間配信の映像には音声トラックが無いので、原本に戻す
+    videoKind = "原本";
+    els.pVideo.src = originalUrl(currentFile);
+    els.pVideo.addEventListener("loadedmetadata", () => {
+      els.pVideo.currentTime = t;
+      if (wantPlay) els.pVideo.play().catch(()=>{});
+    }, {once:true});
+    return;
+  }
   if (wantPlay && els.pVideo.paused){
     els.pVideo.currentTime = t;
     els.pVideo.play().catch(err => log("再生に失敗: " + err.message));
@@ -2833,6 +2868,7 @@ function onVidSeek(){
 
 function stopDual(){
   clearTimeout(watchdogTimer);
+  dashVideo.stop();
   clearTimeout(stallReleaseTimer);
   clearInterval(progressTimer); progressTimer = null;
   dashAudio.stop();
