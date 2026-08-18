@@ -277,9 +277,10 @@ b{font-weight:600}
     <div class="mark">Contact&nbsp;Sheet<small id="ver">v10</small></div>
     <div class="search">
       <span>⌕</span>
-      <input id="q" type="search" placeholder="動画を絞り込む" aria-label="絞り込み">
+      <input id="q" type="search" placeholder="動画を絞り込む" aria-label="絞り込み"
+             autocomplete="off" autocorrect="off" spellcheck="false">
     </div>
-    <button id="filterBtn" class="iconbtn" title="タグで絞り込む" aria-label="タグ">☆</button>
+    <button id="loginTop" class="btn btn-go" hidden>ログイン</button>
     <button id="advBtn" class="iconbtn" title="設定" aria-label="設定">⚙</button>
   </div>
   <div id="pbar" class="pbar"></div>
@@ -316,9 +317,11 @@ b{font-weight:600}
     <div id="sentinel" class="sentinel"></div>
 
     <div id="empty" class="empty">
-      <h2>フォルダを選んでください</h2>
-      <p>左のフォルダ一覧から選ぶと、その中の動画がサムネイル付きで並びます。</p>
-      <p class="m-only">左上の ☰ からフォルダを開けます。</p>
+      <h2 id="emptyTitle">フォルダを選んでください</h2>
+      <p id="emptyText">左のフォルダ一覧から選ぶと、その中の動画がサムネイル付きで並びます。</p>
+      <p id="emptyHint" class="m-only">左上の ☰ からフォルダを開けます。</p>
+      <p><button id="loginBig" class="btn btn-go" hidden
+                 style="padding:11px 26px;font-size:13px">Box でログイン</button></p>
     </div>
 
     <details class="panel" id="advBox">
@@ -405,8 +408,9 @@ b{font-weight:600}
             <div class="rack" style="margin-top:10px">
               <div class="field"><label for="folder">起点フォルダ ID</label>
                 <input id="folder" class="w-id" type="text" value="0" inputmode="numeric"></div>
-              <div class="field"><label for="cacheFolder">共有サムネイル置き場</label>
-                <input id="cacheFolder" class="w-id" type="text" placeholder="自動作成" inputmode="numeric"></div>
+              <div class="field"><label for="cacheFolder">共有サムネイル</label>
+                <input id="cacheFolder" class="w-id" type="text" value="未作成" readonly
+                       title="各フォルダ直下の _ContactSheetCache に自動で保存されます"></div>
               <div class="field"><label for="token">開発者トークン（予備）</label>
                 <input id="token" class="w-token" type="password" autocomplete="off"></div>
             </div>
@@ -503,7 +507,8 @@ const els = {};
 ["token","folder","depth","recurse","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
- "advBox","advBtn","filterBtn","chiprow","statusline","pbar","exportBtn","importBtn","importFile",
+ "advBox","advBtn","chiprow","statusline","pbar","exportBtn","importBtn","importFile",
+ "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
  "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast"].forEach(k => els[k] = $(k));
@@ -597,6 +602,7 @@ function saveAuth(){
   localStorage.setItem("bcs_auth", JSON.stringify(auth));
   els.logout.hidden = !auth.access;
   els.login.textContent = auth.access ? "ログインし直す" : "Box でログイン";
+  renderAuthState();
 }
 function clearAuth(){
   auth.access = auth.refresh = null; auth.exp = 0;
@@ -681,7 +687,6 @@ function saveSettings(){
   localStorage.setItem("bcs_worker", els.worker.value.trim());
   localStorage.setItem("bcs_token", els.token.value.trim());
   localStorage.setItem("bcs_folder", els.folder.value.trim());
-  localStorage.setItem("bcs_cachefolder", els.cacheFolder.value.trim());
 }
 
 /* ============ Box API ============ */
@@ -717,6 +722,24 @@ async function boxFetch(path, opts = {}){
 function setAuth(ok, text){
   els.authDot.className = "dot " + (ok ? "on" : "off");
   els.authText.textContent = text || (ok ? "接続済み" : "未接続");
+  renderAuthState(ok);
+}
+
+// ログインが必要なときは、設定の奥ではなく画面の前面に出す
+function renderAuthState(ok){
+  const signedIn = (ok === undefined) ? !!(auth.access || els.token.value.trim()) : !!ok;
+  els.loginTop.hidden = signedIn;
+  els.loginBig.hidden = signedIn;
+  if (signedIn){
+    els.emptyTitle.textContent = "フォルダを選んでください";
+    els.emptyText.textContent  = "左のフォルダ一覧から選ぶと、その中の動画がサムネイル付きで並びます。";
+    els.emptyHint.hidden = false;
+  }else{
+    els.emptyTitle.textContent = "Box にログインしてください";
+    els.emptyText.textContent  = "ボタンを押すと Box の認証画面に移ります。1 度ログインすれば、この端末では次回から自動で接続します。";
+    els.emptyHint.hidden = true;
+    els.empty.hidden = false;
+  }
 }
 async function checkAuth(){
   try{
@@ -928,6 +951,9 @@ function folderRow(id, depth){
 // 指定した ID をツリーの起点に張り替える。
 // 起点の切り替えは常に行う（過去に子として見たことがあるかは無関係）。
 async function initTree(rootId, force){
+  if (froot !== (rootId || "0")){
+    resetSharedCache();
+  }
   froot = rootId || "0";
   const node = ensureNode(froot);
   if (!node.name || node.name === froot) node.name = await fetchFolderName(froot);
@@ -1090,10 +1116,17 @@ async function scan(){
       folders++;
       for (const e of entries){
         if (e.type === "folder"){
+          if (e.name === CACHE_FOLDER_NAME){
+            // このフォルダのサムネイル置き場。親フォルダに紐づけて覚えておく
+            cacheFolderByParent.set(node.id, e.id);
+            updateCacheStatus();
+            continue;                       // 中は走査しない
+          }
           if (node.depth < maxDepth) queue.push({id:e.id, depth:node.depth+1, path:node.path + "/" + e.name});
         }else if (isVideo(e)){
           absorbMetadata(e);
-          files.push({id:e.id, name:e.name, size:e.size, modified:e.modified_at, path:node.path});
+          files.push({id:e.id, name:e.name, size:e.size, modified:e.modified_at,
+                      path:node.path, parentId:node.id});
         }
       }
       setBusy(true); els.progress.textContent = `走査中 — フォルダ ${folders} / 残り ${queue.length} / 動画 ${files.length}`;
@@ -1218,55 +1251,90 @@ async function captureFromVideo(src, points){
 }
 
 /* ============ Box 共有サムネイルキャッシュ ============ */
-// 5 コマを 1 枚に連結した JPEG を Box の専用フォルダに置き、
-// 端末間で使い回す。ファイル名は「動画ID~秒数.jpg」。
-let cacheFolderId = null;
-const cacheIndex = new Map();      // 動画ID -> {id, dur}
-let cacheReady = null;
+// 動画が入っているフォルダそれぞれの直下に _ContactSheetCache を作り、
+// その中に「動画ID~秒数.jpg」（5 コマを横に連結した 1 枚）を置く。
+// 動画と同じ場所に置かれるので、そのフォルダを共有している相手だけが共有できる。
+let shareReadOnly = false;
+const cacheFolderByParent = new Map();   // 親フォルダID -> キャッシュフォルダID（無ければ null）
+const cacheIndexByParent  = new Map();   // 親フォルダID -> Map(動画ID -> {id, dur})
+const cacheIndexLoading   = new Map();   // 親フォルダID -> Promise（同時実行の重複を防ぐ）
 
-async function ensureCacheFolder(){
-  if (cacheFolderId) return cacheFolderId;
+function resetSharedCache(){
+  cacheFolderByParent.clear();
+  cacheIndexByParent.clear();
+  cacheIndexLoading.clear();
+  shareReadOnly = false;
+  updateCacheStatus();
+}
+function updateCacheStatus(){
+  const n = [...cacheFolderByParent.values()].filter(Boolean).length;
+  els.cacheFolder.value = n ? `${n} フォルダで共有中` + (shareReadOnly ? "（読み取り専用）" : "")
+                            : (shareReadOnly ? "読み取り専用" : "未作成");
+}
 
-  const typed = els.cacheFolder.value.trim() || localStorage.getItem("bcs_cachefolder") || "";
-  if (typed){ cacheFolderId = typed; els.cacheFolder.value = typed; return cacheFolderId; }
+// 親フォルダ直下のキャッシュフォルダを探す。create=true なら無ければ作る。
+async function getCacheFolder(parentId, create){
+  if (cacheFolderByParent.has(parentId)){
+    const known = cacheFolderByParent.get(parentId);
+    if (known || !create) return known;
+  }
+  let found = null;
+  try{
+    const items = await listFolder(parentId);
+    const hit = items.find(e => e.type === "folder" && e.name === CACHE_FOLDER_NAME);
+    if (hit) found = hit.id;
+  }catch(err){ log("キャッシュ探索に失敗", parentId, err.message); }
 
-  // ルート直下に同名フォルダがあれば再利用する（端末が違っても同じ場所になる）
-  const items = await listFolder("0");
-  const hit = items.find(e => e.type === "folder" && e.name === CACHE_FOLDER_NAME);
-  if (hit){ cacheFolderId = hit.id; }
-  else{
+  if (!found && create && !shareReadOnly){
     const r = await fetch(API + "/folders", {
       method:"POST",
       headers:{Authorization:"Bearer " + token(), "Content-Type":"application/json"},
-      body: JSON.stringify({name: CACHE_FOLDER_NAME, parent:{id:"0"}})
+      body: JSON.stringify({name: CACHE_FOLDER_NAME, parent:{id: parentId}})
     });
     const d = await r.json().catch(() => ({}));
-    if (r.ok) cacheFolderId = d.id;
+    if (r.ok) found = d.id;
     else if (r.status === 409 && d.context_info && d.context_info.conflicts)
-      cacheFolderId = d.context_info.conflicts[0].id;      // 同名が既にある
-    else throw new Error("共有フォルダを作れません: " + r.status);
-    log("共有サムネイルフォルダ: " + cacheFolderId);
+      found = d.context_info.conflicts[0].id;
+    else if (r.status === 403){
+      shareReadOnly = true;
+      log("フォルダ " + parentId + " に書き込む権限がありません。以後は読み取りのみ。");
+      say("共有サムネイルは読み取り専用です（編集権限がないため保存しません）");
+    }else{
+      log("キャッシュフォルダを作れません", parentId, r.status);
+    }
+    if (found) log(`キャッシュフォルダ作成: 親 ${parentId} -> ${found}`);
   }
-  els.cacheFolder.value = cacheFolderId;
-  localStorage.setItem("bcs_cachefolder", cacheFolderId);
-  return cacheFolderId;
+
+  cacheFolderByParent.set(parentId, found);
+  updateCacheStatus();
+  return found;
 }
 
-async function loadCacheIndex(force){
-  if (cacheReady && !force) return cacheReady;
-  cacheReady = (async () => {
-    if (!els.shareThumbs.checked) return;
-    await ensureCacheFolder();
-    cacheIndex.clear();
-    const entries = await listFolder(cacheFolderId);
-    for (const e of entries){
-      if (e.type !== "file") continue;
-      const m = /^(\d+)~(\d+)\.jpg$/.exec(e.name);
-      if (m) cacheIndex.set(m[1], {id:e.id, dur: Number(m[2]) || null});
-    }
-    log(`共有サムネイル: ${cacheIndex.size} 本ぶんが Box にあります`);
-  })().catch(err => { log("共有キャッシュの読み込みに失敗:", err.message); });
-  return cacheReady;
+// 親フォルダごとに、既にあるサムネイルの一覧を 1 回だけ読む
+function getCacheIndex(parentId){
+  if (cacheIndexByParent.has(parentId)) return Promise.resolve(cacheIndexByParent.get(parentId));
+  if (cacheIndexLoading.has(parentId)) return cacheIndexLoading.get(parentId);
+
+  const job = (async () => {
+    const map = new Map();
+    try{
+      const folderId = await getCacheFolder(parentId, false);
+      if (folderId){
+        for (const e of await listFolder(folderId)){
+          if (e.type !== "file") continue;
+          const m = /^(\d+)~(\d+)\.jpg$/.exec(e.name);
+          if (m) map.set(m[1], {id:e.id, dur: Number(m[2]) || null});
+        }
+        if (map.size) log(`共有サムネイル ${map.size} 件（フォルダ ${parentId}）`);
+      }
+    }catch(err){ log("共有サムネイル一覧の取得に失敗", parentId, err.message); }
+    cacheIndexByParent.set(parentId, map);
+    cacheIndexLoading.delete(parentId);
+    return map;
+  })();
+
+  cacheIndexLoading.set(parentId, job);
+  return job;
 }
 
 // 5 コマを横に連結して 1 枚にする
@@ -1299,36 +1367,47 @@ async function splitSheet(blob, n){
 }
 
 async function fetchSharedThumbs(file){
-  const hit = cacheIndex.get(file.id);
+  if (!els.shareThumbs.checked || !file.parentId) return null;
+  const index = await getCacheIndex(file.parentId);
+  const hit = index.get(file.id);
   if (!hit) return null;
   const r = await fetch(`${API}/files/${hit.id}/content`, {headers:{Authorization:"Bearer " + token()}});
   if (!r.ok) throw new Error("共有サムネイルの取得 " + r.status);
   const frames = await splitSheet(await r.blob(), FRAME_COUNT);
   return {id:file.id, frames, total:0, interval:null, duration:hit.dur || null,
-          ok:true, pending:false, hq:true, shared:true, ts:Date.now()};
+          ok:true, pending:false, hq:false, shared:true, ts:Date.now()};
 }
 
 async function uploadSharedThumbs(file, rec){
-  if (!els.shareThumbs.checked) return;
+  if (!els.shareThumbs.checked || shareReadOnly || !file.parentId) return;
   if (!rec.ok || rec.frames.length !== FRAME_COUNT) return;
   try{
-    await ensureCacheFolder();
+    const folderId = await getCacheFolder(file.parentId, true);
+    if (!folderId) return;
+    const index = await getCacheIndex(file.parentId);
+
     const dur = Math.round(rec.duration || (rec.interval && rec.total ? rec.interval * rec.total : 0));
     const name = `${file.id}~${dur}.jpg`;
     const sheet = await composeSheet(rec.frames);
-    const existing = cacheIndex.get(file.id);
+    const existing = index.get(file.id);
 
     const url = existing ? `${UPLOAD_API}/files/${existing.id}/content` : `${UPLOAD_API}/files/content`;
     const fd = new FormData();
-    fd.append("attributes", JSON.stringify(existing ? {name} : {name, parent:{id:cacheFolderId}}));
+    fd.append("attributes", JSON.stringify(existing ? {name} : {name, parent:{id: folderId}}));
     fd.append("file", sheet, name);
 
     const r = await fetch(url, {method:"POST", headers:{Authorization:"Bearer " + token()}, body: fd});
     const d = await r.json().catch(() => ({}));
     if (r.ok && d.entries && d.entries[0]){
-      cacheIndex.set(file.id, {id: d.entries[0].id, dur});
+      index.set(file.id, {id: d.entries[0].id, dur});
     }else if (r.status === 409 && d.context_info && d.context_info.conflicts){
-      cacheIndex.set(file.id, {id: d.context_info.conflicts.id || d.context_info.conflicts[0].id, dur});
+      const c = d.context_info.conflicts;
+      index.set(file.id, {id: (c.id || (c[0] && c[0].id)), dur});
+    }else if (r.status === 403){
+      shareReadOnly = true;
+      updateCacheStatus();
+      log("共有サムネイルへの書き込み権限がありません。以後は読み取りのみで動作します。");
+      say("共有サムネイルは読み取り専用です（編集権限がないため保存しません）");
     }else if (!r.ok){
       log("共有サムネイルの保存に失敗", file.name, r.status);
     }
@@ -1348,10 +1427,31 @@ async function buildHiRes(file){
 }
 
 
+// 主画像用の大きな静止画。Box が動画向けに持っている最大 1024px の JPEG。
+// 動画の復号が不要なので、フィルムストリップと同じくらい速い。
+async function fetchPoster(fileId){
+  try{
+    const got = await waitForRep(await getRepresentation(fileId, "[jpg?dimensions=1024x1024]") || {}, 3);
+    const url = repContentUrl(got.rep);
+    if (!url) return null;
+    return await fetchBlob(url);
+  }catch(err){ log("ポスター画像の取得に失敗", fileId, err.message); return null; }
+}
+
+// 5 コマが揃っている記録に、主画像用の大きな 1 枚を足す
+async function withPoster(file, rec){
+  if (!rec || !rec.ok) return rec;
+  if (rec.hq || rec.poster || rec.posterTried) return rec;   // 高画質版は元から鮮明
+  rec.poster = await fetchPoster(file.id);
+  rec.posterTried = true;
+  await idbPut("thumbs", rec);
+  return rec;
+}
+
 async function buildThumbs(file){
   const cached = await idbGet("thumbs", file.id);
   if (cached && cached.ok && cached.frames && cached.frames.length){
-    if (!els.autohq.checked || cached.hq) return cached;
+    if (!els.autohq.checked || cached.hq) return withPoster(file, cached);
   }
   if (els.autohq.checked){
     try{ return await buildHiRes(file); }
@@ -1359,15 +1459,12 @@ async function buildThumbs(file){
     if (cached && cached.ok) return cached;
   }
 
-  // 他の端末が作ったものが Box にあれば、それを 1 回落として使う
+  // 同じフォルダの _ContactSheetCache に誰かが作ったものがあれば、それを使う
   if (els.shareThumbs.checked){
-    await loadCacheIndex();
-    if (cacheIndex.has(file.id)){
-      try{
-        const shared = await fetchSharedThumbs(file);
-        if (shared){ await idbPut("thumbs", shared); return shared; }
-      }catch(err){ log("共有サムネイルを使えません", file.name, err.message); }
-    }
+    try{
+      const shared = await fetchSharedThumbs(file);
+      if (shared){ await idbPut("thumbs", shared); return withPoster(file, shared); }
+    }catch(err){ log("共有サムネイルを使えません", file.name, err.message); }
   }
 
   const frameW = Math.max(40, Number(els.fw.value) || 160);
@@ -1398,6 +1495,7 @@ async function buildThumbs(file){
   if (!rec.pending){
     await idbPut("thumbs", rec);
     await uploadSharedThumbs(file, rec);
+    await withPoster(file, rec);
   }
   return rec;
 }
@@ -1469,7 +1567,7 @@ function buildRail(){
     els.railTags.appendChild(c);
   });
 
-  els.chiprow.hidden = !files.length && els.chiprow.hidden;
+  els.chiprow.hidden = !files.length;
   els.tagOptions.innerHTML = "";
   [...counts.keys()].sort((a,b)=>a.localeCompare(b,"ja")).forEach(t => {
     const o = document.createElement("option"); o.value = t; els.tagOptions.appendChild(o);
@@ -1688,6 +1786,7 @@ async function paintThumbs(file, fromCache){
 
   // 差し替えのため既存の画像を捨ててから描き直す
   ref.strip.querySelectorAll("img").forEach(i => { URL.revokeObjectURL(i.src); i.remove(); });
+  ref.hero.innerHTML = "";
   const n = rec.frames.length;
   const urls = rec.frames.map(b => URL.createObjectURL(b));
   const tcOf = i => {
@@ -1696,18 +1795,32 @@ async function paintThumbs(file, fromCache){
     return "";
   };
 
-  // 主画像 — 既定は中央のコマ
+  // 主画像 — 既定は Box の大きな静止画。無ければ中央のコマ。
   ref.hero.innerHTML = "";
   const heroImg = document.createElement("img");
   const heroTc = document.createElement("span");
   heroTc.className = "tc";
   ref.hero.appendChild(heroImg); ref.hero.appendChild(heroTc);
 
+  const posterUrl = rec.poster ? URL.createObjectURL(rec.poster) : null;
+  const defaultIdx = Math.min(2, n - 1);
+
   const showFrame = i => {
     heroImg.src = urls[i];
     heroTc.textContent = tcOf(i);
     heroTc.style.display = tcOf(i) ? "" : "none";
     framesEl.querySelectorAll(".slot").forEach((s,k) => s.classList.toggle("sel", k === i));
+  };
+  const showDefault = () => {
+    if (posterUrl){
+      heroImg.src = posterUrl;
+      heroTc.textContent = rec.duration ? fmtTC(rec.duration)
+        : (rec.interval && rec.total ? fmtTC(rec.total * rec.interval) : "");
+      heroTc.style.display = heroTc.textContent ? "" : "none";
+      framesEl.querySelectorAll(".slot").forEach(s => s.classList.remove("sel"));
+    }else{
+      showFrame(defaultIdx);
+    }
   };
 
   framesEl.classList.toggle("solo", n === 1);
@@ -1723,7 +1836,8 @@ async function paintThumbs(file, fromCache){
     slot.addEventListener("mouseenter", () => showFrame(i));
     slot.addEventListener("click", e => { e.stopPropagation(); openPlayer(file, SAMPLE_POINTS[i]); });
   });
-  showFrame(Math.min(2, n - 1));
+  framesEl.addEventListener("mouseleave", showDefault);
+  showDefault();
 
   if (rec.duration) ref.dur.textContent = "≈ " + fmtTC(rec.duration);
   else if (rec.interval && rec.total > 1) ref.dur.textContent = "≈ " + fmtTC(rec.total * rec.interval);
@@ -1888,9 +2002,12 @@ els.scan.addEventListener("click", async () => {
   scan();
 });
 els.login.addEventListener("click", startLogin);
+els.loginTop.addEventListener("click", startLogin);
+els.loginBig.addEventListener("click", startLogin);
 els.logout.addEventListener("click", () => {
   clearAuth();
   setAuth(false, "ログアウトしました");
+  files = []; els.sheet.innerHTML = ""; applyView();
   say("ログアウトしました。タグとサムネイルは残っています。");
 });
 els.cancel.addEventListener("click", () => scanAbort && scanAbort.abort());
@@ -1914,11 +2031,7 @@ els.advBtn.addEventListener("click", () => {
   els.advBtn.classList.toggle("on", els.advBox.open);
   if (els.advBox.open && els.advBox.scrollIntoView) els.advBox.scrollIntoView({behavior:"smooth", block:"start"});
 });
-els.filterBtn.addEventListener("click", () => {
-  const show = els.chiprow.hidden;
-  els.chiprow.hidden = !show;
-  els.filterBtn.classList.toggle("on", show);
-});
+
 els.treeReload.addEventListener("click", async () => {
   const typed = els.folder.value.trim();
   say("Box からフォルダを取り直しています…");
@@ -1934,7 +2047,7 @@ els.treeReload.addEventListener("click", async () => {
 // Box に動画を追加したときはこちらを使う。
 els.refresh.addEventListener("click", async () => {
   await idbClearStore("folders");
-  cacheReady = null;
+  resetSharedCache();
   say("Box から一覧を取り直しています…");
   await initTree(els.folder.value.trim() || "0", true);
   await openSelectedFolder();
@@ -2040,11 +2153,12 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
     marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [], dirty:!!rec.dirty});
 
   // 端末に保存された値を優先し、無ければ上の DEFAULTS を使う
+  els.q.value = "";                      // ブラウザが復元した値を捨てる
   els.clientId.value = localStorage.getItem("bcs_client") || DEFAULTS.clientId;
   els.worker.value   = localStorage.getItem("bcs_worker") || DEFAULTS.worker;
   els.token.value    = localStorage.getItem("bcs_token") || "";
   els.folder.value   = localStorage.getItem("bcs_folder") || "0";
-  els.cacheFolder.value = localStorage.getItem("bcs_cachefolder") || "";
+  updateCacheStatus();
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   document.documentElement.style.setProperty("--col", els.col.value + "px");
   els.redirUri.textContent = redirectUri();
@@ -2078,8 +2192,11 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   }
 
   if (!auth.access && !els.token.value){
-    els.setupBox.open = !els.clientId.value;
     setAuth(false, "未接続");
+    if (!els.clientId.value || !els.worker.value){
+      els.advBox.open = true; els.setupBox.open = true;
+      say("接続設定にクライアント ID と Worker URL を入力してください", true);
+    }
     return;
   }
 
