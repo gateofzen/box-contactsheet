@@ -267,6 +267,16 @@ b{font-weight:600}
 .player-foot{padding:9px 12px;font-family:var(--mono);font-size:10.5px;color:var(--muted);
   display:flex;gap:14px;flex-wrap:wrap;align-items:center}
 .player-foot .keys{color:var(--line);font-size:9.5px;flex:1;text-align:right}
+/* 拡大している間は上下の帯を隠し、画面いっぱいを映像に使う。
+   狭い枠の中で拡大しても見える範囲が広がらないため。 */
+.player.zooming{position:fixed;inset:0;width:100vw;max-height:100vh;height:100vh;
+  border-radius:0;border:none;z-index:80}
+.player.zooming .player-bar,
+.player.zooming .player-foot{display:none}
+.player.zooming .vzoom{flex:1;height:100vh}
+.player.zooming video{max-height:100vh;height:100vh;width:100%;object-fit:contain}
+.scrim.zooming{padding:0}
+
 .ptoast{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
   background:rgba(11,14,17,.88);border:1px solid var(--amber);color:var(--amber);
   font-family:var(--mono);font-size:15px;padding:9px 18px;border-radius:8px;
@@ -314,7 +324,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v37</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v39</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -2352,7 +2362,7 @@ function createDashEngine(name){
   return {
     name, ms:null, el:null, tracks:[], duration:0, stopped:true, ready:false,
 
-    async start(file, mediaEl, kinds){
+    async start(file, mediaEl, kinds, startAt){
       this.stop();
       this.el = mediaEl; this.stopped = false;
 
@@ -2386,12 +2396,16 @@ function createDashEngine(name){
           sb, next:d.start, busy:false, again:false, gen:0, retry:0, justSeeked:false,
           count: d.segDur ? Math.ceil(this.duration / d.segDur) : 0
         });
+        // 頭から読み始めると、途中の位置で始めたときに無駄な待ちが出る
+        if (startAt > 0) tr.next = tr.start + Math.max(0, Math.floor(startAt / tr.segDur));
         this.tracks.push(tr);
         await this.append(tr, await this.fetchSeg(d.init));
-        log(`${name}: ${d.kind} ${d.label} / 1 区間 ${d.segDur.toFixed(1)} 秒`);
+        log(`${name}: ${d.kind} ${d.label} / 1 区間 ${d.segDur.toFixed(1)} 秒`
+          + (startAt > 0 ? ` / ${fmtTC(startAt)} から開始` : ""));
       }
 
       this.ready = true;
+      if (startAt > 0){ try{ mediaEl.currentTime = startAt; }catch(_){} }
       const kick = () => this.pumpAll();
       mediaEl.addEventListener("timeupdate", kick);
       mediaEl.addEventListener("progress", kick);
@@ -2566,26 +2580,33 @@ function nudgeVolume(d){
 async function enterAudioOnly(){
   if (audioOnly || !currentFile) return;
   const t = els.pVideo.currentTime;
-  els.pAudioBtn.textContent = "…";
+
+  // 先に見た目を切り替える。待ってから切り替えると反応が鈍く感じられる。
+  audioOnly = true;
+  els.audioVeil.hidden = false;
+  els.audioVeil.querySelector(".big").textContent = "🎧 音声を準備しています…";
+  els.pAudioBtn.classList.add("btn-go");
+  els.pVideo.pause();
+
   try{
-    const ok = await dashAudio.start(currentFile, els.pAudio, ["audio"]);
+    const ok = await dashAudio.start(currentFile, els.pAudio, ["audio"], t);
     if (!ok) throw new Error("音声トラックを取り出せません");
-    els.pAudio.currentTime = t;
     els.pAudio.muted = false;
     els.pAudio.volume = userVolume;
     await els.pAudio.play();
-    els.pVideo.pause();
-    audioOnly = true;
-    els.audioVeil.hidden = false;
-    els.pAudioBtn.classList.add("btn-go");
+    els.audioVeil.querySelector(".big").textContent = "🎧 音声のみ再生中";
     els.pNote.textContent = "音声のみ再生中（画面を消しても続きます）";
     log("音声のみ再生に切り替え " + fmtTC(t));
   }catch(err){
     log("音声のみ再生に失敗: " + err.message);
     say("この動画は音声のみ再生に対応していません: " + err.message, true);
+    els.audioVeil.querySelector(".big").textContent = "🎧 音声のみ再生中";
     dashAudio.stop();
-  }finally{
-    els.pAudioBtn.textContent = "🎧";
+    audioOnly = false;
+    els.audioVeil.hidden = true;
+    els.pAudioBtn.classList.remove("btn-go");
+    els.pVideo.currentTime = t;
+    if (wantPlay) els.pVideo.play().catch(()=>{});
   }
 }
 
@@ -2672,10 +2693,23 @@ function applyZoom(){
   els.vzoom.classList.toggle("zoomed", on);
   els.zoomReset.hidden = !on;
   els.zoomReset.textContent = Math.round(zoom.s * 100) + "%　⟲";
+
+  // 拡大中だけ画面いっぱいに広げる（全画面 API は使わないので端末の挙動を邪魔しない）
+  const card = els.scrim.querySelector(".player");
+  if (card && !fsElement()){
+    card.classList.toggle("zooming", on);
+    els.scrim.classList.toggle("zooming", on);
+  }
 }
 function setZoom(scale, focal){
   const prev = zoom.s;
+  const wasOn = prev > 1.01;
   zoom.s = Math.min(6, Math.max(1, scale));
+  // 等倍から拡大に入る瞬間に枠が広がるので、先に反映させてから位置を計算する
+  if (!wasOn && zoom.s > 1.01){
+    const card = els.scrim.querySelector(".player");
+    if (card && !fsElement()){ card.classList.add("zooming"); els.scrim.classList.add("zooming"); }
+  }
   if (focal && prev !== zoom.s){
     // つまんだ位置が画面上で動かないように平行移動を補正する
     const box = els.vzoom.getBoundingClientRect();
