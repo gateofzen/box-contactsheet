@@ -277,8 +277,8 @@ b{font-weight:600}
     <div class="mark">Contact&nbsp;Sheet<small id="ver">v10</small></div>
     <div class="search">
       <span>⌕</span>
-      <input id="q" type="search" placeholder="動画を絞り込む" aria-label="絞り込み"
-             autocomplete="off" autocorrect="off" spellcheck="false">
+      <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
+             aria-label="絞り込み" autocomplete="off" autocorrect="off" spellcheck="false">
     </div>
     <button id="loginTop" class="btn btn-go" hidden>ログイン</button>
     <button id="advBtn" class="iconbtn" title="設定" aria-label="設定">⚙</button>
@@ -406,7 +406,7 @@ b{font-weight:600}
                 <input id="worker" class="w-token" type="text" autocomplete="off"></div>
             </div>
             <div class="rack" style="margin-top:10px">
-              <div class="field"><label for="folder">起点フォルダ ID</label>
+              <div class="field"><label for="folder">ツリーの最上位 (0=すべて)</label>
                 <input id="folder" class="w-id" type="text" value="0" inputmode="numeric"></div>
               <div class="field"><label for="cacheFolder">共有サムネイル</label>
                 <input id="cacheFolder" class="w-id" type="text" value="未作成" readonly
@@ -686,7 +686,7 @@ function saveSettings(){
   localStorage.setItem("bcs_client", els.clientId.value.trim());
   localStorage.setItem("bcs_worker", els.worker.value.trim());
   localStorage.setItem("bcs_token", els.token.value.trim());
-  localStorage.setItem("bcs_folder", els.folder.value.trim());
+  localStorage.setItem("bcs_treeroot", els.folder.value.trim());
 }
 
 /* ============ Box API ============ */
@@ -894,11 +894,39 @@ async function toggleFolder(id){
 
 function selectFolder(id){
   fsel = id;
-  els.folder.value = id;
   const n = fnode.get(id);
-  els.selName.textContent = n ? n.name : id;
-  els.selName.title = id;
+  els.selName.textContent = (n && n.name !== id) ? n.name : "…";
+  els.selName.title = "ID " + id;
+  if (!n || n.name === id){
+    fetchFolderName(id).then(nm => {
+      ensureNode(id, nm);
+      if (fsel === id) els.selName.textContent = nm;
+      renderTree();
+    });
+  }
   renderTree();
+}
+
+// 前回見ていたフォルダまでツリーを開いて選択する
+async function revealFolder(id){
+  try{
+    const d = await boxFetch(`/folders/${id}?fields=name,path_collection`);
+    ensureNode(id, d.name || id);
+    const chain = (d.path_collection && d.path_collection.entries) || [];
+    for (const p of chain){
+      ensureNode(p.id, p.name);
+      if (!fnode.has(froot) || p.id === froot || fnode.has(p.id)){ /* 起点より上は無視 */ }
+      fopen.add(p.id);
+      try{ await loadChildren(p.id); }catch(_){}
+    }
+    fopen.add(id);
+    selectFolder(id);
+    renderTree();
+    return true;
+  }catch(err){
+    log("フォルダ位置の復元に失敗", err.message);
+    return false;
+  }
 }
 
 function renderTree(){
@@ -969,11 +997,10 @@ let openSeq = 0;
 async function openSelectedFolder(){
   if (!fsel) return;
   const seq = ++openSeq;               // 後から選び直されたら、この回は降りる
-  els.folder.value = fsel;
-  saveSettings();
+  localStorage.setItem("bcs_lastfolder", fsel);   // 起点ではなく「前回見ていた場所」
   await ensureFresh();
   if (!await checkAuth()) return;
-  await scan();
+  await scan(fsel);
   if (seq !== openSeq) return;         // 別のフォルダに追い越された
   if (els.autothumb.checked && files.length) await prefetchThumbs();
 }
@@ -1085,8 +1112,8 @@ function absorbMetadata(entry){
   idbPut("marks", {id:entry.id, fav:m.fav, tags:m.tags, dirty:false});
 }
 
-async function scan(){
-  const rootId = els.folder.value.trim() || "0";
+async function scan(scanTarget){
+  const rootId = String(scanTarget || els.folder.value.trim() || "0");
   const maxDepth = els.recurse.checked ? Math.max(0, Number(els.depth.value) || 0) : 0;
 
   // 走査が二重に始まっても壊れないよう、コントローラはローカルに持つ。
@@ -2063,6 +2090,8 @@ els.clear.addEventListener("click", async () => {
   if (files.length) await prefetchThumbs();
   say("");
 });
+let queryTouched = false;
+els.q.addEventListener("input", () => { queryTouched = true; });
 let qTimer = null;
 els.q.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { buildRail(); applyView(); }, 220); });
 els.sort.addEventListener("change", applyView);
@@ -2153,11 +2182,16 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
     marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [], dirty:!!rec.dirty});
 
   // 端末に保存された値を優先し、無ければ上の DEFAULTS を使う
-  els.q.value = "";                      // ブラウザが復元した値を捨てる
+  // ブラウザのフォーム復元は script のあとに走ることがあるので、何度か消す
+  const clearQuery = () => { if (els.q.value && !queryTouched) els.q.value = ""; };
+  clearQuery();
+  setTimeout(clearQuery, 0);
+  setTimeout(clearQuery, 400);
+  window.addEventListener("pageshow", clearQuery);
   els.clientId.value = localStorage.getItem("bcs_client") || DEFAULTS.clientId;
   els.worker.value   = localStorage.getItem("bcs_worker") || DEFAULTS.worker;
   els.token.value    = localStorage.getItem("bcs_token") || "";
-  els.folder.value   = localStorage.getItem("bcs_folder") || "0";
+  els.folder.value   = localStorage.getItem("bcs_treeroot") || "0";
   updateCacheStatus();
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   document.documentElement.style.setProperty("--col", els.col.value + "px");
@@ -2203,8 +2237,15 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   await ensureFresh();
   if (await checkAuth()){
     await initTree(els.folder.value.trim() || "0");
-    say("前回の続きを読み込んでいます…");
-    await scan();
+    const last = localStorage.getItem("bcs_lastfolder");
+    if (last && last !== froot){
+      say("前回の続きを読み込んでいます…");
+      await revealFolder(last);           // 起点はそのままに、前回の場所まで開く
+      await openSelectedFolder();
+    }else{
+      say("前回の続きを読み込んでいます…");
+      await scan();
+    }
     say("");
   }
  }catch(err){
