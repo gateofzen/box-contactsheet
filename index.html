@@ -363,7 +363,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v79</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v80</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -486,9 +486,9 @@ b{font-weight:600}
             <label class="check"><input id="castFirst" type="checkbox"> テレビで観る（区間配信を使わず、押してすぐキャストできる）</label>
             <div class="field"><label for="castQuality">テレビ側の画質</label>
               <select id="castQuality">
-                <option value="0">自動（最高画質まで）</option>
+                <option value="0" selected>自動（最高画質まで）</option>
                 <option value="1080">1080p まで</option>
-                <option value="720" selected>720p まで（途切れにくい）</option>
+                <option value="720">720p まで（途切れにくい）</option>
                 <option value="480">480p まで</option>
               </select></div>
             <div class="field"><label for="conc">同時取得</label>
@@ -3338,6 +3338,16 @@ function bindPresConn(conn){
       els.pNote.textContent = "テレビで再生できません（" + (m.message || m.code) + "）";
       say("テレビ側で再生できませんでした: " + (m.message || m.code), true);
     }
+    else if (m.type === "tracks"){
+      log("テレビ側で選べる画質:");
+      (m.list || []).forEach(t =>
+        log(`  ${t.w}x${t.h}  ${t.bw} kbps${t.active ? "  ← 使用中" : ""}`));
+    }
+    else if (m.type === "stats"){
+      log(`テレビ側の状況: 実測 ${m.estimate} kbps / 再生中の画質 ${m.w}x${m.h} ${m.stream} kbps`
+        + ` / 先読み ${m.ahead} 秒 / 停止 ${m.stalls} 回 ${m.buffering} 秒`
+        + ` / コマ落ち ${m.dropped}（${m.decoded} 中）`);
+    }
     else if (m.type === "track"){
       castTrack = `${m.width}x${m.height} ${Math.round(m.bandwidth/1000)} kbps`;
       log("テレビ側の画質: " + castTrack);
@@ -3940,7 +3950,7 @@ if ("serviceWorker" in navigator){
   els.folder.value   = localStorage.getItem("bcs_treeroot") || "0";
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   els.sort.value     = localStorage.getItem("bcs_sort") || "name";
-  els.castQuality.value = localStorage.getItem("bcs_castq") || "720";
+  els.castQuality.value = localStorage.getItem("bcs_castq") || "0";
   els.personalTags.checked = localStorage.getItem("bcs_personal") !== "0";   // 既定は自分専用
   document.documentElement.style.setProperty("--col", els.col.value + "px");
   els.redirUri.textContent = redirectUri();
