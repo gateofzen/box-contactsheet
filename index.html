@@ -361,7 +361,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v63</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v64</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2357,8 +2357,10 @@ async function openPlayer(file, startAt){
   wantPlay = true;
   playCounted = false;
   castMode = false;
+  castReadyUrl = null;
   els.pCast.classList.remove("btn-go");
   bindCast();
+  if (castSupported()) setTimeout(() => prepareCast(file), 1200);
   pendingStart = (startAt != null) ? startAt : null;
 
   // 区間配信が使えるなら、そちらで再生する（シークが速い）。
@@ -2874,6 +2876,7 @@ function createDashEngine(name){
         const t = parseTrack(mpd.xml, mpd.url, kind);
         if (!t){ log(`${name}: ${kind} のトラックがありません`); return false; }
         const mime = `${kind}/mp4; codecs="${t.codecs}"`;
+        log(`${name}: ${kind} に ${mime} を使います`);
         if (!("MediaSource" in window) || !MediaSource.isTypeSupported(mime)){
           log(`${name}: ${mime} を扱えません`); return false;
         }
@@ -2889,7 +2892,12 @@ function createDashEngine(name){
 
       this.tracks = [];
       for (const d of defs){
-        const sb = this.ms.addSourceBuffer(d.mime);
+        let sb;
+        try{ sb = this.ms.addSourceBuffer(d.mime); }
+        catch(err){
+          log(`${name}: ${d.kind} の入れ物を作れません（${d.mime}）: ${err.message}`);
+          throw err;
+        }
         sb.mode = "segments";
         const tr = Object.assign({}, d, {
           sb, next:d.start, busy:false, again:false, gen:0, retry:0, justSeeked:false,
@@ -3190,6 +3198,18 @@ function waitFor(cond, ms){
 // ブラウザ内で組み立てている区間配信の流れは渡せない。
 // キャストするときだけ、単体で再生できる URL に差し替える。
 let castMode = false;
+let castReadyUrl = null;     // 押した瞬間に使えるよう、先に用意しておく
+let castPreparing = false;
+
+async function prepareCast(file){
+  if (castPreparing || castReadyUrl) return;
+  castPreparing = true;
+  try{
+    castReadyUrl = await castableUrl(file);
+    if (castReadyUrl) log("キャストの準備ができました");
+  }catch(err){ log("キャストの準備に失敗: " + err.message); }
+  finally{ castPreparing = false; }
+}
 
 function castSupported(){
   return !!(els.pVideo.remote && typeof els.pVideo.remote.prompt === "function");
@@ -3224,34 +3244,37 @@ async function castableUrl(file){
   return null;
 }
 
-async function startCast(){
+function startCast(){
   if (!currentFile || !castSupported()) return;
-  const t = els.pVideo.currentTime;
-  const playing = !els.pVideo.paused;
-  els.pCast.textContent = "…";
-  els.pNote.textContent = "キャストの準備をしています…";
-  try{
-    if (videoKind !== "キャスト用"){
-      const url = await castableUrl(currentFile);
-      if (!url) throw new Error("テレビから読める形式が用意できません");
-      dashMain.stop();                       // 区間配信のままでは渡せない
-      videoKind = "キャスト用";
-      els.pVideo.src = url;
-      const ready = await waitFor(() => els.pVideo.readyState >= 1, 12000);
-      if (!ready) throw new Error("動画を読み込めません");
+
+  // ここで待ちを挟むと「利用者が押した」資格が失われ、
+  // prompt() が requires user gesture で拒否される。
+  if (videoKind !== "キャスト用"){
+    if (!castReadyUrl){
+      els.pNote.textContent = "キャストの準備をしています。数秒後にもう一度押してください。";
+      say("キャストの準備中です。数秒後にもう一度押してください。");
+      prepareCast(currentFile);
+      return;
+    }
+    const t = els.pVideo.currentTime;
+    const playing = !els.pVideo.paused;
+    dashMain.stop();                        // 区間配信のままでは渡せない
+    videoKind = "キャスト用";
+    els.pVideo.src = castReadyUrl;
+    els.pVideo.addEventListener("loadedmetadata", () => {
       els.pVideo.currentTime = t;
       if (playing) els.pVideo.play().catch(()=>{});
-    }
-    log("リモート再生の状態: " + (els.pVideo.remote.state || "不明"));
-    els.pNote.textContent = "キャスト先を選んでください…";
-    await els.pVideo.remote.prompt();
-  }catch(err){
-    log("キャストできません: " + err.message);
-    els.pNote.textContent = "キャストできません（" + err.message + "）";
-    say("キャストできません: " + err.message + " — 詳細は診断ログ", true);
-  }finally{
-    els.pCast.textContent = "📺";
+    }, {once:true});
   }
+
+  els.pNote.textContent = "キャスト先を選んでください…";
+  els.pVideo.remote.prompt()
+    .then(() => log("キャスト先を選びました"))
+    .catch(err => {
+      log("キャストできません: " + err.message);
+      els.pNote.textContent = /dismiss/i.test(err.message)
+        ? "キャストを取り消しました" : "キャストできません（" + err.message + "）";
+    });
 }
 
 function bindCast(){
