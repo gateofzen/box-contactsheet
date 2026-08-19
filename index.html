@@ -346,7 +346,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v55</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v56</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1307,6 +1307,21 @@ function matches(f, q){
 }
 
 /* ============ フォルダ走査 ============ */
+// 共有サムネイル置き場の一覧は名前だけあればよい。
+// タグ用のメタデータまで要求すると、Box 側の処理も応答も重くなる。
+async function listFolderLight(id){
+  const out = [];
+  let marker = "";
+  do{
+    const url = `/folders/${id}/items?usemarker=true&limit=1000&fields=id,name,type`
+      + (marker ? "&marker=" + encodeURIComponent(marker) : "");
+    const page = await boxFetch(url);
+    out.push(...(page.entries || []));
+    marker = page.next_marker || "";
+  } while (marker);
+  return out;
+}
+
 async function listFolder(id, signal){
   const out = [];
   let marker = "";
@@ -1584,7 +1599,16 @@ function getCacheIndex(parentId){
     try{
       const folderId = await getCacheFolder(parentId, false);
       if (folderId){
-        for (const e of await listFolder(folderId)){
+        // 一度読んだ一覧は保存しておく（6 時間）
+        const key = "cacheidx:" + folderId;
+        const saved = await idbGet("folders", key);
+        if (saved && Date.now() - saved.ts < 6*60*60*1000){
+          for (const [k,v] of saved.entries) map.set(k, v);
+          cacheIndexByParent.set(parentId, map);
+          cacheIndexLoading.delete(parentId);
+          return map;
+        }
+        for (const e of await listFolderLight(folderId)){
           if (e.type !== "file") continue;
           const m = /^(\d+)~(\d+)(~p)?\.jpg$/.exec(e.name);
           if (!m) continue;
@@ -1593,7 +1617,10 @@ function getCacheIndex(parentId){
           else { cur.id = e.id; cur.dur = Number(m[2]) || null; }
           map.set(m[1], cur);
         }
-        if (map.size) log(`共有サムネイル ${map.size} 件（フォルダ ${parentId}）`);
+        if (map.size){
+          log(`共有サムネイル ${map.size} 件（フォルダ ${parentId}）`);
+          await idbPut("folders", {id:"cacheidx:" + folderId, entries:[...map.entries()], ts:Date.now()});
+        }
       }
     }catch(err){ log("共有サムネイル一覧の取得に失敗", parentId, err.message); }
     cacheIndexByParent.set(parentId, map);
@@ -1929,6 +1956,11 @@ function applyView(){
   view = base.filter(f => matches(f, q));
   viewById.clear();
   for (const f of view) viewById.set(f.id, f);
+  // 表示する動画が属するフォルダの共有一覧を先に読む（検索結果を含む）
+  if (els.shareThumbs.checked){
+    const parents = [...new Set(view.slice(0, 120).map(f => f.parentId).filter(Boolean))];
+    parents.forEach(pid => getCacheIndex(pid));
+  }
 
   const mode = els.sort.value;
   view.sort((a,b) => {
@@ -2539,6 +2571,7 @@ els.refresh.addEventListener("click", async () => {
 // サムネイルだけ捨てる。フレーム幅を変えたときの作り直し用。
 els.clear.addEventListener("click", async () => {
   await idbClearStore("thumbs");
+  cacheIndexByParent.clear(); cacheIndexLoading.clear();
   cachedCount = 0; els.nCached.textContent = "0";
   say("サムネイルを作り直しています…");
   applyView();
