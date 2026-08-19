@@ -315,6 +315,8 @@ b{font-weight:600}
 .player.zooming video{max-height:100vh;height:100vh;width:100%;object-fit:contain}
 .scrim.zooming{padding:0}
 
+.probe{position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:.01;
+  pointer-events:none;z-index:-1}
 .ptoast{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
   background:rgba(11,14,17,.88);border:1px solid var(--amber);color:var(--amber);
   font-family:var(--mono);font-size:15px;padding:9px 18px;border-radius:8px;
@@ -361,7 +363,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v73</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v74</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -582,6 +584,8 @@ b{font-weight:600}
       </div>
     </div>
     <audio id="pAudio" preload="none"></audio>
+    <!-- キャスト機器の探索用。画面には見えないが「描画されている」必要がある -->
+    <video id="castProbe" class="probe" preload="metadata" muted playsinline></video>
     <div class="player-foot">
       <span id="pMeta"></span><span id="pNote"></span>
       <span class="keys">← → 10秒 ／ Shift 併用で60秒 ／ Space 再生 ／ ↑ ↓ 音量 ／ 1–9 位置 ／ + − 拡大縮小 ／ F ★</span>
@@ -647,7 +651,7 @@ const els = {};
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
  "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio","pCast"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -2434,6 +2438,7 @@ async function openPlayer(file, startAt){
 
 function closePlayer(){
   stopCastSearch();
+  try{ els.castProbe.removeAttribute("src"); els.castProbe.load(); }catch(_){}
   castAvailBy.probe = null; castAvailBy.main = null;
   if (fsElement()){ try{ (document.exitFullscreen||document.webkitExitFullscreen).call(document); }catch(_){} }
   resetZoom();
@@ -3241,7 +3246,10 @@ async function prepareCast(file){
   castPreparing = true;
   try{
     castReadyUrl = await castableUrl(file);
-    if (castReadyUrl) log("キャストの準備ができました");
+    if (castReadyUrl){
+      log("キャストの準備ができました");
+      startCastProbe(castReadyUrl);
+    }
   }catch(err){ log("キャストの準備に失敗: " + err.message); }
   finally{ castPreparing = false; }
 }
@@ -3317,10 +3325,18 @@ function startCast(){
     return;
   }
 
+  if (castAvailable !== true){
+    // この状態で要求しても、ブラウザは選択画面を出さずに即座に閉じてしまう
+    startCastSearch();
+    els.pCast.classList.remove("btn-go");
+    say("まだテレビを検出できていません。数十秒かかります。急ぐ場合は Chrome のメニューから「キャスト」を選んでください。", true);
+    log("機器が未検出のため選択画面は出しません");
+    return;
+  }
+
   castPrompting = true;
   els.pNote.textContent = "テレビを選んでください…";
-  log("選択画面を出します（読み込み済み / 機器: "
-    + (castAvailable === null ? "確認中" : castAvailable ? "あり" : "未検出") + "）");
+  log("選択画面を出します（読み込み済み / 機器: あり）");
   els.pVideo.remote.prompt()
     .then(() => log("キャスト先を選びました"))
     .catch(err => {
@@ -3371,7 +3387,26 @@ function setCastAvail(source, v){
   els.pCast.style.opacity = any ? "" : ".45";
   log(`キャストできる機器（${source === "probe" ? "探索用" : "本編"}）: ` + (v ? "あり" : "なし"));
   refreshCastButton();
-  if (any) stopCastSearch();
+  if (any){
+    stopCastSearch();
+    if (els.scrim.classList.contains("open") && !castPrompting){
+      els.pNote.textContent = "テレビが見つかりました。📺 を押すと選べます。";
+      els.pCast.classList.add("btn-go");
+      playerToast("📺 テレビが見つかりました");
+    }
+  }
+}
+
+// 探索は「単一 URL を持ち、描画されている再生要素」があって初めて始まる。
+// 本編は区間配信なので対象外。極小の要素に持たせて視聴中に探させる。
+function startCastProbe(url){
+  const p = els.castProbe;
+  if (!p) return;
+  try{
+    p.src = url;
+    p.load();
+  }catch(_){}
+  watchOn(p, "probe");
 }
 
 function watchOn(el, source){
