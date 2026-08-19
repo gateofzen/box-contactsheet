@@ -356,7 +356,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v57</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v60</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -487,13 +487,16 @@ b{font-weight:600}
           <h4>タグとお気に入り</h4>
           <div class="rack">
             <label class="check"><input id="sync" type="checkbox" checked> タグを Box に保存して端末間で共有</label>
+            <label class="check"><input id="personalTags" type="checkbox" checked> タグ・お気に入り・再生回数を自分専用にする</label>
             <label class="check"><input id="shareThumbs" type="checkbox" checked> サムネイルも Box に置いて共有</label>
             <button id="shareCheck" class="btn btn-sm">共有サムネイルの状態を確認</button>
+            <button id="statsBtn" class="btn btn-sm">全員の再生状況を集計</button>
             <button id="exportBtn" class="btn btn-sm">書き出し</button>
             <button id="importBtn" class="btn btn-sm">読み込み</button>
             <input id="importFile" type="file" accept="application/json" hidden>
           </div>
           <pre id="shareReport" class="report" hidden></pre>
+          <pre id="statsReport" class="report" hidden></pre>
         </div>
 
         <details class="panel" id="setupBox" style="margin-top:6px;border:none;background:none">
@@ -618,12 +621,18 @@ const CACHE_FOLDER_NAME = "_ContactSheetCache";
 const UPLOAD_API = "https://upload.box.com/api/2.0";
 const K_FAV = "csFav", K_TAGS = "csTags", K_PLAYS = "csPlays", K_LAST = "csLast";
 
+// 自分専用にするときは、キー名の後ろに利用者 ID を足す。
+// 同じファイルの中で各自の欄が分かれるので、互いに上書きしない。
+function mdKey(base){
+  return (els.personalTags.checked && boxUserId) ? `${base}_${boxUserId}` : base;
+}
+
 const $ = id => document.getElementById(id);
 const els = {};
-["token","folder","depth","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt",
+["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
- "advBox","advBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport",
+ "advBox","advBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
@@ -917,7 +926,8 @@ function renderAuthState(ok){
 }
 async function checkAuth(){
   try{
-    const me = await boxFetch("/users/me?fields=name,login");
+    const me = await boxFetch("/users/me?fields=name,login,id");
+    boxUserId = String(me.id || "");
     setAuth(true, me.name || me.login || "接続済み");
     return true;
   }catch(e){ setAuth(false,"未接続"); say(String(e.message||e), true); return false; }
@@ -957,8 +967,8 @@ async function runMdQueue(){
   while (mdQueue.length){
     const id = mdQueue.shift();
     const m = getMark(id);
-    const payload = {[K_FAV]: m.fav ? "1" : "0", [K_TAGS]: m.tags.join(","),
-                     [K_PLAYS]: String(m.plays || 0), [K_LAST]: String(m.last || 0)};
+    const payload = {[mdKey(K_FAV)]: m.fav ? "1" : "0", [mdKey(K_TAGS)]: m.tags.join(","),
+                     [mdKey(K_PLAYS)]: String(m.plays || 0), [mdKey(K_LAST)]: String(m.last || 0)};
     try{
       await writeMetadata(id, payload);
       m.dirty = false;
@@ -1357,15 +1367,23 @@ async function listFolder(id, signal){
 const isVideo = e => e.type === "file" &&
   VIDEO_EXT.has((e.extension || e.name.split(".").pop() || "").toLowerCase());
 
+const rawMetaById = new Map();   // 集計用に、他の人の欄も含めて丸ごと控えておく
+
 function absorbMetadata(entry){
   const md = entry.metadata && entry.metadata[MD_SCOPE] && entry.metadata[MD_SCOPE][MD_TPL];
   if (!md) return;
+  rawMetaById.set(entry.id, md);
   const m = getMark(entry.id);
   if (m.dirty) return;                       // ローカルの未送信分を優先
-  m.fav = md[K_FAV] === "1";
-  m.tags = String(md[K_TAGS] || "").split(",").map(normTag).filter(Boolean);
-  m.plays = Number(md[K_PLAYS] || 0) || 0;
-  m.last = Number(md[K_LAST] || 0) || 0;
+  // 自分専用の欄があればそれを、無ければ共有の欄を初期値として読む
+  const pick = base => {
+    const own = mdKey(base);
+    return (md[own] !== undefined) ? md[own] : md[base];
+  };
+  m.fav = pick(K_FAV) === "1";
+  m.tags = String(pick(K_TAGS) || "").split(",").map(normTag).filter(Boolean);
+  m.plays = Number(pick(K_PLAYS) || 0) || 0;
+  m.last = Number(pick(K_LAST) || 0) || 0;
   idbPut("marks", {id:entry.id, fav:m.fav, tags:m.tags, plays:m.plays, last:m.last, dirty:false});
 }
 
@@ -2482,6 +2500,89 @@ els.shareCheck.addEventListener("click", async () => {
   log("共有サムネイルの状態を確認: 共有済み " + matched + "/" + view.length);
 });
 
+/* ---- 全員の再生状況の集計 ---- */
+const userNameCache = new Map();
+
+async function resolveUserName(uid){
+  if (userNameCache.has(uid)) return userNameCache.get(uid);
+  let name = uid;
+  try{
+    const u = await boxFetch(`/users/${uid}?fields=name,login`);
+    name = u.name || u.login || uid;
+  }catch(_){ /* 権限が無ければ ID のまま */ }
+  userNameCache.set(uid, name);
+  return name;
+}
+
+async function metaFor(file){
+  if (rawMetaById.has(file.id)) return rawMetaById.get(file.id);
+  try{
+    const d = await boxFetch(`/files/${file.id}/metadata/${MD_SCOPE}/${MD_TPL}`);
+    rawMetaById.set(file.id, d || {});
+    return d || {};
+  }catch(_){ rawMetaById.set(file.id, {}); return {}; }
+}
+
+els.statsBtn.addEventListener("click", async () => {
+  els.statsReport.hidden = false;
+  if (!view.length){
+    els.statsReport.textContent = "表示中の動画がありません。フォルダを開くか検索してから押してください。";
+    return;
+  }
+  const list = view.slice(0, 400);
+  els.statsBtn.disabled = true;
+  els.statsReport.textContent = `集計しています… （対象 ${list.length} 本）`;
+
+  const byUser = new Map();          // 利用者 -> {plays, titles:Set, last}
+  const byVideo = [];                // [{name, plays}]
+  let fetched = 0;
+
+  const pool2 = [];
+  for (const f of list){
+    pool2.push((async () => {
+      const md = await metaFor(f);
+      fetched++;
+      if (fetched % 20 === 0)
+        els.statsReport.textContent = `集計しています… ${fetched}/${list.length}`;
+      let total = 0;
+      for (const [k, v] of Object.entries(md || {})){
+        const mp = /^csPlays(?:_(\d+))?$/.exec(k);
+        if (!mp) continue;
+        const uid = mp[1] || "shared";
+        const n = Number(v) || 0;
+        if (!n) continue;
+        total += n;
+        const last = Number(md[mp[1] ? `csLast_${mp[1]}` : "csLast"] || 0) || 0;
+        const rec = byUser.get(uid) || {plays:0, titles:new Set(), last:0};
+        rec.plays += n; rec.titles.add(f.name);
+        if (last > rec.last) rec.last = last;
+        byUser.set(uid, rec);
+      }
+      if (total) byVideo.push({name:f.name, plays:total});
+    })());
+  }
+  // 同時に走らせすぎないよう小分けにする
+  for (let i = 0; i < pool2.length; i += 8) await Promise.all(pool2.slice(i, i + 8));
+
+  const rows = [];
+  const entries = [...byUser.entries()].sort((a,b) => b[1].plays - a[1].plays);
+  for (const [uid, rec] of entries){
+    const name = uid === "shared" ? "（共有の記録）" : await resolveUserName(uid);
+    rows.push(`  ${name}: ${rec.plays} 回 / ${rec.titles.size} 本`
+      + (rec.last ? ` / 最終 ${fmtDate(new Date(rec.last).toISOString())}` : ""));
+  }
+  byVideo.sort((a,b) => b.plays - a.plays);
+  const top = byVideo.slice(0, 10).map(v => `  ${v.plays} 回  ${v.name}`);
+
+  els.statsReport.textContent =
+    `対象 ${list.length} 本（うち再生記録あり ${byVideo.length} 本）\n`
+    + (view.length > list.length ? `※ 多いため先頭 ${list.length} 本のみ集計しました\n` : "")
+    + `\n利用者ごとの再生:\n` + (rows.length ? rows.join("\n") : "  記録はありません")
+    + `\n\nよく見られている動画:\n` + (top.length ? top.join("\n") : "  記録はありません");
+  els.statsBtn.disabled = false;
+  log("再生状況を集計: 利用者 " + entries.length + " 名 / 記録のある動画 " + byVideo.length + " 本");
+});
+
 els.exportBtn.addEventListener("click", async () => {
   const all = await idbAll("marks");
   const data = {version:1, exported:new Date().toISOString(),
@@ -2570,6 +2671,19 @@ function openSortMenu(open){
   els.sortBtn.classList.toggle("on", open);
   if (open) markSortMenu();
 }
+els.personalTags.addEventListener("change", async () => {
+  localStorage.setItem("bcs_personal", els.personalTags.checked ? "1" : "0");
+  say(els.personalTags.checked
+    ? "タグとお気に入りを自分専用にしました。他の人の記録とは分かれます。"
+    : "タグとお気に入りを共有に戻しました。全員で同じ記録を使います。");
+  // 読み直すため、フォルダ一覧の控えを捨てて取り直す
+  await idbClearStore("folders");
+  cacheIndexByParent.clear(); cacheIndexLoading.clear();
+  marks.clear();
+  await idbClearStore("marks");
+  if (fsel) openSelectedFolder(false);
+});
+
 els.sortBtn.addEventListener("click", e => {
   e.stopPropagation();
   openSortMenu(els.sortMenu.hidden);
@@ -3345,6 +3459,7 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   els.folder.value   = localStorage.getItem("bcs_treeroot") || "0";
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   els.sort.value     = localStorage.getItem("bcs_sort") || "name";
+  els.personalTags.checked = localStorage.getItem("bcs_personal") !== "0";   // 既定は自分専用
   document.documentElement.style.setProperty("--col", els.col.value + "px");
   els.redirUri.textContent = redirectUri();
   updateCacheStatus();
