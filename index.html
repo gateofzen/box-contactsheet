@@ -361,7 +361,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v65</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v66</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3254,43 +3254,75 @@ async function castableUrl(file){
 function startCast(){
   if (!currentFile || !castSupported()) return;
 
-  // ここで待ちを挟むと「利用者が押した」資格が失われ、
-  // prompt() が requires user gesture で拒否される。
+  // 段階 1: 区間配信のままではブラウザがリモート再生を許可しない。
+  // まず単一の URL へ差し替え、読み込みが済んでから選択画面を出す。
   if (videoKind !== "キャスト用"){
     if (!castReadyUrl){
       els.pNote.textContent = "キャストの準備をしています。数秒後にもう一度押してください。";
-      say("キャストの準備中です。数秒後にもう一度押してください。");
       prepareCast(currentFile);
       return;
     }
     const t = els.pVideo.currentTime;
     const playing = !els.pVideo.paused;
-    dashMain.stop();                        // 区間配信のままでは渡せない
+    dashMain.stop();
     videoKind = "キャスト用";
     els.pVideo.src = castReadyUrl;
     els.pVideo.addEventListener("loadedmetadata", () => {
       els.pVideo.currentTime = t;
       if (playing) els.pVideo.play().catch(()=>{});
+      els.pNote.textContent = "キャストの準備ができました。もう一度 📺 を押してください。";
+      els.pCast.classList.add("btn-go");
+      log("キャスト用の再生に切り替えました（次の操作で選択画面が出ます）");
     }, {once:true});
+    els.pNote.textContent = "キャスト用に切り替えています…";
+    return;
   }
 
+  // 段階 2: 単一 URL で再生中なので、そのまま選択画面を出せる
   if (castPrompting){ log("キャスト先の選択が既に開いています"); return; }
+  if (castAvailable === false){
+    els.pNote.textContent = "近くにキャストできる機器が見つかりません";
+    say("近くにキャストできる機器が見つかりません（同じ Wi-Fi に繋がっているか確認してください）", true);
+    return;
+  }
   castPrompting = true;
   els.pNote.textContent = "キャスト先を選んでください…";
+  log("リモート再生の状態: " + (els.pVideo.remote.state || "不明")
+    + " / 機器: " + (castAvailable === null ? "確認中" : castAvailable ? "あり" : "なし"));
   els.pVideo.remote.prompt()
     .then(() => log("キャスト先を選びました"))
     .catch(err => {
       log("キャストできません: " + err.message);
       els.pNote.textContent = /dismiss/i.test(err.message)
-        ? "キャストを取り消しました" : "キャストできません（" + err.message + "）";
+        ? (castAvailable ? "キャストを取り消しました" : "キャストできる機器が見つかりません")
+        : "キャストできません（" + err.message + "）";
     })
     .finally(() => { castPrompting = false; });
 }
+
+let castAvailable = null;      // 近くに機器があるか（null は未確認）
+let castWatchId = null;
 
 function bindCast(){
   if (!castSupported()){ els.pCast.hidden = true; return; }
   els.pCast.hidden = false;
   const r = els.pVideo.remote;
+
+  // 近くに機器があるかを監視する（見つからないまま押すと空の画面が閉じるだけになる）
+  if (castWatchId !== null && r.cancelWatchAvailability){
+    r.cancelWatchAvailability(castWatchId).catch(() => {});
+    castWatchId = null;
+  }
+  castAvailable = null;
+  if (r.watchAvailability){
+    r.watchAvailability(v => {
+      castAvailable = !!v;
+      els.pCast.title = v ? "テレビにキャスト" : "キャストできる機器が見つかりません";
+      els.pCast.style.opacity = v ? "" : ".45";
+      log("キャストできる機器: " + (v ? "あり" : "なし"));
+    }).then(id => { castWatchId = id; })
+      .catch(err => log("機器の確認ができません: " + err.message));
+  }
   r.addEventListener("connecting", () => log("キャスト先に接続しています…"));
   els.pVideo.addEventListener("error", () => {
     if (videoKind === "キャスト用")
