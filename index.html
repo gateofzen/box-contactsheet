@@ -296,6 +296,14 @@ b{font-weight:600}
 .vzoom.zoomed:active{cursor:grabbing}
 .player video{width:100%;max-height:66vh;background:#000;display:block;
   transform-origin:center center;will-change:transform}
+.castpanel[hidden]{display:none}
+.castpanel{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:14px;background:rgba(11,14,17,.96);padding:24px}
+.castpanel .big{font-family:var(--display);font-size:18px;color:var(--amber)}
+.castpanel .ctime{font-family:var(--mono);font-size:13px;color:var(--muted)}
+.castpanel input[type=range]{width:min(460px,86%);accent-color:var(--amber)}
+.castpanel .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.castpanel .sub{font-family:var(--mono);font-size:10.5px;color:var(--line)}
 .audioveil[hidden]{display:none}
 .audioveil{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;
   background:rgba(11,14,17,.94);text-align:center;cursor:pointer;padding:20px}
@@ -363,7 +371,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v81</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v83</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -486,10 +494,12 @@ b{font-weight:600}
             <label class="check"><input id="castFirst" type="checkbox"> テレビで観る（区間配信を使わず、押してすぐキャストできる）</label>
             <div class="field"><label for="castQuality">テレビ側の画質</label>
               <select id="castQuality">
-                <option value="0" selected>自動（最高画質まで）</option>
+                <option value="orig">原本のまま（最高画質・シークは遅い）</option>
+                <option value="0">自動（回線に合わせる）</option>
+                <option value="-1080" selected>最高画質で固定（切り替わらない）</option>
                 <option value="1080">1080p まで</option>
-                <option value="720">720p まで（途切れにくい）</option>
-                <option value="480">480p まで</option>
+                <option value="720">720p まで</option>
+                <option value="-480">低画質で固定（途切れにくい）</option>
               </select></div>
             <div class="field"><label for="conc">同時取得</label>
               <input id="conc" class="w-num" type="number" value="8" min="1" max="16"></div>
@@ -592,6 +602,18 @@ b{font-weight:600}
     <div id="vzoom" class="vzoom">
       <video id="pVideo" controls playsinline preload="metadata"
              controlsList="nodownload"></video>
+      <div id="castPanel" class="castpanel" hidden>
+        <div class="big">📺 テレビで再生中</div>
+        <div class="ctime"><span id="castNow">0:00</span> / <span id="castDur">0:00</span></div>
+        <input id="castSeek" type="range" min="0" max="1000" value="0" aria-label="再生位置">
+        <div class="row">
+          <button id="castBack" class="btn">◀◀ 10秒</button>
+          <button id="castPlay" class="btn btn-go">一時停止</button>
+          <button id="castFwd" class="btn">30秒 ▶▶</button>
+        </div>
+        <div class="row"><button id="castStop" class="btn btn-stop">キャストを終える</button></div>
+        <div class="sub" id="castInfo"></div>
+      </div>
       <div id="audioVeil" class="audioveil" hidden>
         <div>
           <div class="big">🎧 音声のみ再生中</div>
@@ -666,6 +688,7 @@ const els = {};
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logCopy","logClear","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
+ "castPanel","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom",
  "pAudio","pAudioBtn","audioVeil","bgAudio","pCast","castProbe"].forEach(k => els[k] = $(k));
 
@@ -2754,10 +2777,32 @@ els.personalTags.addEventListener("change", async () => {
   if (fsel) openSelectedFolder(false);
 });
 
+els.castBack.addEventListener("click", () => castSend({type:"seekBy", delta:-10}));
+els.castFwd.addEventListener("click",  () => castSend({type:"seekBy", delta:30}));
+els.castPlay.addEventListener("click", () => {
+  castPlaying = !castPlaying;
+  castSend({type: castPlaying ? "play" : "pause"});
+  els.castPlay.textContent = castPlaying ? "一時停止" : "再生";
+});
+els.castStop.addEventListener("click", () => {
+  castSend({type:"stop"});
+  try{ presConn && presConn.terminate(); }catch(_){}
+  endCast();
+});
+els.castSeek.addEventListener("input", () => { castSeeking = true; });
+els.castSeek.addEventListener("change", () => {
+  const t = castDuration * (Number(els.castSeek.value) / 1000);
+  castSend({type:"seek", time:t});
+  els.castNow.textContent = fmtTC(t);
+  setTimeout(() => { castSeeking = false; }, 800);
+});
+
 els.castQuality.addEventListener("change", () => {
   localStorage.setItem("bcs_castq", els.castQuality.value);
   if (presConn){
-    castSend({type:"quality", maxHeight: Number(els.castQuality.value) || 0});
+    // 原本と区間配信の切り替えは読み込み直しが要る
+    castStartTime = castLastTime || castStartTime;
+    castLoadCurrent();
     say("テレビ側の画質を変更しました");
   }
 });
@@ -3339,6 +3384,11 @@ let presReq = null;
 let presConn = null;
 let castTimeTimer = null;
 let castTrack = "";
+let castStartTime = 0;
+let castPlaying = false;
+let castDuration = 0;
+let castSeeking = false;
+let castLastTime = 0;
 
 function presSupported(){ return typeof PresentationRequest === "function"; }
 
@@ -3383,17 +3433,24 @@ function castSend(obj){
 
 async function castLoadCurrent(){
   if (!presConn || !currentFile) return;
+  const q = els.castQuality.value;
   const payload = {type:"load", token: token(), title: currentFile.name,
-                   time: els.pVideo.currentTime || 0,
-                   maxHeight: Number(els.castQuality.value) || 0};
-  const mpd = await getMpd(currentFile).catch(() => null);
-  if (mpd){
-    payload.manifest = mpd.url;
+                   time: castStartTime || 0,
+                   maxHeight: q === "orig" ? 0 : (Math.abs(Number(q)) || 0),
+                   fixed: q !== "orig" && Number(q) < 0};
+
+  if (q === "orig"){
+    // Box の配信用は元の半分ほどのビットレートに再圧縮されている。
+    // 画質を優先する場合は原本をそのまま渡す。
+    payload.url = originalUrl(currentFile);
+    log("テレビへ送りました: 原本（再圧縮なし）");
   }else{
-    payload.url = castReadyUrl || originalUrl(currentFile);
+    const mpd = await getMpd(currentFile).catch(() => null);
+    if (mpd) payload.manifest = mpd.url;
+    else payload.url = castReadyUrl || originalUrl(currentFile);
+    log("テレビへ送りました: " + (payload.manifest ? "区間配信" : "単一ファイル"));
   }
   castSend(payload);
-  log("テレビへ送りました: " + (payload.manifest ? "区間配信" : "単一ファイル"));
 }
 
 function bindPresConn(conn){
@@ -3401,12 +3458,16 @@ function bindPresConn(conn){
   castMode = true;
   els.pCast.classList.add("btn-go");
   els.pNote.textContent = "テレビへ送っています…";
+  // 位置は「消す前」に控える。消してから読むと 0 になってしまう。
+  castStartTime = els.pVideo.currentTime || 0;
   els.pVideo.pause();
-  // テレビへ渡したら手元での受信は止める。同じ回線を二重に使わないため。
   dashMain.stop();
   try{ els.pVideo.removeAttribute("src"); els.pVideo.load(); }catch(_){}
   videoKind = "テレビ";
-  log("手元の受信を停止しました（テレビ側で再生します）");
+  els.castPanel.hidden = false;
+  els.castPlay.textContent = "一時停止";
+  castPlaying = true;
+  log(`手元の受信を停止しました（テレビ側で ${fmtTC(castStartTime)} から再生します）`);
 
   conn.addEventListener("message", e => {
     let m; try{ m = JSON.parse(e.data); }catch(_){ return; }
@@ -3433,9 +3494,19 @@ function bindPresConn(conn){
     }
     else if (m.type === "track"){
       castTrack = `${m.width}x${m.height} ${Math.round(m.bandwidth/1000)} kbps`;
+      els.castInfo.textContent = castTrack;
       log("テレビ側の画質: " + castTrack);
     }
-    else if (m.type === "time" && m.duration) els.pMeta.textContent =
+    else if (m.type === "time" && m.duration){
+      castDuration = m.duration;
+      castLastTime = m.time;
+      if (!castSeeking){
+        els.castNow.textContent = fmtTC(m.time);
+        els.castDur.textContent = fmtTC(m.duration);
+        els.castSeek.value = String(Math.round(m.time / m.duration * 1000));
+      }
+    }
+    if (m.type === "time" && m.duration) els.pMeta.textContent =
       `テレビ再生中  ${fmtTC(m.time)} / ${fmtTC(m.duration)}`
       + (castTrack ? `  ${castTrack}` : "");
   });
@@ -3460,6 +3531,7 @@ function endCast(){
   castMode = false;
   castTrack = "";
   els.pCast.classList.remove("btn-go");
+  els.castPanel.hidden = true;
   log("キャストを終了しました");
 
   // 手元での再生を組み直す
@@ -4047,7 +4119,7 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   els.folder.value   = localStorage.getItem("bcs_treeroot") || "0";
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   els.sort.value     = localStorage.getItem("bcs_sort") || "name";
-  els.castQuality.value = localStorage.getItem("bcs_castq") || "0";
+  els.castQuality.value = localStorage.getItem("bcs_castq") || "-1080";
   els.personalTags.checked = localStorage.getItem("bcs_personal") !== "0";   // 既定は自分専用
   document.documentElement.style.setProperty("--col", els.col.value + "px");
   els.redirUri.textContent = redirectUri();
