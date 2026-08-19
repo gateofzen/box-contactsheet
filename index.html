@@ -363,7 +363,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v74</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v77</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -483,13 +483,16 @@ b{font-weight:600}
             <label class="check"><input id="autohq" type="checkbox"> 常に高画質で作る（遅い）</label>
             <label class="check"><input id="bgAudio" type="checkbox" checked> 画面を消しても音声を続ける</label>
             <label class="check"><input id="dashVideoOpt" type="checkbox" checked> 映像も区間配信で受け取る（シークが速い）</label>
-            <label class="check"><input id="castFirst" type="checkbox"> テレビにキャストする前提で再生する（探索を先に始める）</label>
+            <label class="check"><input id="castFirst" type="checkbox"> テレビで観る（区間配信を使わず、押してすぐキャストできる）</label>
             <div class="field"><label for="conc">同時取得</label>
               <input id="conc" class="w-num" type="number" value="8" min="1" max="16"></div>
             <div class="field"><label for="fw">コマ幅 px</label>
               <input id="fw" class="w-num" type="number" value="160" min="40" max="640" step="10"></div>
           </div>
-          <p class="note">通常はコマ幅 160 のままで構いません。個別に高画質化したいときは、カードにマウスを載せて左下の「⤢ 高画質」を押してください。</p>
+          <p class="note">
+            <b>テレビで観る</b>を有効にすると、動画を単一のファイルとして再生します。
+            キャストの一覧がすぐ出る代わりに、シークの反応は鈍くなります。<br>
+            通常はコマ幅 160 のままで構いません。個別に高画質化したいときは、カードにマウスを載せて左下の「⤢ 高画質」を押してください。</p>
         </div>
 
         <div class="group">
@@ -1456,6 +1459,7 @@ async function scan(scanTarget, deep){
     }
     els.progress.textContent = `${files.length} 本の動画（フォルダ ${folders} 件）`; setBusy(false);
     await mergeIndex(files);
+    primeCastProbe();          // テレビの探索を先に始めておく
     // 共有サムネイルの一覧を先に読んでおく（各フォルダ 1 回だけ）
     if (els.shareThumbs.checked){
       const parents = [...new Set(files.map(f => f.parentId).filter(Boolean))].slice(0, 60);
@@ -2437,9 +2441,9 @@ async function openPlayer(file, startAt){
 }
 
 function closePlayer(){
+  if (presConn){ castSend({type:"stop"}); try{ presConn.terminate(); }catch(_){} endCast(); }
   stopCastSearch();
-  try{ els.castProbe.removeAttribute("src"); els.castProbe.load(); }catch(_){}
-  castAvailBy.probe = null; castAvailBy.main = null;
+  castAvailBy.main = null;   // 探索用はそのまま生かしておく
   if (fsElement()){ try{ (document.exitFullscreen||document.webkitExitFullscreen).call(document); }catch(_){} }
   resetZoom();
   resetAudioState();
@@ -3094,6 +3098,7 @@ function applyPendingStart(){
 }
 
 function seekTo(t){
+  if (presConn){ castSend({type:"seek", time:t}); return t; }
   const m = activeMedia();
   const dur = isFinite(m.duration) ? m.duration : 0;
   if (!dur) return 0;
@@ -3232,7 +3237,102 @@ function waitFor(cond, ms){
   });
 }
 
-/* ---- テレビへのキャスト ---- */
+/* ---- テレビへのキャスト（自前の受信ページ方式） ---- */
+// Chromecast に受信ページ（receiver.html）を読み込ませ、テレビ側で DASH を再生させる。
+// 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
+// テレビ側でもシークが速く、スマートフォンの負担も小さい。
+const RECEIVER_URL = new URL("receiver.html", location.href).href;
+
+let presReq = null;
+let presConn = null;
+let castTimeTimer = null;
+
+function presSupported(){ return typeof PresentationRequest === "function"; }
+
+function ensurePresRequest(){
+  if (presReq || !presSupported()) return presReq;
+  try{
+    presReq = new PresentationRequest([RECEIVER_URL]);
+    // 機器の有無は Chrome 側の探索結果がそのまま届く（こちらで探さない）
+    presReq.getAvailability().then(av => {
+      setCastAvail("presentation", av.value);
+      av.addEventListener("change", () => setCastAvail("presentation", av.value));
+    }).catch(err => log("機器の確認ができません（受信ページ方式）: " + err.message));
+  }catch(err){ log("受信ページ方式を使えません: " + err.message); presReq = null; }
+  return presReq;
+}
+
+function castSend(obj){
+  if (!presConn) return;
+  try{ presConn.send(JSON.stringify(obj)); }catch(err){ log("テレビへの送信に失敗: " + err.message); }
+}
+
+async function castLoadCurrent(){
+  if (!presConn || !currentFile) return;
+  const payload = {type:"load", token: token(), title: currentFile.name,
+                   time: els.pVideo.currentTime || 0};
+  const mpd = await getMpd(currentFile).catch(() => null);
+  if (mpd){
+    payload.manifest = mpd.url;
+  }else{
+    payload.url = castReadyUrl || originalUrl(currentFile);
+  }
+  castSend(payload);
+  log("テレビへ送りました: " + (payload.manifest ? "区間配信" : "単一ファイル"));
+}
+
+function bindPresConn(conn){
+  presConn = conn;
+  castMode = true;
+  els.pCast.classList.add("btn-go");
+  els.pNote.textContent = "テレビで再生中（この画面から操作できます）";
+  els.pVideo.pause();
+
+  conn.addEventListener("message", e => {
+    let m; try{ m = JSON.parse(e.data); }catch(_){ return; }
+    if (m.type === "ready") castLoadCurrent();
+    else if (m.type === "loaded") log("テレビで再生を開始しました");
+    else if (m.type === "error") log("テレビ側のエラー: " + (m.message || m.code));
+    else if (m.type === "time" && m.duration) els.pMeta.textContent =
+      `テレビ再生中  ${fmtTC(m.time)} / ${fmtTC(m.duration)}`;
+  });
+  conn.addEventListener("close", endCast);
+  conn.addEventListener("terminate", endCast);
+
+  // トークンの期限切れでテレビ側が止まらないよう、定期的に送り直す
+  clearInterval(castTimeTimer);
+  castTimeTimer = setInterval(async () => {
+    if (!presConn) return clearInterval(castTimeTimer);
+    await ensureFresh();
+    castSend({type:"token", token: token()});
+  }, 10 * 60 * 1000);
+}
+
+function endCast(){
+  clearInterval(castTimeTimer); castTimeTimer = null;
+  presConn = null;
+  castMode = false;
+  els.pCast.classList.remove("btn-go");
+  els.pNote.textContent = videoKind === "DASH" ? "再生中（区間配信）" : "原本を再生中";
+  log("キャストを終了しました");
+}
+
+async function startPresentationCast(){
+  const req = ensurePresRequest();
+  if (!req) return false;
+  try{
+    const conn = await req.start();     // Chrome 標準の機器一覧が即座に出る
+    bindPresConn(conn);
+    return true;
+  }catch(err){
+    log("キャストできません: " + err.message);
+    els.pNote.textContent = /cancel|dismiss|NotAllowed/i.test(err.message)
+      ? "キャストを取り消しました" : "キャストできません（" + err.message + "）";
+    return false;
+  }
+}
+
+/* ---- 従来方式（受信ページが使えない場合の予備） ---- */
 // Chromecast は「テレビ側が自分で URL を取りに行く」仕組みなので、
 // ブラウザ内で組み立てている区間配信の流れは渡せない。
 // キャストするときだけ、単体で再生できる URL に差し替える。
@@ -3248,7 +3348,7 @@ async function prepareCast(file){
     castReadyUrl = await castableUrl(file);
     if (castReadyUrl){
       log("キャストの準備ができました");
-      startCastProbe(castReadyUrl);
+      startCastProbe(castReadyUrl);   // まだ始まっていなければここでも始める
     }
   }catch(err){ log("キャストの準備に失敗: " + err.message); }
   finally{ castPreparing = false; }
@@ -3288,6 +3388,12 @@ async function castableUrl(file){
 }
 
 function startCast(){
+  // まずは受信ページ方式。押した瞬間に Chrome の機器一覧が出る。
+  if (presSupported()){
+    if (presConn){ castSend({type:"stop"}); try{ presConn.terminate(); }catch(_){} endCast(); return; }
+    startPresentationCast();
+    return;
+  }
   if (!currentFile || !castSupported()) return;
   if (castPrompting){ log("キャスト先の選択が既に開いています"); return; }
 
@@ -3373,9 +3479,10 @@ function stopCastSearch(){ clearInterval(castSearchTimer); castSearchTimer = nul
 // ボタンの見た目は「読み込みが済んでいるか」で決める。
 // 機器の検出は遅れて届くことがあるので、それで塞がない。
 function refreshCastButton(){
-  const loaded = videoKind === "キャスト用" && els.pVideo.readyState >= 1;
-  els.pCast.classList.toggle("btn-go", loaded || castAvailable === true);
-  els.pCast.title = loaded ? "テレビの一覧を出す" : "テレビにキャスト";
+  els.pCast.disabled = false;
+  els.pCast.style.opacity = "";
+  els.pCast.classList.toggle("btn-go", castAvailable === true || !!presConn);
+  els.pCast.title = presConn ? "キャストをやめる" : "テレビにキャスト";
 }
 
 function setCastAvail(source, v){
@@ -3399,14 +3506,27 @@ function setCastAvail(source, v){
 
 // 探索は「単一 URL を持ち、描画されている再生要素」があって初めて始まる。
 // 本編は区間配信なので対象外。極小の要素に持たせて視聴中に探させる。
+let probeStarted = false;
+
 function startCastProbe(url){
   const p = els.castProbe;
-  if (!p) return;
+  if (!p || probeStarted || !url) return;
+  probeStarted = true;
   try{
     p.src = url;
     p.load();
   }catch(_){}
   watchOn(p, "probe");
+  log("テレビの探索を開始しました（見つかるまで 1 分ほどかかることがあります）");
+}
+
+// 一覧を読み込んだ時点で探索を始める。
+// 視聴を始める頃には検出が済んでいるようにするため。
+function primeCastProbe(){
+  if (probeStarted || !castSupported() || !token()) return;
+  // 前回までに見つけた動画でよい。探索は「キャストできる再生元がある」ことだけが条件。
+  const f = files.find(x => x && x.id) || globalIndex.find(x => x && x.id);
+  if (f) startCastProbe(originalUrl(f));
 }
 
 function watchOn(el, source){
@@ -3679,7 +3799,11 @@ document.addEventListener("keydown", e => {
     case "ArrowUp":    nudgeVolume(0.1); break;
     case "ArrowDown":  nudgeVolume(-0.1); break;
     case " ": case "k": case "K":
-      if (v.paused){ wantPlay = true; v.play().catch(() => {}); playerToast("再生"); }
+      if (presConn){
+        wantPlay = !wantPlay;
+        castSend({type: wantPlay ? "play" : "pause"});
+        playerToast(wantPlay ? "テレビで再生" : "テレビで一時停止");
+      }else if (v.paused){ wantPlay = true; v.play().catch(() => {}); playerToast("再生"); }
       else { wantPlay = false; v.pause(); playerToast("一時停止"); }
       break;
     case "+": case ";": case "=":
@@ -3780,6 +3904,8 @@ if ("serviceWorker" in navigator){
     marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [],
                        plays:rec.plays || 0, last:rec.last || 0, dirty:!!rec.dirty});
   globalIndex = await idbAll("files");
+  ensurePresRequest();    // Chrome が把握している機器をそのまま受け取る
+  primeCastProbe();       // 受信ページ方式が使えない場合の備え
   log("marks: " + marks.size + " / 索引: " + globalIndex.length);
 
   // Box からの折り返し（?code=...）を処理する
