@@ -345,7 +345,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v50</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v53</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -456,7 +456,7 @@ b{font-weight:600}
             <label class="check"><input id="bgAudio" type="checkbox" checked> 画面を消しても音声を続ける</label>
             <label class="check"><input id="dashVideoOpt" type="checkbox" checked> 映像も区間配信で受け取る（シークが速い）</label>
             <div class="field"><label for="conc">同時取得</label>
-              <input id="conc" class="w-num" type="number" value="4" min="1" max="12"></div>
+              <input id="conc" class="w-num" type="number" value="8" min="1" max="16"></div>
             <div class="field"><label for="fw">コマ幅 px</label>
               <input id="fw" class="w-num" type="number" value="160" min="40" max="640" step="10"></div>
           </div>
@@ -1383,6 +1383,11 @@ async function scan(scanTarget, deep){
     }
     els.progress.textContent = `${files.length} 本の動画（フォルダ ${folders} 件）`; setBusy(false);
     await mergeIndex(files);
+    // 共有サムネイルの一覧を先に読んでおく（各フォルダ 1 回だけ）
+    if (els.shareThumbs.checked){
+      const parents = [...new Set(files.map(f => f.parentId).filter(Boolean))].slice(0, 60);
+      parents.forEach(pid => getCacheIndex(pid));
+    }
     log("scan done:", files.length, "videos /", folders, "folders");
   }catch(err){
     if (err.name === "AbortError"){ els.progress.textContent = `中止（動画 ${files.length} 本まで）`; }
@@ -1439,13 +1444,17 @@ async function fetchBlob(url){
 async function sliceFilmstrip(blob, frameW){
   const bmp = await createImageBitmap(blob);
   const W = bmp.width, H = bmp.height;
-  const cols = Math.max(1, Math.round(W / frameW));
+  // 端数は切り捨てる。切り上げると 1 コマあたりの幅がわずかに狭く計算され、
+  // 右へ行くほどずれが積み上がって別のコマが写り込む。
+  const cols = Math.max(1, Math.floor(W / frameW));
   const guessH = Math.round(frameW * 9 / 16);
   let rows = Math.max(1, Math.round(H / guessH));
   if (rows === 1 || H / rows < guessH * 0.5) rows = 1;
   const frameH = Math.round(H / rows);
   const total = cols * rows;
-  log(`filmstrip ${W}x${H} → ${cols}列 x ${rows}行 = ${total}コマ (1コマ ${frameW}x${frameH})`);
+  const spare = W - cols * frameW;
+  log(`filmstrip ${W}x${H} → ${cols}列 x ${rows}行 = ${total}コマ (1コマ ${frameW}x${frameH})`
+    + (spare ? ` / 端数 ${spare}px は無視` : ""));
 
   const canvas = document.createElement("canvas");
   canvas.width = frameW; canvas.height = frameH;
@@ -1571,8 +1580,12 @@ function getCacheIndex(parentId){
       if (folderId){
         for (const e of await listFolder(folderId)){
           if (e.type !== "file") continue;
-          const m = /^(\d+)~(\d+)\.jpg$/.exec(e.name);
-          if (m) map.set(m[1], {id:e.id, dur: Number(m[2]) || null});
+          const m = /^(\d+)~(\d+)(~p)?\.jpg$/.exec(e.name);
+          if (!m) continue;
+          const cur = map.get(m[1]) || {id:null, dur:null, posterId:null};
+          if (m[3]) cur.posterId = e.id;            // ~p.jpg は主画像
+          else { cur.id = e.id; cur.dur = Number(m[2]) || null; }
+          map.set(m[1], cur);
         }
         if (map.size) log(`共有サムネイル ${map.size} 件（フォルダ ${parentId}）`);
       }
@@ -1622,15 +1635,22 @@ async function fetchSharedThumbs(file){
   if (!file.parentId){ log("親フォルダ不明のため共有を使えません: " + file.name); return null; }
   const index = await getCacheIndex(file.parentId);
   const hit = index.get(file.id);
-  if (!hit) return null;
-  const r = await fetch(`${API}/files/${hit.id}/content`, {headers:{Authorization:"Bearer " + token()}});
+  if (!hit || !hit.id) return null;
+  const auth = {headers:{Authorization:"Bearer " + token()}};
+  // シートと主画像を同時に取る（順番に取ると 1 本あたりの待ちが倍になる）
+  const [r, rp] = await Promise.all([
+    fetch(`${API}/files/${hit.id}/content`, auth),
+    hit.posterId ? fetch(`${API}/files/${hit.posterId}/content`, auth) : Promise.resolve(null)
+  ]);
   if (!r.ok) throw new Error("共有サムネイルの取得 " + r.status);
+  const posterBlob = (rp && rp.ok) ? await rp.blob() : null;
   const blob = await r.blob();
   if (!blob || blob.size < 100 || !/image/.test(blob.type || "image/jpeg"))
     throw new Error(`受け取った内容が画像ではありません (${blob && blob.size} bytes, ${blob && blob.type})`);
   const frames = await splitSheet(blob, FRAME_COUNT);
   return {id:file.id, frames, total:0, interval:null, duration:hit.dur || null,
-          ok:true, pending:false, hq:false, shared:true, ts:Date.now()};
+          ok:true, pending:false, hq:false, shared:true,
+          poster: posterBlob, posterTried: !!posterBlob, ts:Date.now()};
 }
 
 async function uploadSharedThumbs(file, rec){
@@ -1653,6 +1673,26 @@ async function uploadSharedThumbs(file, rec){
 
     const r = await fetch(url, {method:"POST", headers:{Authorization:"Bearer " + token()}, body: fd});
     const d = await r.json().catch(() => ({}));
+
+    // 主画像も置いておくと、他の端末は 1 往復で受け取れる
+    if (rec.poster && !existing?.posterId){
+      try{
+        const pname = `${file.id}~${dur}~p.jpg`;
+        const pfd = new FormData();
+        pfd.append("attributes", JSON.stringify({name: pname, parent:{id: folderId}}));
+        pfd.append("file", rec.poster, pname);
+        const pr = await fetch(`${UPLOAD_API}/files/content`,
+          {method:"POST", headers:{Authorization:"Bearer " + token()}, body: pfd});
+        const pd = await pr.json().catch(() => ({}));
+        const pid = (pr.ok && pd.entries && pd.entries[0]) ? pd.entries[0].id
+                  : (pd.context_info && pd.context_info.conflicts
+                     && (pd.context_info.conflicts.id || pd.context_info.conflicts[0]?.id));
+        if (pid){
+          const cur = index.get(file.id) || {};
+          cur.posterId = pid; index.set(file.id, cur);
+        }
+      }catch(_){}
+    }
     if (r.ok && d.entries && d.entries[0]){
       index.set(file.id, {id: d.entries[0].id, dur});
       log(`共有に保存: ${name} → フォルダ ${folderId}`);
@@ -1694,20 +1734,39 @@ async function fetchPoster(fileId){
   }catch(err){ log("ポスター画像の取得に失敗", fileId, err.message); return null; }
 }
 
-// 5 コマが揃っている記録に、主画像用の大きな 1 枚を足す
-async function withPoster(file, rec){
-  if (!rec || !rec.ok) return rec;
-  if (rec.hq || rec.poster || rec.posterTried) return rec;   // 高画質版は元から鮮明
-  rec.poster = await fetchPoster(file.id);
-  rec.posterTried = true;
-  await idbPut("thumbs", rec);
-  return rec;
+// 主画像用の大きな 1 枚は「あとから」足す。
+// これを待つと 1 本あたり 2 往復ぶん表示が遅れるため、まずコマだけで描く。
+const posterQueue = [];
+let posterBusy = 0;
+
+function queuePoster(file, rec){
+  if (!rec || !rec.ok || rec.hq || rec.poster || rec.posterTried) return;
+  posterQueue.push({file, rec});
+  drainPosters();
+}
+function drainPosters(){
+  const limit = Math.max(1, Math.min(4, Number(els.conc.value) || 4));
+  while (posterBusy < limit && posterQueue.length){
+    const {file, rec} = posterQueue.shift();
+    posterBusy++;
+    (async () => {
+      try{
+        rec.poster = await fetchPoster(file.id);
+        rec.posterTried = true;
+        await idbPut("thumbs", rec);
+        if (rec.poster) uploadSharedThumbs(file, rec);   // 主画像も共有に置く
+        // すでに並んでいるカードなら、主画像だけ差し替える
+        if (rec.poster && cardById.has(file.id)) await paintThumbs(file, true);
+      }catch(_){}
+      finally{ posterBusy--; drainPosters(); }
+    })();
+  }
 }
 
 async function buildThumbs(file){
   const cached = await idbGet("thumbs", file.id);
   if (cached && cached.ok && cached.frames && cached.frames.length){
-    if (!els.autohq.checked || cached.hq){ srcStats.local++; return withPoster(file, cached); }
+    if (!els.autohq.checked || cached.hq){ srcStats.local++; queuePoster(file, cached); return cached; }
   }
   if (els.autohq.checked){
     try{ return await buildHiRes(file); }
@@ -1722,7 +1781,8 @@ async function buildThumbs(file){
       if (shared){
         srcStats.shared++;
         await idbPut("thumbs", shared);
-        return withPoster(file, shared);
+        queuePoster(file, shared);
+        return shared;
       }
     }catch(err){ srcStats.failed++; log("共有サムネイルを使えません", file.name, err.message); }
   }
@@ -1755,8 +1815,8 @@ async function buildThumbs(file){
   if (!rec.pending){
     if (rec.ok) srcStats.made++;
     await idbPut("thumbs", rec);
-    await uploadSharedThumbs(file, rec);
-    await withPoster(file, rec);
+    queuePoster(file, rec);
+    uploadSharedThumbs(file, rec);   // 保存も待たない
   }
   return rec;
 }
@@ -1766,7 +1826,7 @@ class Pool{
   constructor(){ this.active = 0; this.q = []; }
   push(task){ return new Promise((res,rej) => { this.q.push({task,res,rej}); this.drain(); }); }
   drain(){
-    const limit = Math.max(1, Number(els.conc.value) || 4);
+    const limit = Math.max(1, Number(els.conc.value) || 8);
     while (this.active < limit && this.q.length){
       const {task,res,rej} = this.q.shift();
       this.active++;
@@ -1922,7 +1982,7 @@ function makeCard(file){
     '<div class="rail"></div>' +
     '<div class="frames"><div class="slot"></div><div class="slot"></div><div class="slot"></div><div class="slot"></div><div class="slot"></div></div>' +
     '<div class="rail"></div>' +
-    '<div class="placeholder">読み込み待ち</div>';
+    '<div class="placeholder">読み込み中…</div>';
 
   const hq = document.createElement("button");
   hq.className = "hq"; hq.textContent = "⤢ 高画質";
