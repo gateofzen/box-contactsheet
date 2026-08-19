@@ -43,6 +43,7 @@ const titleEl = document.getElementById("title");
 let player = null;
 let token = "";
 let conns = [];
+let lastQ = null;
 
 function say(t){ msgEl.textContent = t; }
 function fail(t){ errEl.textContent = t; panel.classList.remove("gone"); }
@@ -130,7 +131,15 @@ function reportStats(){
   try{
     const st = player.getStats();
     const b = v.buffered.length ? v.buffered.end(v.buffered.length-1) - v.currentTime : 0;
-    reply({type:"stats",
+    const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
+    const now = performance.now();
+    let fps = 0;
+    if (q && lastQ){
+      const dt = (now - lastQ.t) / 1000;
+      if (dt > 0) fps = Math.round((q.totalVideoFrames - lastQ.n) / dt);
+    }
+    if (q) lastQ = {n:q.totalVideoFrames, t:now};
+    reply({type:"stats", fps,
       estimate: Math.round((st.estimatedBandwidth||0)/1000),
       stream: Math.round((st.streamBandwidth||0)/1000),
       dropped: st.droppedFrames||0, decoded: st.decodedFrames||0,
