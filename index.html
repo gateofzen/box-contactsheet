@@ -356,7 +356,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v60</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v61</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -620,6 +620,8 @@ const MD_SCOPE = "global", MD_TPL = "properties";
 const CACHE_FOLDER_NAME = "_ContactSheetCache";
 const UPLOAD_API = "https://upload.box.com/api/2.0";
 const K_FAV = "csFav", K_TAGS = "csTags", K_PLAYS = "csPlays", K_LAST = "csLast";
+
+let boxUserId = "";   // ログイン中の Box 利用者 ID（自分専用の記録に使う）
 
 // 自分専用にするときは、キー名の後ろに利用者 ID を足す。
 // 同じファイルの中で各自の欄が分かれるので、互いに上書きしない。
