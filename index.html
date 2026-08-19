@@ -361,7 +361,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v67</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v68</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -582,7 +582,7 @@ b{font-weight:600}
     </div>
     <audio id="pAudio" preload="none"></audio>
     <!-- キャスト機器の探索用。実際には再生しない（探索は再生元がある要素でしか始まらない） -->
-    <video id="castProbe" preload="none" muted playsinline style="display:none"></video>
+    <video id="castProbe" preload="metadata" muted playsinline style="display:none"></video>
     <div class="player-foot">
       <span id="pMeta"></span><span id="pNote"></span>
       <span class="keys">← → 10秒 ／ Shift 併用で60秒 ／ Space 再生 ／ ↑ ↓ 音量 ／ 1–9 位置 ／ + − 拡大縮小 ／ F ★</span>
@@ -2425,7 +2425,8 @@ function closePlayer(){
     els.castProbe.remote.cancelWatchAvailability(castWatchId).catch(() => {});
     castWatchId = null;
   }
-  els.castProbe.removeAttribute("src");
+  els.castProbe.removeAttribute("src"); try{ els.castProbe.load(); }catch(_){}
+  castAvailBy.probe = null; castAvailBy.main = null;
   if (fsElement()){ try{ (document.exitFullscreen||document.webkitExitFullscreen).call(document); }catch(_){} }
   resetZoom();
   resetAudioState();
@@ -3293,9 +3294,9 @@ function startCast(){
   // 段階 2: 単一 URL で再生中なので、そのまま選択画面を出せる
   if (castPrompting){ log("キャスト先の選択が既に開いています"); return; }
   if (castAvailable === false){
-    els.pNote.textContent = "テレビを探しています…（見つかり次第この表示が変わります）";
-    say("まだテレビが見つかりません。数十秒かかることがあります。同じ Wi-Fi に繋がっているか確認してください。", true);
-    return;
+    // 検出が保守的なこともあるので、止めずに選択画面は出す
+    log("機器は未検出だが、選択画面を出してみる");
+    say("まだテレビを検出できていません。選択画面が空のときは数十秒待ってからもう一度お試しください。");
   }
   castPrompting = true;
   els.pNote.textContent = "キャスト先を選んでください…";
@@ -3317,23 +3318,37 @@ let castWatchId = null;
 
 // 機器の探索は「キャストできる再生元を持つ要素」があって初めて始まる。
 // 本編は区間配信なので対象外。隠し要素に単一 URL を持たせて先に探させる。
+const castAvailBy = {probe:null, main:null};
+
+function setCastAvail(source, v){
+  castAvailBy[source] = !!v;
+  const any = castAvailBy.probe === true || castAvailBy.main === true;
+  const known = castAvailBy.probe !== null || castAvailBy.main !== null;
+  castAvailable = known ? any : null;
+  els.pCast.title = any ? "テレビにキャスト" : "キャストできる機器を探しています";
+  els.pCast.style.opacity = any ? "" : ".45";
+  log(`キャストできる機器（${source === "probe" ? "探索用" : "本編"}）: ` + (v ? "あり" : "なし"));
+  if (any && videoKind === "キャスト用" && !castPrompting)
+    els.pNote.textContent = "キャストできます。📺 を押してください。";
+}
+
+function watchOn(el, source){
+  if (!el || !el.remote || !el.remote.watchAvailability) return;
+  el.remote.watchAvailability(v => setCastAvail(source, v))
+    .then(id => { if (source === "probe") castWatchId = id; })
+    .catch(err => log(`機器の確認ができません（${source}）: ` + err.message));
+}
+
 function startCastProbe(url){
   const p = els.castProbe;
-  if (!p || !p.remote || !p.remote.watchAvailability) return;
-  if (castWatchId !== null && p.remote.cancelWatchAvailability){
+  if (!p) return;
+  if (castWatchId !== null && p.remote && p.remote.cancelWatchAvailability){
     p.remote.cancelWatchAvailability(castWatchId).catch(() => {});
     castWatchId = null;
   }
   p.src = url;
-  p.remote.watchAvailability(v => {
-    castAvailable = !!v;
-    els.pCast.title = v ? "テレビにキャスト" : "キャストできる機器を探しています";
-    els.pCast.style.opacity = v ? "" : ".45";
-    log("キャストできる機器: " + (v ? "あり" : "なし"));
-    if (v && videoKind === "キャスト用" && !castPrompting)
-      els.pNote.textContent = "キャストできます。📺 を押してください。";
-  }).then(id => { castWatchId = id; })
-    .catch(err => log("機器の確認ができません: " + err.message));
+  try{ p.load(); }catch(_){}      // 読み込ませないと探索の対象にならない
+  watchOn(p, "probe");
 }
 
 function bindCast(){
@@ -3342,8 +3357,10 @@ function bindCast(){
   const r = els.pVideo.remote;
 
   castAvailable = null;
+  castAvailBy.probe = null; castAvailBy.main = null;
   els.pCast.title = "テレビにキャスト";
   els.pCast.style.opacity = "";
+  watchOn(els.pVideo, "main");
   r.addEventListener("connecting", () => log("キャスト先に接続しています…"));
   els.pVideo.addEventListener("error", () => {
     if (videoKind === "キャスト用")
