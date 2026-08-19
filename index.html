@@ -345,7 +345,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v49</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v50</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1186,7 +1186,7 @@ async function prefetchThumbs(list){
   els.prefetch.hidden = false; setBusy(true);
   let done = 0, ok = 0, pend = 0;
   const eta = makeEta();
-  srcStats.shared = srcStats.made = srcStats.failed = 0;
+  srcStats.shared = srcStats.made = srcStats.failed = srcStats.local = 0;
 
   await Promise.all(list.map(f => pool.push(async () => {
     if (batchStop) return;
@@ -1197,7 +1197,7 @@ async function prefetchThumbs(list){
     eta.tick();
     els.progress.textContent =
       `サムネイル ${done}/${list.length}`
-      + `　共有から ${srcStats.shared} / 新規 ${srcStats.made}`
+      + `　端末内 ${srcStats.local} / 共有から ${srcStats.shared} / 新規 ${srcStats.made}`
       + (pend ? ` / Box生成待ち ${pend}` : "")
       + (done < list.length ? `　${eta.remain(list.length - done)}` : "");
     syncStatusLine();
@@ -1208,9 +1208,13 @@ async function prefetchThumbs(list){
   els.prefetch.hidden = true; setBusy(false);
   els.progress.textContent = batchStop
     ? `中止しました（${done}/${list.length}）`
-    : `${files.length} 本の動画　共有から ${srcStats.shared} / 新規 ${srcStats.made}`
+    : `${files.length} 本の動画　端末内 ${srcStats.local} / 共有から ${srcStats.shared} / 新規 ${srcStats.made}`
       + (pend ? ` / Box生成待ち ${pend}` : "");
-  log(`内訳: 共有から ${srcStats.shared} / 新規作成 ${srcStats.made} / 共有の失敗 ${srcStats.failed}`);
+  log(`内訳: 端末内から ${srcStats.local} / 共有から ${srcStats.shared} / `
+    + `新規作成 ${srcStats.made} / 共有の失敗 ${srcStats.failed}`);
+  if (srcStats.local === done && done > 0)
+    log("すべて端末内にあったため、共有キャッシュは参照していません。"
+      + "共有の動作を確かめるには「サムネイルを捨てて作り直す」を押してください。");
   syncStatusLine();
   log(`prefetch done: ${ok}/${list.length}, pending ${pend}`);
 }
@@ -1229,8 +1233,11 @@ async function mergeIndex(list){
 
 // Box の検索も併用して、まだ走査していないフォルダの動画も拾う
 let boxSearchTimer = null;
+let lastBoxSearch = "";
 async function boxSearchMerge(text){
   if (!text || text.length < 2) return;
+  if (text === lastBoxSearch) return;      // 同じ語で二度は投げない
+  lastBoxSearch = text;
   try{
     const exts = [...VIDEO_EXT].join(",");
     const url = `/search?query=${encodeURIComponent(text)}&type=file&limit=200`
@@ -1608,7 +1615,7 @@ async function splitSheet(blob, n){
   return out;
 }
 
-const srcStats = {shared:0, made:0, failed:0};
+const srcStats = {shared:0, made:0, failed:0, local:0};
 
 async function fetchSharedThumbs(file){
   if (!els.shareThumbs.checked) return null;
@@ -1700,7 +1707,7 @@ async function withPoster(file, rec){
 async function buildThumbs(file){
   const cached = await idbGet("thumbs", file.id);
   if (cached && cached.ok && cached.frames && cached.frames.length){
-    if (!els.autohq.checked || cached.hq) return withPoster(file, cached);
+    if (!els.autohq.checked || cached.hq){ srcStats.local++; return withPoster(file, cached); }
   }
   if (els.autohq.checked){
     try{ return await buildHiRes(file); }
