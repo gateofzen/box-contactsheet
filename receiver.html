@@ -158,13 +158,27 @@ function reportTrack(){
   showTitle(`${t.width}x${t.height}  ${Math.round(t.bandwidth/1000)} kbps`);
 }
 
-function applyQuality(maxHeight){
+function applyQuality(maxHeight, fixed){
   if (!player) return;
   const r = (!maxHeight || maxHeight >= 4320)
     ? {minHeight:0, maxHeight:Infinity}
     : {minHeight:0, maxHeight:maxHeight};
-  player.configure({restrictions: r});
-  log2(`画質の上限: ${maxHeight ? maxHeight + "p" : "制限なし"}`);
+  player.configure({restrictions: r, abr:{enabled: !fixed}});
+
+  if (fixed){
+    // 自動切替をやめ、条件に合う中で最も良いものに固定する。
+    // 行き来しなくなるので、画質が変わって見える現象がなくなる。
+    const cands = player.getVariantTracks()
+      .filter(t => !maxHeight || (t.height || 0) <= maxHeight)
+      .sort((a,b) => (b.bandwidth||0) - (a.bandwidth||0));
+    if (cands.length){
+      player.selectVariantTrack(cands[0], true);
+      log2(`画質を固定: ${cands[0].width}x${cands[0].height}`);
+    }
+  }else{
+    log2(`画質の上限: ${maxHeight ? maxHeight + "p" : "制限なし"}`);
+  }
+  setTimeout(reportTrack, 300);
 }
 function log2(t){ msgEl.textContent = t; }
 
@@ -177,7 +191,7 @@ async function loadMedia(m){
   try{
     if (m.manifest){
       const p = await ensurePlayer();
-      if (m.maxHeight) applyQuality(m.maxHeight);
+      if (m.maxHeight || m.fixed) applyQuality(m.maxHeight, m.fixed);
       await p.load(m.manifest, m.time || 0);
       reportTracks();
       reportTrack();
@@ -221,7 +235,7 @@ async function handle(raw){
       say("停止しました");
       panel.classList.remove("gone");
       break;
-    case "quality": applyQuality(m.maxHeight); break;
+    case "quality": applyQuality(m.maxHeight, m.fixed); break;
     case "ping": reply({type:"pong", time:v.currentTime}); break;
   }
 }
