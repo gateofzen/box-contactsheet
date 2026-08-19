@@ -115,7 +115,7 @@ async function ensurePlayer(){
     if (!v.paused) reply({type:"time", time:v.currentTime,
       duration:isFinite(v.duration)?v.duration:0});
   }, 2000);
-  setInterval(reportStats, 5000);
+  startStatsLoop();
 
   return player;
 }
@@ -129,6 +129,12 @@ function reportTracks(){
 }
 
 // 実際の通信速度・コマ落ち・停止時間を定期的に返す
+let statsTimer = null;
+function startStatsLoop(){
+  if (statsTimer) return;
+  statsTimer = setInterval(reportStats, 5000);
+}
+
 function reportStats(){
   try{
     const b = v.buffered.length ? v.buffered.end(v.buffered.length-1) - v.currentTime : 0;
@@ -229,6 +235,7 @@ async function loadMedia(m){
       reportTrack();
       reportStats();
     }else if (m.url){
+      startStatsLoop();
       // 単一ファイルで再生する。shaka が要素を掴んだままだと衝突するので手を離させる。
       if (player && attached){
         try{ await player.unload(); }catch(_){}
