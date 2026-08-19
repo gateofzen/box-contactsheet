@@ -361,7 +361,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v68</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v69</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -581,8 +581,6 @@ b{font-weight:600}
       </div>
     </div>
     <audio id="pAudio" preload="none"></audio>
-    <!-- キャスト機器の探索用。実際には再生しない（探索は再生元がある要素でしか始まらない） -->
-    <video id="castProbe" preload="metadata" muted playsinline style="display:none"></video>
     <div class="player-foot">
       <span id="pMeta"></span><span id="pNote"></span>
       <span class="keys">← → 10秒 ／ Shift 併用で60秒 ／ Space 再生 ／ ↑ ↓ 音量 ／ 1–9 位置 ／ + − 拡大縮小 ／ F ★</span>
@@ -648,7 +646,7 @@ const els = {};
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
  "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio","pCast","castProbe"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","pCast"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -2421,11 +2419,7 @@ async function openPlayer(file, startAt){
 }
 
 function closePlayer(){
-  if (castWatchId !== null && els.castProbe.remote && els.castProbe.remote.cancelWatchAvailability){
-    els.castProbe.remote.cancelWatchAvailability(castWatchId).catch(() => {});
-    castWatchId = null;
-  }
-  els.castProbe.removeAttribute("src"); try{ els.castProbe.load(); }catch(_){}
+  stopCastSearch();
   castAvailBy.probe = null; castAvailBy.main = null;
   if (fsElement()){ try{ (document.exitFullscreen||document.webkitExitFullscreen).call(document); }catch(_){} }
   resetZoom();
@@ -3221,10 +3215,7 @@ async function prepareCast(file){
   castPreparing = true;
   try{
     castReadyUrl = await castableUrl(file);
-    if (castReadyUrl){
-      log("キャストの準備ができました");
-      startCastProbe(castReadyUrl);      // 早めに機器の探索を始める
-    }
+    if (castReadyUrl) log("キャストの準備ができました");
   }catch(err){ log("キャストの準備に失敗: " + err.message); }
   finally{ castPreparing = false; }
 }
@@ -3281,11 +3272,13 @@ function startCast(){
     els.pVideo.addEventListener("loadedmetadata", () => {
       els.pVideo.currentTime = t;
       if (playing) els.pVideo.play().catch(()=>{});
-      els.pNote.textContent = castAvailable
-        ? "キャストできます。もう一度 📺 を押してください。"
-        : "テレビを探しています…（見つかり次第この表示が変わります）";
-      els.pCast.classList.add("btn-go");
-      log("キャスト用の再生に切り替えました（次の操作で選択画面が出ます）");
+      if (castAvailable === true){
+        els.pNote.textContent = "テレビが見つかりました。📺 を押すと選べます。";
+        els.pCast.classList.add("btn-go");
+      }else{
+        startCastSearch();      // 見つかるまで経過を表示する（15 秒ほどかかる）
+      }
+      log("キャスト用の再生に切り替えました。テレビの探索が始まります。");
     }, {once:true});
     els.pNote.textContent = "キャスト用に切り替えています…";
     return;
@@ -3293,10 +3286,9 @@ function startCast(){
 
   // 段階 2: 単一 URL で再生中なので、そのまま選択画面を出せる
   if (castPrompting){ log("キャスト先の選択が既に開いています"); return; }
-  if (castAvailable === false){
-    // 検出が保守的なこともあるので、止めずに選択画面は出す
+  if (castAvailable !== true){
     log("機器は未検出だが、選択画面を出してみる");
-    say("まだテレビを検出できていません。選択画面が空のときは数十秒待ってからもう一度お試しください。");
+    say("まだテレビを検出できていません。空だった場合は 15 秒ほど待ってからもう一度お試しください。");
   }
   castPrompting = true;
   els.pNote.textContent = "キャスト先を選んでください…";
@@ -3320,6 +3312,21 @@ let castWatchId = null;
 // 本編は区間配信なので対象外。隠し要素に単一 URL を持たせて先に探させる。
 const castAvailBy = {probe:null, main:null};
 
+let castSearchTimer = null;
+let castSearchFrom = 0;
+
+function startCastSearch(){
+  stopCastSearch();
+  castSearchFrom = Date.now();
+  castSearchTimer = setInterval(() => {
+    if (castAvailable === true || videoKind !== "キャスト用") return stopCastSearch();
+    const sec = Math.round((Date.now() - castSearchFrom) / 1000);
+    els.pNote.textContent = `テレビを探しています… ${sec} 秒`
+      + (sec > 25 ? "（見つからない場合は同じ Wi-Fi か確認してください）" : "");
+  }, 1000);
+}
+function stopCastSearch(){ clearInterval(castSearchTimer); castSearchTimer = null; }
+
 function setCastAvail(source, v){
   castAvailBy[source] = !!v;
   const any = castAvailBy.probe === true || castAvailBy.main === true;
@@ -3328,8 +3335,12 @@ function setCastAvail(source, v){
   els.pCast.title = any ? "テレビにキャスト" : "キャストできる機器を探しています";
   els.pCast.style.opacity = any ? "" : ".45";
   log(`キャストできる機器（${source === "probe" ? "探索用" : "本編"}）: ` + (v ? "あり" : "なし"));
-  if (any && videoKind === "キャスト用" && !castPrompting)
-    els.pNote.textContent = "キャストできます。📺 を押してください。";
+  if (any && videoKind === "キャスト用" && !castPrompting){
+    stopCastSearch();
+    els.pNote.textContent = "テレビが見つかりました。📺 を押すと選べます。";
+    els.pCast.classList.add("btn-go");
+    say("テレビが見つかりました。📺 を押してください。");
+  }
 }
 
 function watchOn(el, source){
@@ -3339,17 +3350,6 @@ function watchOn(el, source){
     .catch(err => log(`機器の確認ができません（${source}）: ` + err.message));
 }
 
-function startCastProbe(url){
-  const p = els.castProbe;
-  if (!p) return;
-  if (castWatchId !== null && p.remote && p.remote.cancelWatchAvailability){
-    p.remote.cancelWatchAvailability(castWatchId).catch(() => {});
-    castWatchId = null;
-  }
-  p.src = url;
-  try{ p.load(); }catch(_){}      // 読み込ませないと探索の対象にならない
-  watchOn(p, "probe");
-}
 
 function bindCast(){
   if (!castSupported()){ els.pCast.hidden = true; return; }
