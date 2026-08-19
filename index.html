@@ -363,7 +363,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v80</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v81</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -553,7 +553,13 @@ b{font-weight:600}
             <span>★ <b id="nFav">0</b></span>
             <span>サムネ済 <b id="nCached">0</b></span>
           </div>
-          <details class="debug"><summary>診断ログ</summary><pre id="log"></pre></details>
+          <details class="debug"><summary>診断ログ</summary>
+            <div class="rack" style="margin:6px 0">
+              <button id="logCopy" class="btn btn-sm">ログをコピー</button>
+              <button id="logClear" class="btn btn-sm">消去</button>
+            </div>
+            <pre id="log"></pre>
+          </details>
         </div>
 
       </div>
@@ -658,7 +664,7 @@ const els = {};
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
  "advBox","advBtn","installBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
- "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
+ "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logCopy","logClear","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
  "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom",
  "pAudio","pAudioBtn","audioVeil","bgAudio","pCast","castProbe"].forEach(k => els[k] = $(k));
@@ -2629,6 +2635,24 @@ els.statsBtn.addEventListener("click", async () => {
   log("再生状況を集計: 利用者 " + entries.length + " 名 / 記録のある動画 " + byVideo.length + " 本");
 });
 
+els.logCopy.addEventListener("click", async () => {
+  const text = els.log.textContent || "";
+  try{
+    await navigator.clipboard.writeText(text);
+    els.logCopy.textContent = "コピーしました";
+  }catch(_){
+    // 古い環境向けの代替
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try{ document.execCommand("copy"); els.logCopy.textContent = "コピーしました"; }
+    catch(e){ els.logCopy.textContent = "コピーできません"; }
+    ta.remove();
+  }
+  setTimeout(() => { els.logCopy.textContent = "ログをコピー"; }, 1600);
+});
+els.logClear.addEventListener("click", () => { logLines.length = 0; els.log.textContent = ""; });
+
 els.exportBtn.addEventListener("click", async () => {
   const all = await idbAll("marks");
   const data = {version:1, exported:new Date().toISOString(),
@@ -2996,7 +3020,8 @@ function createDashEngine(name){
 
     append(tr, buf){
       return new Promise((res, rej) => {
-        if (!tr.sb) return rej(new Error("バッファがありません"));
+        if (this.stopped || !tr.sb || !this.tracks.includes(tr))
+          return rej(new Error("停止済み"));
         const done = () => { tr.sb.removeEventListener("updateend", done); res(); };
         tr.sb.addEventListener("updateend", done);
         try{ tr.sb.appendBuffer(buf); }
@@ -3045,7 +3070,7 @@ function createDashEngine(name){
           try{ if (this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
         }
       }catch(err){
-        if (!this.stopped && this.tracks.includes(tr)){
+        if (!this.stopped && this.tracks.includes(tr) && !/停止済み/.test(err.message)){
           log(`${this.name}: ${tr.kind} 区間の取得に失敗 ` + err.message);
           tr.retry++;
           if (tr.retry <= 20)
@@ -3149,6 +3174,7 @@ async function enterAudioOnly(){
 
   // 先に見た目を切り替える。待ってから切り替えると反応が鈍く感じられる。
   audioOnly = true;
+  audioLastT = -1; audioStuckAt = 0;
   els.audioVeil.hidden = false;
   els.audioVeil.querySelector(".big").textContent = "🎧 音声を準備しています…";
   els.pAudioBtn.classList.add("btn-go");
@@ -3189,6 +3215,57 @@ function exitAudioOnly(){
   els.pNote.textContent = videoKind === "DASH" ? "再生中（区間配信）" : "原本を再生中";
   els.pVideo.currentTime = t;
   if (playing) els.pVideo.play().catch(()=>{});
+}
+
+// 音声のみ再生の見張り。
+// 画面オフのままタイマーが間引かれても、再生中は timeupdate が届き続けるので、
+// そちらを頼りに「進んでいるか」を確かめる。
+let audioLastT = -1;
+let audioStuckAt = 0;
+
+function watchAudioOnly(){
+  els.pAudio.addEventListener("timeupdate", () => {
+    if (!audioOnly) return;
+    const t = els.pAudio.currentTime;
+    if (Math.abs(t - audioLastT) > 0.2){ audioLastT = t; audioStuckAt = 0; return; }
+    // 位置が変わらないまま呼ばれ続けている＝詰まっている
+    if (!audioStuckAt) audioStuckAt = Date.now();
+  });
+
+  // 止まった／詰まったときに立て直す
+  const revive = why => {
+    if (!audioOnly || !els.scrim.classList.contains("open")) return;
+    log(`音声のみ再生を立て直します（${why}） pos=${fmtTC(els.pAudio.currentTime)} `
+      + `ready=${els.pAudio.readyState} paused=${els.pAudio.paused}`);
+    try{ dashAudio.pumpAll(); }catch(_){}
+    if (els.pAudio.paused)
+      els.pAudio.play().catch(err => log("再開できません: " + err.message));
+  };
+
+  els.pAudio.addEventListener("pause", () => {
+    if (audioOnly && document.hidden) setTimeout(() => revive("勝手に止まった"), 300);
+  });
+  els.pAudio.addEventListener("waiting", () => {
+    if (audioOnly) setTimeout(() => revive("データ待ち"), 2000);
+  });
+  els.pAudio.addEventListener("stalled", () => {
+    if (audioOnly) setTimeout(() => revive("通信が滞った"), 2000);
+  });
+  els.pAudio.addEventListener("ended", () => {
+    if (audioOnly) log("音声が最後まで再生されました");
+  });
+  els.pAudio.addEventListener("error", () => {
+    const e = els.pAudio.error;
+    if (audioOnly) log("音声要素のエラー: code=" + (e && e.code));
+  });
+
+  // 進行の見張り（再生中は timeupdate で起動される）
+  els.pAudio.addEventListener("timeupdate", () => {
+    if (audioOnly && audioStuckAt && Date.now() - audioStuckAt > 6000){
+      audioStuckAt = 0;
+      revive("6 秒進んでいない");
+    }
+  });
 }
 
 function resetAudioState(){
@@ -3325,6 +3402,11 @@ function bindPresConn(conn){
   els.pCast.classList.add("btn-go");
   els.pNote.textContent = "テレビへ送っています…";
   els.pVideo.pause();
+  // テレビへ渡したら手元での受信は止める。同じ回線を二重に使わないため。
+  dashMain.stop();
+  try{ els.pVideo.removeAttribute("src"); els.pVideo.load(); }catch(_){}
+  videoKind = "テレビ";
+  log("手元の受信を停止しました（テレビ側で再生します）");
 
   conn.addEventListener("message", e => {
     let m; try{ m = JSON.parse(e.data); }catch(_){ return; }
@@ -3345,6 +3427,7 @@ function bindPresConn(conn){
     }
     else if (m.type === "stats"){
       log(`テレビ側の状況: 実測 ${m.estimate} kbps / 再生中の画質 ${m.w}x${m.h} ${m.stream} kbps`
+        + (m.fps ? ` / ${m.fps} コマ毎秒` : "")
         + ` / 先読み ${m.ahead} 秒 / 停止 ${m.stalls} 回 ${m.buffering} 秒`
         + ` / コマ落ち ${m.dropped}（${m.decoded} 中）`);
     }
@@ -3368,13 +3451,25 @@ function bindPresConn(conn){
   }, 10 * 60 * 1000);
 }
 
+let castEnding = false;
 function endCast(){
+  if (castEnding) return;          // close と terminate の両方が来ることがある
+  castEnding = true;
   clearInterval(castTimeTimer); castTimeTimer = null;
   presConn = null;
   castMode = false;
+  castTrack = "";
   els.pCast.classList.remove("btn-go");
-  els.pNote.textContent = videoKind === "DASH" ? "再生中（区間配信）" : "原本を再生中";
   log("キャストを終了しました");
+
+  // 手元での再生を組み直す
+  if (currentFile && els.scrim.classList.contains("open")){
+    const f = currentFile;
+    videoKind = "原本";
+    els.pVideo.src = originalUrl(f);
+    els.pNote.textContent = "手元で再生中（テレビから戻りました）";
+  }
+  setTimeout(() => { castEnding = false; }, 500);
 }
 
 async function startPresentationCast(){
@@ -3927,6 +4022,8 @@ if ("serviceWorker" in navigator){
       .catch(err => log("service worker を登録できません: " + err.message));
   });
 }
+
+watchAudioOnly();   // 音声のみ再生の見張りを開始する
 
 /* ============ 起動 ============ */
 (async function init(){
