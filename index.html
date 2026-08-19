@@ -361,7 +361,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v72</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v73</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2936,11 +2936,13 @@ function createDashEngine(name){
       this.ready = true;
       if (startAt > 0){ try{ mediaEl.currentTime = startAt; }catch(_){} }
       const kick = () => this.pumpAll();
-      mediaEl.addEventListener("timeupdate", kick);
-      mediaEl.addEventListener("progress", kick);
-      mediaEl.addEventListener("waiting", kick);
-      mediaEl.addEventListener("seeking", () => this.onSeek());
-      document.addEventListener("visibilitychange", kick);
+      const seek = () => this.onSeek();
+      this.listeners = [
+        [mediaEl, "timeupdate", kick], [mediaEl, "progress", kick],
+        [mediaEl, "waiting", kick], [mediaEl, "seeking", seek],
+        [document, "visibilitychange", kick],
+      ];
+      this.listeners.forEach(([el, ev, fn]) => el.addEventListener(ev, fn));
       this.tracks.forEach(t => t.sb.addEventListener("updateend", kick));
       this.pumpAll();
       return true;
@@ -2949,6 +2951,8 @@ function createDashEngine(name){
     stop(){
       this.stopped = true; this.ready = false;
       this.tracks.forEach(t => { t.gen++; });
+      (this.listeners || []).forEach(([el, ev, fn]) => el.removeEventListener(ev, fn));
+      this.listeners = [];
       try{ if (this.ms && this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
       this.ms = null; this.tracks = []; this.duration = 0;
     },
@@ -2977,12 +2981,15 @@ function createDashEngine(name){
     },
 
     aheadOf(tr){
-      if (!this.el || !tr.sb || !tr.sb.buffered.length) return 0;
-      const t = this.el.currentTime;
-      for (let i = 0; i < tr.sb.buffered.length; i++){
-        if (tr.sb.buffered.start(i) <= t + 0.1 && t <= tr.sb.buffered.end(i) + 0.1)
-          return tr.sb.buffered.end(i) - t;
-      }
+      // 停止直後は入れ物が外されていることがある。触れても落ちないようにする。
+      try{
+        if (this.stopped || !this.el || !tr.sb || !tr.sb.buffered.length) return 0;
+        const t = this.el.currentTime;
+        for (let i = 0; i < tr.sb.buffered.length; i++){
+          if (tr.sb.buffered.start(i) <= t + 0.1 && t <= tr.sb.buffered.end(i) + 0.1)
+            return tr.sb.buffered.end(i) - t;
+        }
+      }catch(_){}
       return 0;
     },
 
@@ -3006,6 +3013,7 @@ function createDashEngine(name){
           const buf = await this.fetchSeg(tr.template(tr.next));
           if (this.stopped || tr.gen !== gen) break;
           await this.append(tr, buf);
+          if (this.stopped || tr.gen !== gen) break;
           tr.next++; tr.retry = 0;
           await this.trim(tr);
         }
@@ -3013,10 +3021,12 @@ function createDashEngine(name){
           try{ if (this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
         }
       }catch(err){
-        if (!this.stopped){
+        if (!this.stopped && this.tracks.includes(tr)){
           log(`${this.name}: ${tr.kind} 区間の取得に失敗 ` + err.message);
           tr.retry++;
-          if (tr.retry <= 20) setTimeout(() => { if (!this.stopped) this.pump(tr); }, Math.min(15000, 1000*tr.retry));
+          if (tr.retry <= 20)
+            setTimeout(() => { if (!this.stopped && this.tracks.includes(tr)) this.pump(tr); },
+                       Math.min(15000, 1000*tr.retry));
         }
       }finally{
         tr.busy = false;
@@ -3025,11 +3035,13 @@ function createDashEngine(name){
     },
 
     async trim(tr){
-      if (!tr.sb || tr.sb.updating || !tr.sb.buffered.length) return;
-      const t = this.el.currentTime;
-      const start = tr.sb.buffered.start(0);
-      const keep = tr.kind === "video" ? 60 : 180;
-      if (t - start > keep + 60){ try{ tr.sb.remove(start, t - keep); }catch(_){} }
+      try{
+        if (this.stopped || !tr.sb || tr.sb.updating || !tr.sb.buffered.length) return;
+        const t = this.el.currentTime;
+        const start = tr.sb.buffered.start(0);
+        const keep = tr.kind === "video" ? 60 : 180;
+        if (t - start > keep + 60) tr.sb.remove(start, t - keep);
+      }catch(_){}
     },
 
     onSeek(){
