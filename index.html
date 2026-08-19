@@ -363,7 +363,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v77</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v79</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -484,6 +484,13 @@ b{font-weight:600}
             <label class="check"><input id="bgAudio" type="checkbox" checked> 画面を消しても音声を続ける</label>
             <label class="check"><input id="dashVideoOpt" type="checkbox" checked> 映像も区間配信で受け取る（シークが速い）</label>
             <label class="check"><input id="castFirst" type="checkbox"> テレビで観る（区間配信を使わず、押してすぐキャストできる）</label>
+            <div class="field"><label for="castQuality">テレビ側の画質</label>
+              <select id="castQuality">
+                <option value="0">自動（最高画質まで）</option>
+                <option value="1080">1080p まで</option>
+                <option value="720" selected>720p まで（途切れにくい）</option>
+                <option value="480">480p まで</option>
+              </select></div>
             <div class="field"><label for="conc">同時取得</label>
               <input id="conc" class="w-num" type="number" value="8" min="1" max="16"></div>
             <div class="field"><label for="fw">コマ幅 px</label>
@@ -646,7 +653,7 @@ function mdKey(base){
 
 const $ = id => document.getElementById(id);
 const els = {};
-["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt","castFirst",
+["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt","castFirst","castQuality",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
  "advBox","advBtn","installBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
@@ -2723,6 +2730,14 @@ els.personalTags.addEventListener("change", async () => {
   if (fsel) openSelectedFolder(false);
 });
 
+els.castQuality.addEventListener("change", () => {
+  localStorage.setItem("bcs_castq", els.castQuality.value);
+  if (presConn){
+    castSend({type:"quality", maxHeight: Number(els.castQuality.value) || 0});
+    say("テレビ側の画質を変更しました");
+  }
+});
+
 els.sortBtn.addEventListener("click", e => {
   e.stopPropagation();
   openSortMenu(els.sortMenu.hidden);
@@ -3246,8 +3261,30 @@ const RECEIVER_URL = new URL("receiver.html", location.href).href;
 let presReq = null;
 let presConn = null;
 let castTimeTimer = null;
+let castTrack = "";
 
 function presSupported(){ return typeof PresentationRequest === "function"; }
+
+// 受信ページが本当に置かれているかを先に確かめる。
+// 無いままキャストすると、テレビに 404 が映るだけになる。
+let receiverOk = null;
+async function checkReceiver(){
+  if (receiverOk !== null) return receiverOk;
+  try{
+    const r = await fetch(RECEIVER_URL, {cache:"no-store"});
+    const text = r.ok ? await r.text() : "";
+    receiverOk = r.ok && /Contact\s*Sheet/.test(text);
+    log(receiverOk
+      ? "受信ページを確認しました: " + RECEIVER_URL
+      : `受信ページが見つかりません（${r.status}）: ${RECEIVER_URL}`);
+  }catch(err){
+    receiverOk = false;
+    log("受信ページを確認できません: " + err.message);
+  }
+  if (!receiverOk)
+    say("テレビ用の受信ページ（receiver.html）が見つかりません。index.html と同じ場所に置いてください。", true);
+  return receiverOk;
+}
 
 function ensurePresRequest(){
   if (presReq || !presSupported()) return presReq;
@@ -3270,7 +3307,8 @@ function castSend(obj){
 async function castLoadCurrent(){
   if (!presConn || !currentFile) return;
   const payload = {type:"load", token: token(), title: currentFile.name,
-                   time: els.pVideo.currentTime || 0};
+                   time: els.pVideo.currentTime || 0,
+                   maxHeight: Number(els.castQuality.value) || 0};
   const mpd = await getMpd(currentFile).catch(() => null);
   if (mpd){
     payload.manifest = mpd.url;
@@ -3285,16 +3323,28 @@ function bindPresConn(conn){
   presConn = conn;
   castMode = true;
   els.pCast.classList.add("btn-go");
-  els.pNote.textContent = "テレビで再生中（この画面から操作できます）";
+  els.pNote.textContent = "テレビへ送っています…";
   els.pVideo.pause();
 
   conn.addEventListener("message", e => {
     let m; try{ m = JSON.parse(e.data); }catch(_){ return; }
     if (m.type === "ready") castLoadCurrent();
-    else if (m.type === "loaded") log("テレビで再生を開始しました");
-    else if (m.type === "error") log("テレビ側のエラー: " + (m.message || m.code));
+    else if (m.type === "loaded"){
+      log("テレビで再生を開始しました");
+      els.pNote.textContent = "テレビで再生中（この画面から操作できます）";
+    }
+    else if (m.type === "error"){
+      log("テレビ側のエラー: " + (m.message || m.code));
+      els.pNote.textContent = "テレビで再生できません（" + (m.message || m.code) + "）";
+      say("テレビ側で再生できませんでした: " + (m.message || m.code), true);
+    }
+    else if (m.type === "track"){
+      castTrack = `${m.width}x${m.height} ${Math.round(m.bandwidth/1000)} kbps`;
+      log("テレビ側の画質: " + castTrack);
+    }
     else if (m.type === "time" && m.duration) els.pMeta.textContent =
-      `テレビ再生中  ${fmtTC(m.time)} / ${fmtTC(m.duration)}`;
+      `テレビ再生中  ${fmtTC(m.time)} / ${fmtTC(m.duration)}`
+      + (castTrack ? `  ${castTrack}` : "");
   });
   conn.addEventListener("close", endCast);
   conn.addEventListener("terminate", endCast);
@@ -3389,7 +3439,11 @@ async function castableUrl(file){
 
 function startCast(){
   // まずは受信ページ方式。押した瞬間に Chrome の機器一覧が出る。
-  if (presSupported()){
+  if (presSupported() && receiverOk === false){
+    say("テレビ用の受信ページ（receiver.html）が見つかりません。index.html と同じ場所に置いてください。", true);
+    log("受信ページが無いため、従来方式に切り替えます: " + RECEIVER_URL);
+  }
+  if (presSupported() && receiverOk !== false){
     if (presConn){ castSend({type:"stop"}); try{ presConn.terminate(); }catch(_){} endCast(); return; }
     startPresentationCast();
     return;
@@ -3886,6 +3940,7 @@ if ("serviceWorker" in navigator){
   els.folder.value   = localStorage.getItem("bcs_treeroot") || "0";
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   els.sort.value     = localStorage.getItem("bcs_sort") || "name";
+  els.castQuality.value = localStorage.getItem("bcs_castq") || "720";
   els.personalTags.checked = localStorage.getItem("bcs_personal") !== "0";   // 既定は自分専用
   document.documentElement.style.setProperty("--col", els.col.value + "px");
   els.redirUri.textContent = redirectUri();
@@ -3905,6 +3960,7 @@ if ("serviceWorker" in navigator){
                        plays:rec.plays || 0, last:rec.last || 0, dirty:!!rec.dirty});
   globalIndex = await idbAll("files");
   ensurePresRequest();    // Chrome が把握している機器をそのまま受け取る
+  if (presSupported()) checkReceiver();
   primeCastProbe();       // 受信ページ方式が使えない場合の備え
   log("marks: " + marks.size + " / 索引: " + globalIndex.length);
 
