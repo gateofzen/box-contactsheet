@@ -119,14 +119,15 @@ b{font-weight:600}
 
 .strip{position:relative;background:#000;cursor:pointer}
 .hero{position:relative;aspect-ratio:16/9;background:#0B0E11;overflow:hidden}
-.hero img{width:100%;height:100%;object-fit:cover;display:block}
+
 .hero .tc{position:absolute;right:7px;bottom:7px;font-family:var(--mono);font-size:11px;
   padding:2px 7px;background:rgba(0,0,0,.72);color:#fff;border-radius:4px}
 .rail{display:none}
 .frames{display:grid;grid-template-columns:repeat(5,1fr);gap:2px;background:var(--line-soft);
   aspect-ratio:80/9;border-top:2px solid var(--surface)}
 .frames.solo{grid-template-columns:1fr;aspect-ratio:16/9}
-.frames img{width:100%;height:100%;object-fit:cover;display:block;background:#000}
+.frames .slot{background-repeat:no-repeat}
+.hero .heroimg{position:absolute;inset:0;background-repeat:no-repeat;background-color:#0B0E11}
 .frames .slot{position:relative;overflow:hidden;background:#0B0E11;cursor:pointer}
 .frames .slot::after{content:attr(data-tc);position:absolute;left:0;bottom:0;font-family:var(--mono);
   font-size:9px;padding:1px 3px;background:rgba(0,0,0,.65);color:var(--amber);opacity:0;transition:opacity .12s}
@@ -345,7 +346,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v53</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v54</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1441,11 +1442,11 @@ async function fetchBlob(url){
   if (!r.ok) throw new Error("representation fetch " + r.status);
   return r.blob();
 }
-async function sliceFilmstrip(blob, frameW){
+// フィルムストリップから 5 コマを取り出し、横に連結した 1 枚を作る。
+// コマごとに圧縮すると 1 本につき 6 回の圧縮が要るが、この方法なら 1 回で済む。
+async function composeFromFilmstrip(blob, frameW){
   const bmp = await createImageBitmap(blob);
   const W = bmp.width, H = bmp.height;
-  // 端数は切り捨てる。切り上げると 1 コマあたりの幅がわずかに狭く計算され、
-  // 右へ行くほどずれが積み上がって別のコマが写り込む。
   const cols = Math.max(1, Math.floor(W / frameW));
   const guessH = Math.round(frameW * 9 / 16);
   let rows = Math.max(1, Math.round(H / guessH));
@@ -1457,17 +1458,16 @@ async function sliceFilmstrip(blob, frameW){
     + (spare ? ` / 端数 ${spare}px は無視` : ""));
 
   const canvas = document.createElement("canvas");
-  canvas.width = frameW; canvas.height = frameH;
+  canvas.width = frameW * FRAME_COUNT; canvas.height = frameH;
   const ctx = canvas.getContext("2d");
-  const frames = [];
-  for (const p of SAMPLE_POINTS){
-    const idx = Math.min(total-1, Math.max(0, Math.round(p * (total-1))));
-    ctx.clearRect(0,0,frameW,frameH);
-    ctx.drawImage(bmp, (idx % cols) * frameW, Math.floor(idx / cols) * frameH, frameW, frameH, 0, 0, frameW, frameH);
-    frames.push(await new Promise(r => canvas.toBlob(r, "image/jpeg", .82)));
-  }
+  SAMPLE_POINTS.forEach((pt, i) => {
+    const idx = Math.min(total-1, Math.max(0, Math.round(pt * (total-1))));
+    ctx.drawImage(bmp, (idx % cols) * frameW, Math.floor(idx / cols) * frameH,
+                  frameW, frameH, i * frameW, 0, frameW, frameH);
+  });
   bmp.close && bmp.close();
-  return {frames, total};
+  const sheet = await new Promise(r => canvas.toBlob(r, "image/jpeg", .85));
+  return {sheet, total};
 }
 /**
  * 原本の動画を直接シークして 5 コマを切り出す。
@@ -1611,22 +1611,6 @@ async function composeSheet(frames){
   return new Promise(r => canvas.toBlob(r, "image/jpeg", .85));
 }
 
-// 連結された 1 枚を 5 コマに戻す
-async function splitSheet(blob, n){
-  const bmp = await createImageBitmap(blob);
-  const w = Math.round(bmp.width / n), h = bmp.height;
-  const canvas = document.createElement("canvas");
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  const out = [];
-  for (let i = 0; i < n; i++){
-    ctx.clearRect(0,0,w,h);
-    ctx.drawImage(bmp, i*w, 0, w, h, 0, 0, w, h);
-    out.push(await new Promise(r => canvas.toBlob(r, "image/jpeg", .9)));
-  }
-  bmp.close && bmp.close();
-  return out;
-}
 
 const srcStats = {shared:0, made:0, failed:0, local:0};
 
@@ -1647,15 +1631,38 @@ async function fetchSharedThumbs(file){
   const blob = await r.blob();
   if (!blob || blob.size < 100 || !/image/.test(blob.type || "image/jpeg"))
     throw new Error(`受け取った内容が画像ではありません (${blob && blob.size} bytes, ${blob && blob.type})`);
-  const frames = await splitSheet(blob, FRAME_COUNT);
-  return {id:file.id, frames, total:0, interval:null, duration:hit.dur || null,
+  return {id:file.id, sheet: blob, n: FRAME_COUNT, total:0, interval:null, duration:hit.dur || null,
           ok:true, pending:false, hq:false, shared:true,
           poster: posterBlob, posterTried: !!posterBlob, ts:Date.now()};
 }
 
+// 主画像だけを共有に追加する。
+// これを uploadSharedThumbs で代用すると、シート全体を送り直すことになる。
+async function uploadPosterOnly(file, rec){
+  if (!els.shareThumbs.checked || shareReadOnly || !file.parentId || !rec.poster) return;
+  try{
+    const folderId = await getCacheFolder(file.parentId, true);
+    if (!folderId) return;
+    const index = await getCacheIndex(file.parentId);
+    const cur = index.get(file.id);
+    if (!cur || !cur.id || cur.posterId) return;      // シートが無い／既に主画像あり
+    const name = `${file.id}~${cur.dur || 0}~p.jpg`;
+    const fd = new FormData();
+    fd.append("attributes", JSON.stringify({name, parent:{id: folderId}}));
+    fd.append("file", rec.poster, name);
+    const r = await fetch(`${UPLOAD_API}/files/content`,
+      {method:"POST", headers:{Authorization:"Bearer " + token()}, body: fd});
+    const d = await r.json().catch(() => ({}));
+    const pid = (r.ok && d.entries && d.entries[0]) ? d.entries[0].id
+      : (d.context_info && d.context_info.conflicts
+         && (d.context_info.conflicts.id || (d.context_info.conflicts[0] && d.context_info.conflicts[0].id)));
+    if (pid){ cur.posterId = pid; index.set(file.id, cur); log("主画像を共有に保存: " + name); }
+  }catch(err){ log("主画像の保存に失敗: " + err.message); }
+}
+
 async function uploadSharedThumbs(file, rec){
   if (!els.shareThumbs.checked || shareReadOnly || !file.parentId) return;
-  if (!rec.ok || rec.frames.length !== FRAME_COUNT) return;
+  if (!rec.ok || !rec.sheet || rec.n !== FRAME_COUNT) return;
   try{
     const folderId = await getCacheFolder(file.parentId, true);
     if (!folderId) return;
@@ -1663,8 +1670,9 @@ async function uploadSharedThumbs(file, rec){
 
     const dur = Math.round(rec.duration || (rec.interval && rec.total ? rec.interval * rec.total : 0));
     const name = `${file.id}~${dur}.jpg`;
-    const sheet = await composeSheet(rec.frames);
+    const sheet = rec.sheet;
     const existing = index.get(file.id);
+    if (existing && existing.id && rec.shared) return;   // 共有から受け取ったものを送り返さない
 
     const url = existing ? `${UPLOAD_API}/files/${existing.id}/content` : `${UPLOAD_API}/files/content`;
     const fd = new FormData();
@@ -1711,9 +1719,9 @@ async function uploadSharedThumbs(file, rec){
 }
 
 async function buildHiRes(file){
-  const rec = {id:file.id, frames:[], total:0, interval:null, ok:false, pending:false, hq:true, duration:null, ts:Date.now()};
+  const rec = {id:file.id, sheet:null, n:FRAME_COUNT, total:0, interval:null, ok:false, pending:false, hq:true, duration:null, ts:Date.now()};
   const cap = await captureFromVideo(originalUrl(file), SAMPLE_POINTS);
-  rec.frames = cap.frames;
+  rec.sheet = await composeSheet(cap.frames); rec.n = FRAME_COUNT;
   rec.duration = cap.duration;
   rec.ok = true;
   log(`高画質 ${file.name} → ${cap.w}x${cap.h} × 5 コマ`);
@@ -1754,9 +1762,9 @@ function drainPosters(){
         rec.poster = await fetchPoster(file.id);
         rec.posterTried = true;
         await idbPut("thumbs", rec);
-        if (rec.poster) uploadSharedThumbs(file, rec);   // 主画像も共有に置く
         // すでに並んでいるカードなら、主画像だけ差し替える
         if (rec.poster && cardById.has(file.id)) await paintThumbs(file, true);
+        if (rec.poster) uploadPosterOnly(file, rec);
       }catch(_){}
       finally{ posterBusy--; drainPosters(); }
     })();
@@ -1765,7 +1773,7 @@ function drainPosters(){
 
 async function buildThumbs(file){
   const cached = await idbGet("thumbs", file.id);
-  if (cached && cached.ok && cached.frames && cached.frames.length){
+  if (cached && cached.ok && cached.sheet){
     if (!els.autohq.checked || cached.hq){ srcStats.local++; queuePoster(file, cached); return cached; }
   }
   if (els.autohq.checked){
@@ -1788,20 +1796,20 @@ async function buildThumbs(file){
   }
 
   const frameW = Math.max(40, Number(els.fw.value) || 160);
-  const rec = {id:file.id, frames:[], total:0, interval:null, ok:false, pending:false, ts:Date.now()};
+  const rec = {id:file.id, sheet:null, n:0, total:0, interval:null, ok:false, pending:false, ts:Date.now()};
   try{
     const fs = await waitForRep(await getRepresentation(file.id, "[filmstrip]") || {});
     const url = repContentUrl(fs.rep);
     if (url){
-      const sliced = await sliceFilmstrip(await fetchBlob(url), frameW);
-      rec.frames = sliced.frames; rec.total = sliced.total;
+      const made = await composeFromFilmstrip(await fetchBlob(url), frameW);
+      rec.sheet = made.sheet; rec.n = FRAME_COUNT; rec.total = made.total;
       rec.interval = (fs.rep.metadata && fs.rep.metadata.interval) || null;
       rec.ok = true;
     }else{
       // filmstrip は Box 側で生成中。とりあえず静止画を出しておき、あとで作り直す。
       const jp = await waitForRep(await getRepresentation(file.id, "[jpg?dimensions=320x320]") || {}, 2);
       const jurl = repContentUrl(jp.rep);
-      if (jurl){ rec.frames = [await fetchBlob(jurl)]; rec.total = 1; }
+      if (jurl){ rec.sheet = await fetchBlob(jurl); rec.n = 1; rec.total = 1; }
       rec.pending = fs.pending || jp.pending;
       rec.ok = !rec.pending && !!jurl;
       log(file.name, rec.pending ? "→ filmstrip を生成中（あとで再取得します）"
@@ -2128,7 +2136,7 @@ async function paintThumbs(file, fromCache){
 
   if (rec.pending) waiting.add(file.id); else waiting.delete(file.id);
 
-  if (!rec.frames.length){
+  if (!rec.sheet){
     if (ph){
       ph.textContent = rec.pending ? "Box が生成中…" : "サムネイルなし";
       ph.classList.toggle("fail", !rec.pending);
@@ -2137,59 +2145,69 @@ async function paintThumbs(file, fromCache){
     return;
   }
 
-  // 差し替えのため既存の画像を捨ててから描き直す
-  ref.strip.querySelectorAll("img").forEach(i => { URL.revokeObjectURL(i.src); i.remove(); });
-  ref.hero.innerHTML = "";
-  const n = rec.frames.length;
-  const urls = rec.frames.map(b => URL.createObjectURL(b));
+  // 連結された 1 枚をそのまま使い、表示位置をずらして 5 コマに見せる。
+  // 切り分けて再圧縮しないので、端末の負担がほとんどない。
+  if (ref.sheetUrl) URL.revokeObjectURL(ref.sheetUrl);
+  ref.sheetUrl = URL.createObjectURL(rec.sheet);
+  const n = rec.n || 1;
   const tcOf = i => {
     if (rec.duration) return fmtTC(SAMPLE_POINTS[i] * rec.duration);
     if (rec.interval && rec.total > 1) return fmtTC(Math.round(SAMPLE_POINTS[i] * (rec.total-1)) * rec.interval);
     return "";
   };
+  const posAt = i => n > 1 ? `${(i / (n - 1)) * 100}% 0` : "0 0";
+  const sizeCss = `${n * 100}% 100%`;
 
-  // 主画像 — 既定は Box の大きな静止画。無ければ中央のコマ。
+  // 主画像
   ref.hero.innerHTML = "";
-  const heroImg = document.createElement("img");
+  const heroImg = document.createElement("div");
+  heroImg.className = "heroimg";
   const heroTc = document.createElement("span");
   heroTc.className = "tc";
   ref.hero.appendChild(heroImg); ref.hero.appendChild(heroTc);
 
-  const posterUrl = rec.poster ? URL.createObjectURL(rec.poster) : null;
+  if (ref.posterUrl) URL.revokeObjectURL(ref.posterUrl);
+  ref.posterUrl = rec.poster ? URL.createObjectURL(rec.poster) : null;
   const defaultIdx = Math.min(2, n - 1);
 
   const showFrame = i => {
-    heroImg.src = urls[i];
+    heroImg.style.backgroundImage = `url(${ref.sheetUrl})`;
+    heroImg.style.backgroundSize = sizeCss;
+    heroImg.style.backgroundPosition = posAt(i);
     heroTc.textContent = tcOf(i);
     heroTc.style.display = tcOf(i) ? "" : "none";
-    framesEl.querySelectorAll(".slot").forEach((s,k) => s.classList.toggle("sel", k === i));
+    framesEl.querySelectorAll(".slot").forEach((sl,k) => sl.classList.toggle("sel", k === i));
   };
   const showDefault = () => {
-    if (posterUrl){
-      heroImg.src = posterUrl;
+    if (ref.posterUrl){
+      heroImg.style.backgroundImage = `url(${ref.posterUrl})`;
+      heroImg.style.backgroundSize = "cover";
+      heroImg.style.backgroundPosition = "center";
       heroTc.textContent = rec.duration ? fmtTC(rec.duration)
         : (rec.interval && rec.total ? fmtTC(rec.total * rec.interval) : "");
       heroTc.style.display = heroTc.textContent ? "" : "none";
-      framesEl.querySelectorAll(".slot").forEach(s => s.classList.remove("sel"));
-    }else{
-      showFrame(defaultIdx);
-    }
+      framesEl.querySelectorAll(".slot").forEach(sl => sl.classList.remove("sel"));
+    }else showFrame(defaultIdx);
   };
 
   framesEl.classList.toggle("solo", n === 1);
   [...framesEl.querySelectorAll(".slot")].forEach((slot,i) => {
     if (i >= n){ slot.style.display = "none"; return; }
     slot.style.display = "";
-    const img = document.createElement("img");
-    img.loading = "lazy"; img.alt = "";
-    img.src = urls[i];
-    slot.appendChild(img);
+    slot.style.backgroundImage = `url(${ref.sheetUrl})`;
+    slot.style.backgroundSize = sizeCss;
+    slot.style.backgroundPosition = posAt(i);
     slot.dataset.tc = tcOf(i);
-    // 帯のコマにマウスを載せると主画像が切り替わる
-    slot.addEventListener("mouseenter", () => showFrame(i));
-    slot.addEventListener("click", e => { e.stopPropagation(); openPlayer(file, SAMPLE_POINTS[i]); });
+    if (!slot.dataset.bound){
+      slot.dataset.bound = "1";
+      slot.addEventListener("mouseenter", () => showFrame(i));
+      slot.addEventListener("click", e => { e.stopPropagation(); openPlayer(file, SAMPLE_POINTS[i]); });
+    }
   });
-  framesEl.addEventListener("mouseleave", showDefault);
+  if (!framesEl.dataset.bound){
+    framesEl.dataset.bound = "1";
+    framesEl.addEventListener("mouseleave", showDefault);
+  }
   showDefault();
 
   if (rec.duration) ref.dur.textContent = "≈ " + fmtTC(rec.duration);
