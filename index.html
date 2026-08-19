@@ -346,7 +346,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v54</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v55</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -618,6 +618,12 @@ let cachedCount = 0;
 let scanAbort = null;
 let globalIndex = [];   // これまでに見つけた全フォルダの動画
 let deepScan = false;   // 「配下をすべて取り込む」で読んだ状態か
+const viewById = new Map();   // いま一覧に出しているファイル（検索結果を含む）
+
+// 一覧・現在のフォルダ・全体索引の順に探す
+function findFile(id){
+  return viewById.get(id) || files.find(f => f.id === id) || globalIndex.find(f => f.id === id) || null;
+}
 const cardById = new Map();
 const marks = new Map();      // id -> {fav:bool, tags:[string], dirty:bool}
 const picked = new Set();
@@ -1921,6 +1927,8 @@ function applyView(){
   // 配下すべてを取り込んだときも、一覧は選んでいるフォルダの直下だけを見せる
   if (!wide && deepScan && fsel) base = base.filter(f => f.parentId === fsel);
   view = base.filter(f => matches(f, q));
+  viewById.clear();
+  for (const f of view) viewById.set(f.id, f);
 
   const mode = els.sort.value;
   view.sort((a,b) => {
@@ -2117,8 +2125,10 @@ const thumbObserver = new IntersectionObserver(entries => {
   for (const en of entries){
     if (!en.isIntersecting) continue;
     thumbObserver.unobserve(en.target);
-    const f = files.find(x => x.id === en.target.dataset.id);
+    // 検索結果は files に入っていないので、表示中の一覧から引く
+    const f = findFile(en.target.dataset.id);
     if (f) pool.push(() => paintThumbs(f));
+    else log("対象のファイルが見つかりません: " + en.target.dataset.id);
   }
 }, {rootMargin:"600px 0px"});
 
@@ -2234,7 +2244,7 @@ setInterval(() => {
   if (!waiting.size || scanAbort) return;
   const retry = [...waiting].filter(id => cardById.has(id)).slice(0, 6);
   for (const id of retry){
-    const f = files.find(x => x.id === id);
+    const f = findFile(id);
     if (f) pool.push(() => paintThumbs(f));
   }
 }, 30000);
