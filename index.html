@@ -230,6 +230,10 @@ b{font-weight:600}
 .check{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;
   color:var(--muted);padding-bottom:8px;white-space:nowrap;cursor:pointer}
 .check input{accent-color:var(--amber)}
+.report{margin:10px 0 0;padding:10px 12px;background:var(--ink);border:1px solid var(--line-soft);
+  border-radius:6px;font-family:var(--mono);font-size:11px;line-height:1.7;color:var(--muted);
+  white-space:pre-wrap;max-height:300px;overflow:auto}
+.report b{color:var(--amber);font-weight:500}
 .debug{margin-top:12px;font-family:var(--mono);font-size:11px}
 .debug summary{cursor:pointer;color:var(--muted);padding:6px 0}
 .debug pre{margin:0;padding:8px 0;white-space:pre-wrap;color:var(--muted);max-height:260px;overflow:auto}
@@ -337,11 +341,11 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v45</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v48</small></div>
     <div class="search">
       <span>⌕</span>
-      <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
-             aria-label="絞り込み" autocomplete="off" autocorrect="off" spellcheck="false">
+      <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
+             aria-label="絞り込み" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other">
     </div>
     <button id="loginTop" class="btn btn-go" hidden>ログイン</button>
     <button id="advBtn" class="iconbtn" title="設定" aria-label="設定">⚙</button>
@@ -465,6 +469,7 @@ b{font-weight:600}
             <button id="importBtn" class="btn btn-sm">読み込み</button>
             <input id="importFile" type="file" accept="application/json" hidden>
           </div>
+          <pre id="shareReport" class="report" hidden></pre>
         </div>
 
         <details class="panel" id="setupBox" style="margin-top:6px;border:none;background:none">
@@ -477,9 +482,9 @@ b{font-weight:600}
             </div>
             <div class="rack" style="margin-top:10px">
               <div class="field"><label for="clientId">クライアント ID</label>
-                <input id="clientId" class="w-token" type="text" autocomplete="off"></div>
+                <input id="clientId" class="w-token" type="text" name="bcs-clientid" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other"></div>
               <div class="field"><label for="worker">Worker URL</label>
-                <input id="worker" class="w-token" type="text" autocomplete="off"></div>
+                <input id="worker" class="w-token" type="text" name="bcs-worker" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other"></div>
             </div>
             <div class="rack" style="margin-top:10px">
               <div class="field"><label for="folder">ツリーの最上位 (0=すべて)</label>
@@ -488,7 +493,7 @@ b{font-weight:600}
                 <input id="cacheFolder" class="w-id" type="text" value="未作成" readonly
                        title="各フォルダ直下の _ContactSheetCache に自動で保存されます"></div>
               <div class="field"><label for="token">開発者トークン（予備）</label>
-                <input id="token" class="w-token" type="password" autocomplete="off"></div>
+                <input id="token" class="w-token" type="text" name="bcs-devtoken" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other"></div>
             </div>
             <p class="note">リダイレクト URI には <b id="redirUri"></b> を Box に登録してください。</p>
           </div>
@@ -594,7 +599,7 @@ const els = {};
 ["token","folder","depth","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
- "advBox","advBtn","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck",
+ "advBox","advBtn","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport",
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
@@ -607,6 +612,7 @@ let rendered = 0;
 let cachedCount = 0;
 let scanAbort = null;
 let globalIndex = [];   // これまでに見つけた全フォルダの動画
+let deepScan = false;   // 「配下をすべて取り込む」で読んだ状態か
 const cardById = new Map();
 const marks = new Map();      // id -> {fav:bool, tags:[string], dirty:bool}
 const picked = new Set();
@@ -1149,21 +1155,23 @@ async function openSelectedFolder(deep){
   if (!fsel) return;
   const seq = ++openSeq;               // 後から選び直されたら、この回は降りる
   localStorage.setItem("bcs_lastfolder", fsel);   // 起点ではなく「前回見ていた場所」
+  deepScan = !!deep;
   await ensureFresh();
   if (!await checkAuth()) return;
   await scan(fsel, deep);
   if (seq !== openSeq) return;         // 別のフォルダに追い越された
-  if (els.autothumb.checked && files.length) await prefetchThumbs();
+  // 配下すべての取り込みでは、取得は配下全部・表示は直下だけ
+  if (els.autothumb.checked && files.length) await prefetchThumbs(deep ? files.slice() : null);
 }
 
 /* ============ サムネイル一括取得 ============ */
 let batchRunning = false, batchStop = false;
 
-async function prefetchThumbs(){
+async function prefetchThumbs(list){
   if (batchRunning){ batchStop = true; return; }
   // 走査直後で表示リストがまだ作られていないことがあるので、ここで確定させる
   if (!view.length && files.length) applyView();
-  const list = view.slice();
+  list = list || view.slice();
   if (!list.length){
     return say(files.length
       ? "絞り込みの結果が 0 件です。検索欄を空にしてお試しください。"
@@ -1830,7 +1838,9 @@ function applyView(){
   const q = parseQuery(els.q.value);
   // 検索欄に何か入っている間は、開いているフォルダではなく全フォルダを対象にする
   const wide = raw.length > 0 && globalIndex.length > 0;
-  const base = wide ? globalIndex : files;
+  let base = wide ? globalIndex : files;
+  // 配下すべてを取り込んだときも、一覧は選んでいるフォルダの直下だけを見せる
+  if (!wide && deepScan && fsel) base = base.filter(f => f.parentId === fsel);
   view = base.filter(f => matches(f, q));
 
   const mode = els.sort.value;
@@ -1857,10 +1867,18 @@ function applyView(){
 
   els.sheet.innerHTML = ""; cardById.clear(); rendered = 0;
   els.nTotal.textContent = wide ? globalIndex.length : files.length;
-  els.empty.hidden = (wide ? globalIndex.length : files.length) > 0;
-  els.searchScope.hidden = !wide;
-  els.searchScope.textContent = wide
-    ? `全フォルダ ${globalIndex.length} 本から ${view.length} 件` : "";
+  els.empty.hidden = (wide ? globalIndex.length : files.length) > 0 || view.length > 0;
+  if (wide){
+    els.searchScope.hidden = false;
+    els.searchScope.textContent = `全フォルダ ${globalIndex.length} 本から ${view.length} 件`;
+  }else if (deepScan){
+    els.searchScope.hidden = false;
+    els.searchScope.textContent =
+      `このフォルダ直下 ${view.length} 本を表示中（配下 ${files.length} 本を取り込み済み）`;
+  }else{
+    els.searchScope.hidden = true;
+    els.searchScope.textContent = "";
+  }
   renderMore(); refreshCounts();
 }
 function refreshCounts(){
@@ -2268,8 +2286,13 @@ els.bulkNone.addEventListener("click", () => {
 /* ============ 書き出し / 読み込み ============ */
 // いま表示している動画について、共有サムネイルが実際にどうなっているか調べる
 els.shareCheck.addEventListener("click", async () => {
-  if (!view.length) return say("先にフォルダを開いてください", true);
-  say("共有サムネイルの状態を調べています…");
+  els.shareReport.hidden = false;
+  if (!view.length){
+    els.shareReport.textContent = "表示中の動画がありません。先に左のフォルダを開いてから押してください。";
+    return;
+  }
+  els.shareCheck.disabled = true;
+  els.shareReport.textContent = `調べています… （対象 ${view.length} 本）`;
   const parents = [...new Set(view.map(f => f.parentId).filter(Boolean))];
   let folders = 0, sheets = 0, matched = 0, localOnly = 0;
   const lines = [];
@@ -2287,14 +2310,26 @@ els.shareCheck.addEventListener("click", async () => {
     const rec = await idbGet("thumbs", f.id);
     if (rec && rec.ok && !rec.shared) localOnly++;
   }
-  log("=== 共有サムネイルの状態 ===");
-  lines.forEach(l => log(l));
-  log(`  合計: 置き場 ${folders}/${parents.length} フォルダ / 保存済み ${sheets} 件 / `
-    + `表示中 ${view.length} 本のうち ${matched} 本が共有済み`);
-  log(`  この端末だけで作った（未共有の）ぶん: ${localOnly} 本`);
-  log(`  共有の設定: ${els.shareThumbs.checked ? "有効" : "無効"} / 書き込み: ${shareReadOnly ? "不可" : "可"}`);
-  say(`共有済み ${matched}/${view.length} 本（置き場 ${folders} フォルダ）— 詳細は診断ログ`);
-  setAdvOpen(true);
+  const verdict =
+    !els.shareThumbs.checked ? "共有が無効になっています。上のチェックを入れてください。"
+    : shareReadOnly           ? "このフォルダへの書き込み権限がありません。読み取り専用で動いています。"
+    : folders === 0           ? "置き場がまだ作られていません。サムネイルを取得すると作られます。"
+    : matched === view.length ? "すべて共有済みです。他の端末でも作り直しは起きません。"
+    : matched === 0           ? "この一覧はまだ 1 本も共有されていません。"
+    : `${view.length - matched} 本がまだ共有されていません。「サムネイル一括取得」で揃います。`;
+
+  const report =
+    `対象: ${view.length} 本 / ${parents.length} フォルダ\n`
+    + `共有済み: ${matched} 本\n`
+    + `この端末だけにあるぶん: ${localOnly} 本\n`
+    + `置き場のあるフォルダ: ${folders} / ${parents.length}\n`
+    + `Box 上の保存数: ${sheets} 件\n`
+    + `設定: 共有 ${els.shareThumbs.checked ? "有効" : "無効"} / 書き込み ${shareReadOnly ? "不可" : "可"}\n`
+    + `\n${verdict}\n\nフォルダごとの内訳:\n` + lines.join("\n");
+
+  els.shareReport.textContent = report;
+  els.shareCheck.disabled = false;
+  log("共有サムネイルの状態を確認: 共有済み " + matched + "/" + view.length);
 });
 
 els.exportBtn.addEventListener("click", async () => {
@@ -3121,6 +3156,15 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   els.clientId.value = (localStorage.getItem("bcs_client") || "").trim() || DEFAULTS.clientId;
   els.worker.value   = (localStorage.getItem("bcs_worker") || "").trim() || DEFAULTS.worker;
   els.token.value    = localStorage.getItem("bcs_token") || "";
+  // パスワード欄にすると Chrome がログイン画面と誤認するため、
+  // 見た目だけ伏せ字にする（入力中は解除）
+  const maskToken = () => {
+    if (document.activeElement === els.token) return;
+    els.token.style.webkitTextSecurity = els.token.value ? "disc" : "none";
+  };
+  els.token.addEventListener("focus", () => { els.token.style.webkitTextSecurity = "none"; });
+  els.token.addEventListener("blur", maskToken);
+  maskToken();
   els.folder.value   = localStorage.getItem("bcs_treeroot") || "0";
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   document.documentElement.style.setProperty("--col", els.col.value + "px");
@@ -3134,7 +3178,8 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   // ブラウザが復元した検索欄の値を捨てる
   if (els.q.value) log("検索欄に復元された値を破棄しました: " + els.q.value);
   const fresh = document.createElement("input");
-  for (const a of ["type","name","placeholder","aria-label","autocomplete","autocorrect","spellcheck"]){
+  for (const a of ["type","name","placeholder","aria-label","autocomplete","autocorrect",
+                   "autocapitalize","spellcheck","data-lpignore","data-1p-ignore","data-form-type"]){
     const v = els.q.getAttribute(a);
     if (v !== null) fresh.setAttribute(a, v);
   }
