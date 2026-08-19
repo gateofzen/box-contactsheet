@@ -144,6 +144,8 @@ function reportStats(){
       stream: Math.round((st.streamBandwidth||0)/1000),
       dropped: st.droppedFrames||0, decoded: st.decodedFrames||0,
       stalls: Math.round(st.stallsDetected||0),
+      gaps: Math.round(st.gapsJumped||0),
+      play: Math.round(st.playTime||0),
       buffering: Math.round((st.bufferingTime||0)*10)/10,
       ahead: Math.round(b*10)/10,
       w: st.width||0, h: st.height||0});
