@@ -372,7 +372,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v84</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v85</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3504,14 +3504,17 @@ function bindPresConn(conn){
         log(`  ${t.w}x${t.h}  ${t.bw} kbps${t.active ? "  ← 使用中" : ""}`));
     }
     else if (m.type === "stats"){
-      log(`テレビ側の状況: 実測 ${m.estimate} kbps / 再生中の画質 ${m.w}x${m.h} ${m.stream} kbps`
+      log(`テレビ側の状況: ${m.mode === "原本" ? "原本再生" : "実測 " + m.estimate + " kbps"}`
+        + ` / ${m.w}x${m.h}${m.stream ? " " + m.stream + " kbps" : ""}`
         + (m.fps ? ` / ${m.fps} コマ毎秒` : "")
         + ` / 先読み ${m.ahead} 秒 / 停止 ${m.stalls} 回 ${m.buffering} 秒`
         + (m.gaps ? ` / 継ぎ目の飛び越し ${m.gaps} 回` : "")
         + ` / コマ落ち ${m.dropped}（${m.decoded} 中）`);
     }
     else if (m.type === "track"){
-      castTrack = `${m.width}x${m.height} ${Math.round(m.bandwidth/1000)} kbps`;
+      castTrack = m.bandwidth
+        ? `${m.width}x${m.height} ${Math.round(m.bandwidth/1000)} kbps`
+        : `${m.width}x${m.height}（原本）`;
       els.castInfo.textContent = castTrack;
       log("テレビ側の画質: " + castTrack);
     }
@@ -3552,12 +3555,36 @@ function endCast(){
   els.castPanel.hidden = true;
   log("キャストを終了しました");
 
-  // 手元での再生を組み直す
+  // 手元での再生を、テレビで観ていた位置から組み直す
   if (currentFile && els.scrim.classList.contains("open")){
     const f = currentFile;
+    const resumeAt = castLastTime || castStartTime || 0;
     videoKind = "原本";
     els.pVideo.src = originalUrl(f);
-    els.pNote.textContent = "手元で再生中（テレビから戻りました）";
+    els.pVideo.addEventListener("loadedmetadata", () => {
+      if (resumeAt > 0 && isFinite(els.pVideo.duration))
+        els.pVideo.currentTime = Math.min(resumeAt, els.pVideo.duration - 0.5);
+      if (wantPlay) els.pVideo.play().catch(() => {});
+    }, {once:true});
+    els.pNote.textContent = `手元で再生中（テレビの続き ${fmtTC(resumeAt)} から）`;
+    log("手元での再生を再開します: " + fmtTC(resumeAt));
+
+    // 区間配信に戻せるなら戻す（シークが軽いので）
+    if (els.dashVideoOpt.checked){
+      setTimeout(async () => {
+        try{
+          const keep = els.pVideo.currentTime || resumeAt;
+          if (await dashMain.start(f, els.pVideo, ["video","audio"], keep)){
+            if (await waitFor(() => els.pVideo.readyState >= 2, 5000)){
+              videoKind = "DASH";
+              els.pNote.textContent = "再生中（区間配信）";
+              if (wantPlay) els.pVideo.play().catch(() => {});
+              log("区間配信に戻しました: " + fmtTC(keep));
+            }else throw new Error("再生可能になりません");
+          }
+        }catch(err){ log("区間配信に戻せません: " + err.message); dashMain.stop(); }
+      }, 600);
+    }
   }
   setTimeout(() => { castEnding = false; }, 500);
 }
