@@ -322,7 +322,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v42</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v43</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -445,6 +445,7 @@ b{font-weight:600}
           <div class="rack">
             <label class="check"><input id="sync" type="checkbox" checked> タグを Box に保存して端末間で共有</label>
             <label class="check"><input id="shareThumbs" type="checkbox" checked> サムネイルも Box に置いて共有</label>
+            <button id="shareCheck" class="btn btn-sm">共有サムネイルの状態を確認</button>
             <button id="exportBtn" class="btn btn-sm">書き出し</button>
             <button id="importBtn" class="btn btn-sm">読み込み</button>
             <input id="importFile" type="file" accept="application/json" hidden>
@@ -578,7 +579,7 @@ const els = {};
 ["token","folder","depth","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
- "advBox","advBtn","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile",
+ "advBox","advBtn","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck",
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
@@ -791,8 +792,10 @@ async function ensureFresh(){
 setInterval(ensureFresh, 60000);   // 長いスキャン中でも切れないように
 
 function saveSettings(){
-  localStorage.setItem("bcs_client", els.clientId.value.trim());
-  localStorage.setItem("bcs_worker", els.worker.value.trim());
+  // 空の値で既定値を潰さない
+  const cid = els.clientId.value.trim(), wk = els.worker.value.trim();
+  if (cid) localStorage.setItem("bcs_client", cid); else localStorage.removeItem("bcs_client");
+  if (wk)  localStorage.setItem("bcs_worker", wk);  else localStorage.removeItem("bcs_worker");
   localStorage.setItem("bcs_token", els.token.value.trim());
   localStorage.setItem("bcs_treeroot", els.folder.value.trim());
 }
@@ -844,7 +847,8 @@ function renderAuthState(ok){
     els.emptyHint.hidden = false;
   }else{
     els.emptyTitle.textContent = "Box にログインしてください";
-    els.emptyText.textContent  = "ボタンを押すと Box の認証画面に移ります。1 度ログインすれば、この端末では次回から自動で接続します。";
+    els.emptyText.textContent  = "ボタンを押すと Box の認証画面に移ります。1 度ログインすれば、この端末では次回から自動で接続します。"
+      + "（Box に登録が必要なリダイレクト先: " + redirectUri() + "）";
     els.emptyHint.hidden = true;
     els.empty.hidden = false;
   }
@@ -2236,6 +2240,37 @@ els.bulkNone.addEventListener("click", () => {
 });
 
 /* ============ 書き出し / 読み込み ============ */
+// いま表示している動画について、共有サムネイルが実際にどうなっているか調べる
+els.shareCheck.addEventListener("click", async () => {
+  if (!view.length) return say("先にフォルダを開いてください", true);
+  say("共有サムネイルの状態を調べています…");
+  const parents = [...new Set(view.map(f => f.parentId).filter(Boolean))];
+  let folders = 0, sheets = 0, matched = 0, localOnly = 0;
+  const lines = [];
+  for (const pid of parents){
+    const fid = await getCacheFolder(pid, false);
+    const idx = fid ? await getCacheIndex(pid) : new Map();
+    if (fid) folders++;
+    sheets += idx.size;
+    const mine = view.filter(f => f.parentId === pid);
+    const hit = mine.filter(f => idx.has(f.id)).length;
+    matched += hit;
+    lines.push(`  フォルダ ${pid}: 置き場=${fid || "なし"} / 保存済み ${idx.size} 件 / この一覧の ${hit}/${mine.length} 本が該当`);
+  }
+  for (const f of view){
+    const rec = await idbGet("thumbs", f.id);
+    if (rec && rec.ok && !rec.shared) localOnly++;
+  }
+  log("=== 共有サムネイルの状態 ===");
+  lines.forEach(l => log(l));
+  log(`  合計: 置き場 ${folders}/${parents.length} フォルダ / 保存済み ${sheets} 件 / `
+    + `表示中 ${view.length} 本のうち ${matched} 本が共有済み`);
+  log(`  この端末だけで作った（未共有の）ぶん: ${localOnly} 本`);
+  log(`  共有の設定: ${els.shareThumbs.checked ? "有効" : "無効"} / 書き込み: ${shareReadOnly ? "不可" : "可"}`);
+  say(`共有済み ${matched}/${view.length} 本（置き場 ${folders} フォルダ）— 詳細は診断ログ`);
+  els.advBox.open = true;
+});
+
 els.exportBtn.addEventListener("click", async () => {
   const all = await idbAll("marks");
   const data = {version:1, exported:new Date().toISOString(),
@@ -3082,8 +3117,8 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   }, 250);
   setTimeout(() => clearInterval(guard), 4000);
   window.addEventListener("pageshow", () => { if (!queryTouched) els.q.value = ""; });
-  els.clientId.value = localStorage.getItem("bcs_client") || DEFAULTS.clientId;
-  els.worker.value   = localStorage.getItem("bcs_worker") || DEFAULTS.worker;
+  els.clientId.value = (localStorage.getItem("bcs_client") || "").trim() || DEFAULTS.clientId;
+  els.worker.value   = (localStorage.getItem("bcs_worker") || "").trim() || DEFAULTS.worker;
   els.token.value    = localStorage.getItem("bcs_token") || "";
   els.folder.value   = localStorage.getItem("bcs_treeroot") || "0";
   updateCacheStatus();
