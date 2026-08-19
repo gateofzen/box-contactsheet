@@ -361,7 +361,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v70</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v72</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -481,6 +481,7 @@ b{font-weight:600}
             <label class="check"><input id="autohq" type="checkbox"> 常に高画質で作る（遅い）</label>
             <label class="check"><input id="bgAudio" type="checkbox" checked> 画面を消しても音声を続ける</label>
             <label class="check"><input id="dashVideoOpt" type="checkbox" checked> 映像も区間配信で受け取る（シークが速い）</label>
+            <label class="check"><input id="castFirst" type="checkbox"> テレビにキャストする前提で再生する（探索を先に始める）</label>
             <div class="field"><label for="conc">同時取得</label>
               <input id="conc" class="w-num" type="number" value="8" min="1" max="16"></div>
             <div class="field"><label for="fw">コマ幅 px</label>
@@ -638,7 +639,7 @@ function mdKey(base){
 
 const $ = id => document.getElementById(id);
 const els = {};
-["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt",
+["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt","castFirst",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
  "advBox","advBtn","installBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
@@ -2358,6 +2359,7 @@ async function openPlayer(file, startAt){
   playCounted = false;
   castMode = false;
   castReadyUrl = null;
+  stopCastSearch();
   els.pCast.classList.remove("btn-go");
   bindCast();
   if (castSupported()) setTimeout(() => prepareCast(file), 1200);
@@ -2367,7 +2369,19 @@ async function openPlayer(file, startAt){
   // 映像も音声も同じ要素で鳴らすので、同期処理は一切要らない。
   (async () => {
     let usedDash = false;
-    if (els.dashVideoOpt.checked){
+    if (els.castFirst.checked){
+      // テレビに送る前提。区間配信だと機器の探索が始まらないので最初から単一 URL にする。
+      const url = await castableUrl(file);
+      if (url){
+        castReadyUrl = url;
+        videoKind = "キャスト用";
+        els.pVideo.src = url;
+        els.pNote.textContent = "キャスト用に再生中（📺 でテレビの一覧が出ます）";
+        log("キャスト前提の再生で始めます");
+        usedDash = true;   // 区間配信の処理を飛ばす
+      }
+    }
+    if (!usedDash && els.dashVideoOpt.checked){
       try{
         if (await dashMain.start(file, els.pVideo, ["video","audio"])){
           if (await waitFor(() => els.pVideo.readyState >= 2, 5000)){
@@ -2381,7 +2395,7 @@ async function openPlayer(file, startAt){
         dashMain.stop();
       }
     }
-    if (!usedDash){
+    if (!usedDash && videoKind !== "キャスト用"){
       videoKind = "原本";
       els.pVideo.src = originalUrl(file);
       els.pNote.textContent = "原本を再生中";
@@ -3257,36 +3271,50 @@ function startCast(){
   if (!currentFile || !castSupported()) return;
   if (castPrompting){ log("キャスト先の選択が既に開いています"); return; }
 
-  // 区間配信のままではテレビに渡せないので、単一の URL に差し替える。
-  // ここで待ちを挟むと「利用者が押した」資格が失われるため、すべて同期で行う。
-  if (videoKind !== "キャスト用"){
+  // 選択画面は「単体で再生できる動画が読み込まれている」状態でないと即座に閉じられる。
+  // 機器が見つかるのを待つ必要はない（Chrome の画面が既知の機器を出す）。
+  const ready = videoKind === "キャスト用" && els.pVideo.readyState >= 1;
+
+  if (!ready){
     if (!castReadyUrl){
       els.pNote.textContent = "キャストの準備をしています。数秒後にもう一度押してください。";
       prepareCast(currentFile);
       return;
     }
-    const t = els.pVideo.currentTime;
-    const playing = !els.pVideo.paused;
-    dashMain.stop();
-    videoKind = "キャスト用";
-    els.pVideo.src = castReadyUrl;
-    els.pVideo.addEventListener("loadedmetadata", () => {
-      els.pVideo.currentTime = t;
-      if (playing) els.pVideo.play().catch(()=>{});
-    }, {once:true});
-    log("キャスト用の再生に切り替えました");
+    if (videoKind !== "キャスト用"){
+      const t = els.pVideo.currentTime;
+      const playing = !els.pVideo.paused;
+      dashMain.stop();
+      videoKind = "キャスト用";
+      els.pVideo.src = castReadyUrl;
+      els.pVideo.addEventListener("loadedmetadata", () => {
+        els.pVideo.currentTime = t;
+        if (playing) els.pVideo.play().catch(()=>{});
+        els.pNote.textContent = "準備できました。もう一度 📺 を押すとテレビの一覧が出ます。";
+        els.pCast.disabled = false;
+        els.pCast.classList.add("btn-go");
+        els.pCast.style.opacity = "";
+        playerToast("📺 もう一度押してください");
+        log("キャスト用の読み込みが完了しました");
+      }, {once:true});
+      els.pNote.textContent = "キャスト用に切り替えています…（1〜2 秒）";
+      els.pCast.disabled = true;
+      els.pCast.style.opacity = ".45";
+      log("キャスト用の再生に切り替えます");
+    }
+    return;
   }
 
-  // 選択画面は Chrome 自身が機器を探しながら開き続ける。
-  // こちらで見つかるまで待つと、いつまでも画面が出ない。
   castPrompting = true;
-  els.pNote.textContent = "キャスト先を選んでください（見つかるまで数十秒かかることがあります）";
+  els.pNote.textContent = "テレビを選んでください…";
+  log("選択画面を出します（読み込み済み / 機器: "
+    + (castAvailable === null ? "確認中" : castAvailable ? "あり" : "未検出") + "）");
   els.pVideo.remote.prompt()
     .then(() => log("キャスト先を選びました"))
     .catch(err => {
       log("キャストできません: " + err.message);
       els.pNote.textContent = /dismiss/i.test(err.message)
-        ? "キャストを取り消しました（一覧が空のときは、開いたまま少し待つと現れます）"
+        ? "キャストを取り消しました（一覧が空なら数十秒後にもう一度）"
         : "キャストできません（" + err.message + "）";
     })
     .finally(() => { castPrompting = false; });
@@ -3309,10 +3337,18 @@ function startCastSearch(){
     if (castAvailable === true || videoKind !== "キャスト用") return stopCastSearch();
     const sec = Math.round((Date.now() - castSearchFrom) / 1000);
     els.pNote.textContent = `テレビを探しています… ${sec} 秒`
-      + (sec > 25 ? "（見つからない場合は同じ Wi-Fi か確認してください）" : "");
+      + (sec > 40 ? "（見つからない場合は同じ Wi-Fi か確認してください）" : "（30〜60 秒かかることがあります）");
   }, 1000);
 }
 function stopCastSearch(){ clearInterval(castSearchTimer); castSearchTimer = null; }
+
+// ボタンの見た目は「読み込みが済んでいるか」で決める。
+// 機器の検出は遅れて届くことがあるので、それで塞がない。
+function refreshCastButton(){
+  const loaded = videoKind === "キャスト用" && els.pVideo.readyState >= 1;
+  els.pCast.classList.toggle("btn-go", loaded || castAvailable === true);
+  els.pCast.title = loaded ? "テレビの一覧を出す" : "テレビにキャスト";
+}
 
 function setCastAvail(source, v){
   castAvailBy[source] = !!v;
@@ -3322,7 +3358,8 @@ function setCastAvail(source, v){
   els.pCast.title = any ? "テレビにキャスト" : "キャストできる機器を探しています";
   els.pCast.style.opacity = any ? "" : ".45";
   log(`キャストできる機器（${source === "probe" ? "探索用" : "本編"}）: ` + (v ? "あり" : "なし"));
-  if (any) els.pCast.classList.add("btn-go");
+  refreshCastButton();
+  if (any) stopCastSearch();
 }
 
 function watchOn(el, source){
