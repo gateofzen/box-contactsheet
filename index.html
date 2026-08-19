@@ -356,7 +356,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v61</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v62</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -558,6 +558,7 @@ b{font-weight:600}
   <div class="player">
     <div class="player-bar">
       <span class="t" id="pTitle"></span>
+      <button id="pCast" class="btn btn-sm" title="テレビにキャスト" hidden>📺</button>
       <button id="pAudioBtn" class="btn btn-sm" title="音声のみで再生">🎧</button>
       <button id="pFav" class="btn btn-ghost">★</button>
       <a id="pBox" class="btn btn-ghost" target="_blank" rel="noopener">Box で開く</a>
@@ -565,7 +566,7 @@ b{font-weight:600}
     </div>
     <div id="vzoom" class="vzoom">
       <video id="pVideo" controls playsinline preload="metadata"
-             controlsList="nodownload noremoteplayback"></video>
+             controlsList="nodownload"></video>
       <div id="audioVeil" class="audioveil" hidden>
         <div>
           <div class="big">🎧 音声のみ再生中</div>
@@ -639,7 +640,7 @@ const els = {};
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
  "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","pCast"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -2349,6 +2350,9 @@ async function openPlayer(file, startAt){
   els.pVideo.volume = userVolume || 1;
   wantPlay = true;
   playCounted = false;
+  castMode = false;
+  els.pCast.classList.remove("btn-go");
+  bindCast();
   pendingStart = (startAt != null) ? startAt : null;
 
   // 区間配信が使えるなら、そちらで再生する（シークが速い）。
@@ -3174,6 +3178,70 @@ function waitFor(cond, ms){
     }, 100);
   });
 }
+
+/* ---- テレビへのキャスト ---- */
+// Chromecast は「テレビ側が自分で URL を取りに行く」仕組みなので、
+// ブラウザ内で組み立てている区間配信の流れは渡せない。
+// キャストするときだけ、単体で再生できる URL に差し替える。
+let castMode = false;
+
+function castSupported(){
+  return !!(els.pVideo.remote && typeof els.pVideo.remote.prompt === "function");
+}
+
+async function castableUrl(file){
+  // まず Box の変換版（軽い）。無ければ原本。
+  try{
+    const got = await waitForRep(await getRepresentation(file.id, "[mp4]") || {}, 6);
+    const url = repContentUrl(got.rep);
+    if (url) return url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
+  }catch(_){}
+  return originalUrl(file);
+}
+
+async function startCast(){
+  if (!currentFile || !castSupported()) return;
+  const t = els.pVideo.currentTime;
+  const playing = !els.pVideo.paused;
+  els.pCast.textContent = "…";
+  try{
+    if (videoKind === "DASH"){
+      dashMain.stop();                       // 区間配信のままでは渡せない
+      videoKind = "キャスト用";
+      els.pVideo.src = await castableUrl(currentFile);
+      await new Promise(res => els.pVideo.addEventListener("loadedmetadata", res, {once:true}));
+      els.pVideo.currentTime = t;
+      if (playing) els.pVideo.play().catch(()=>{});
+    }
+    els.pNote.textContent = "キャスト先を選んでください…";
+    await els.pVideo.remote.prompt();
+  }catch(err){
+    log("キャストできません: " + err.message);
+    els.pNote.textContent = "キャストできません（" + err.message + "）";
+  }finally{
+    els.pCast.textContent = "📺";
+  }
+}
+
+function bindCast(){
+  if (!castSupported()){ els.pCast.hidden = true; return; }
+  els.pCast.hidden = false;
+  const r = els.pVideo.remote;
+  r.addEventListener("connect", () => {
+    castMode = true;
+    els.pCast.classList.add("btn-go");
+    els.pNote.textContent = "テレビで再生中（この画面から操作できます）";
+    log("キャスト開始");
+  });
+  r.addEventListener("disconnect", () => {
+    castMode = false;
+    els.pCast.classList.remove("btn-go");
+    els.pNote.textContent = videoKind === "DASH" ? "再生中（区間配信）" : "原本を再生中";
+    log("キャスト終了");
+  });
+}
+
+els.pCast.addEventListener("click", startCast);
 
 /* ---- プレーヤーのズーム（ピンチ / ホイール / ダブルタップ） ---- */
 const zoom = {s:1, x:0, y:0};
