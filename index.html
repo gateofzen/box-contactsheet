@@ -98,6 +98,7 @@ b{font-weight:600}
 .drawer-foot b{color:var(--amber);font-weight:500}
 
 /* ---------- chips ---------- */
+.scopeline{font-family:var(--mono);font-size:11px;color:var(--amber);padding:0 2px 8px}
 .chiprow{display:flex;gap:6px;overflow-x:auto;padding-bottom:10px;scrollbar-width:none}
 .chiprow::-webkit-scrollbar{display:none}
 .chip{flex:none;background:var(--surface-2);border:1px solid var(--line-soft);border-radius:999px;
@@ -175,6 +176,7 @@ b{font-weight:600}
 .cardinfo .rows{display:flex;flex-direction:column;gap:2px;padding:5px 0 2px;
   font-family:var(--mono);font-size:10px;color:var(--muted)}
 .cardinfo .rows .dur{color:var(--amber)}
+.cardinfo .rows .pl{color:var(--mint)}
 .cardinfo .rows .fd{color:var(--mint);cursor:pointer;text-align:left}
 
 .sentinel{padding:26px 0;text-align:center;font-family:var(--mono);font-size:11px;color:var(--muted)}
@@ -320,7 +322,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v41</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v42</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -359,6 +361,7 @@ b{font-weight:600}
   </aside>
 
   <div class="content" id="layout">
+    <div id="searchScope" class="scopeline" hidden></div>
     <div id="chiprow" class="chiprow" hidden>
       <div id="railTags" style="display:contents"></div>
     </div>
@@ -404,6 +407,8 @@ b{font-weight:600}
                 <option value="modified">更新が新しい順</option>
                 <option value="size">サイズが大きい順</option>
                 <option value="fav">お気に入り優先</option>
+          <option value="plays">再生回数が多い順</option>
+          <option value="recent">最近再生した順</option>
               </select></div>
           </div>
         </div>
@@ -566,14 +571,14 @@ const PAGE_SIZE = 60;
 const MD_SCOPE = "global", MD_TPL = "properties";
 const CACHE_FOLDER_NAME = "_ContactSheetCache";
 const UPLOAD_API = "https://upload.box.com/api/2.0";
-const K_FAV = "csFav", K_TAGS = "csTags";
+const K_FAV = "csFav", K_TAGS = "csTags", K_PLAYS = "csPlays", K_LAST = "csLast";
 
 const $ = id => document.getElementById(id);
 const els = {};
 ["token","folder","depth","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
- "advBox","advBtn","chiprow","statusline","pbar","exportBtn","importBtn","importFile",
+ "advBox","advBtn","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile",
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
@@ -585,6 +590,7 @@ let view = [];
 let rendered = 0;
 let cachedCount = 0;
 let scanAbort = null;
+let globalIndex = [];   // これまでに見つけた全フォルダの動画
 const cardById = new Map();
 const marks = new Map();      // id -> {fav:bool, tags:[string], dirty:bool}
 const picked = new Set();
@@ -639,12 +645,13 @@ function fmtSpan(sec){
 let db = null;
 function openDB(){
   return new Promise((res, rej) => {
-    const rq = indexedDB.open("box-contact-sheet", 2);
+    const rq = indexedDB.open("box-contact-sheet", 3);
     rq.onupgradeneeded = () => {
       const d = rq.result;
       if (!d.objectStoreNames.contains("thumbs")) d.createObjectStore("thumbs", {keyPath:"id"});
       if (!d.objectStoreNames.contains("folders")) d.createObjectStore("folders", {keyPath:"id"});
       if (!d.objectStoreNames.contains("marks")) d.createObjectStore("marks", {keyPath:"id"});
+      if (!d.objectStoreNames.contains("files")) d.createObjectStore("files", {keyPath:"id"});
     };
     rq.onsuccess = () => res(rq.result);
     rq.onerror = () => rej(rq.error);
@@ -662,6 +669,15 @@ function idbAll(store){
     if (!db) return res([]);
     const rq = db.transaction(store,"readonly").objectStore(store).getAll();
     rq.onsuccess = () => res(rq.result || []); rq.onerror = () => res([]);
+  });
+}
+function idbPutMany(store, vals){
+  return new Promise(res => {
+    if (!db || !vals.length) return res();
+    const tx = db.transaction(store,"readwrite");
+    const os = tx.objectStore(store);
+    for (const v of vals) os.put(v);
+    tx.oncomplete = () => res(); tx.onerror = () => res();
   });
 }
 function idbPut(store, val){
@@ -844,8 +860,20 @@ async function checkAuth(){
 /* ============ タグ・お気に入り ============ */
 function getMark(id){
   let m = marks.get(id);
-  if (!m){ m = {id, fav:false, tags:[], dirty:false}; marks.set(id, m); }
+  if (!m){ m = {id, fav:false, tags:[], plays:0, last:0, dirty:false}; marks.set(id, m); }
+  if (m.plays == null) m.plays = 0;
+  if (m.last == null) m.last = 0;
   return m;
+}
+
+// 実際に再生が始まったら 1 回と数える
+function recordPlay(id){
+  const m = getMark(id);
+  m.plays++; m.last = Date.now();
+  idbPut("marks", {id, fav:m.fav, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
+  queueSync(id);
+  refreshCard(id);
+  log(`再生回数: ${m.plays} 回目`);
 }
 function normTag(s){ return String(s || "").trim().replace(/\s+/g,"_").replace(/^#/,""); }
 
@@ -863,7 +891,8 @@ async function runMdQueue(){
   while (mdQueue.length){
     const id = mdQueue.shift();
     const m = getMark(id);
-    const payload = {[K_FAV]: m.fav ? "1" : "0", [K_TAGS]: m.tags.join(",")};
+    const payload = {[K_FAV]: m.fav ? "1" : "0", [K_TAGS]: m.tags.join(","),
+                     [K_PLAYS]: String(m.plays || 0), [K_LAST]: String(m.last || 0)};
     try{
       await writeMetadata(id, payload);
       m.dirty = false;
@@ -906,7 +935,7 @@ async function writeMetadata(id, payload){
 function setFav(id, val){
   const m = getMark(id);
   m.fav = val;
-  idbPut("marks", {id, fav:m.fav, tags:m.tags, dirty:true});
+  idbPut("marks", {id, fav:m.fav, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
   queueSync(id);
   refreshCard(id); refreshCounts(); buildRail();
 }
@@ -916,7 +945,7 @@ function addTag(id, tag){
   const m = getMark(id);
   if (m.tags.includes(t)) return;
   m.tags.push(t); m.tags.sort((a,b)=>a.localeCompare(b,"ja"));
-  idbPut("marks", {id, fav:m.fav, tags:m.tags, dirty:true});
+  idbPut("marks", {id, fav:m.fav, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
   queueSync(id);
   refreshCard(id); buildRail();
 }
@@ -925,7 +954,7 @@ function removeTag(id, tag){
   const i = m.tags.indexOf(tag);
   if (i < 0) return;
   m.tags.splice(i,1);
-  idbPut("marks", {id, fav:m.fav, tags:m.tags, dirty:true});
+  idbPut("marks", {id, fav:m.fav, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
   queueSync(id);
   refreshCard(id); buildRail();
 }
@@ -1144,6 +1173,42 @@ async function prefetchThumbs(){
   log(`prefetch done: ${ok}/${list.length}, pending ${pend}`);
 }
 
+// 走査で見つけた動画を索引に足す（検索を全フォルダ対象にするため）
+async function mergeIndex(list){
+  if (!list.length) return;
+  const now = Date.now();
+  const recs = list.map(f => ({id:f.id, name:f.name, size:f.size, modified:f.modified,
+                               path:f.path, parentId:f.parentId, ts:now}));
+  await idbPutMany("files", recs);
+  const seen = new Map(globalIndex.map(f => [f.id, f]));
+  for (const r of recs) seen.set(r.id, r);
+  globalIndex = [...seen.values()];
+}
+
+// Box の検索も併用して、まだ走査していないフォルダの動画も拾う
+let boxSearchTimer = null;
+async function boxSearchMerge(text){
+  if (!text || text.length < 2) return;
+  try{
+    const exts = [...VIDEO_EXT].join(",");
+    const url = `/search?query=${encodeURIComponent(text)}&type=file&limit=200`
+      + `&ancestor_folder_ids=${encodeURIComponent(froot || "0")}`
+      + `&file_extensions=${encodeURIComponent(exts)}`
+      + `&fields=id,name,size,modified_at,extension,parent,metadata.${MD_SCOPE}.${MD_TPL}`;
+    const d = await boxFetch(url);
+    const hits = (d.entries || []).filter(isVideo).map(e => {
+      absorbMetadata(e);
+      return {id:e.id, name:e.name, size:e.size, modified:e.modified_at,
+              path: e.parent ? "/" + e.parent.name : "", parentId: e.parent ? e.parent.id : null};
+    });
+    if (hits.length){
+      await mergeIndex(hits);
+      log(`Box 検索: ${hits.length} 件を索引に追加`);
+      applyView();
+    }
+  }catch(err){ log("Box 検索に失敗: " + err.message); }
+}
+
 /* ============ 検索クエリ ============ */
 function parseQuery(s){
   const q = {text:[], notText:[], tags:[], notTags:[], exts:[], folders:[], notFolders:[], fav:false, noFav:false, untagged:false};
@@ -1209,7 +1274,9 @@ function absorbMetadata(entry){
   if (m.dirty) return;                       // ローカルの未送信分を優先
   m.fav = md[K_FAV] === "1";
   m.tags = String(md[K_TAGS] || "").split(",").map(normTag).filter(Boolean);
-  idbPut("marks", {id:entry.id, fav:m.fav, tags:m.tags, dirty:false});
+  m.plays = Number(md[K_PLAYS] || 0) || 0;
+  m.last = Number(md[K_LAST] || 0) || 0;
+  idbPut("marks", {id:entry.id, fav:m.fav, tags:m.tags, plays:m.plays, last:m.last, dirty:false});
 }
 
 async function scan(scanTarget, deep){
@@ -1266,6 +1333,7 @@ async function scan(scanTarget, deep){
       await sleep(0);
     }
     els.progress.textContent = `${files.length} 本の動画（フォルダ ${folders} 件）`; setBusy(false);
+    await mergeIndex(files);
     log("scan done:", files.length, "videos /", folders, "folders");
   }catch(err){
     if (err.name === "AbortError"){ els.progress.textContent = `中止（動画 ${files.length} 本まで）`; }
@@ -1728,8 +1796,12 @@ function escapeHtml(s){ return s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;
 
 /* ============ グリッド ============ */
 function applyView(){
+  const raw = els.q.value.trim();
   const q = parseQuery(els.q.value);
-  view = files.filter(f => matches(f, q));
+  // 検索欄に何か入っている間は、開いているフォルダではなく全フォルダを対象にする
+  const wide = raw.length > 0 && globalIndex.length > 0;
+  const base = wide ? globalIndex : files;
+  view = base.filter(f => matches(f, q));
 
   const mode = els.sort.value;
   view.sort((a,b) => {
@@ -1738,14 +1810,27 @@ function applyView(){
       if (fa !== fb) return fa - fb;
       return a.name.localeCompare(b.name,"ja");
     }
+    if (mode === "plays"){
+      const pa = (marks.get(a.id)||{}).plays || 0, pb = (marks.get(b.id)||{}).plays || 0;
+      if (pa !== pb) return pb - pa;
+      return a.name.localeCompare(b.name,"ja");
+    }
+    if (mode === "recent"){
+      const la = (marks.get(a.id)||{}).last || 0, lb = (marks.get(b.id)||{}).last || 0;
+      if (la !== lb) return lb - la;
+      return a.name.localeCompare(b.name,"ja");
+    }
     if (mode === "size") return (b.size||0) - (a.size||0);
     if (mode === "modified") return String(b.modified||"").localeCompare(String(a.modified||""));
     return a.name.localeCompare(b.name,"ja");
   });
 
   els.sheet.innerHTML = ""; cardById.clear(); rendered = 0;
-  els.nTotal.textContent = files.length;
-  els.empty.hidden = files.length > 0;
+  els.nTotal.textContent = wide ? globalIndex.length : files.length;
+  els.empty.hidden = (wide ? globalIndex.length : files.length) > 0;
+  els.searchScope.hidden = !wide;
+  els.searchScope.textContent = wide
+    ? `全フォルダ ${globalIndex.length} 本から ${view.length} 件` : "";
   renderMore(); refreshCounts();
 }
 function refreshCounts(){
@@ -1827,12 +1912,15 @@ function makeCard(file){
     '<p class="name"></p>' +
     '<div class="taglist"></div>' +
     '<details class="cardinfo"><summary>詳細</summary><div class="rows">' +
-      '<span class="dur"></span><span class="sz"></span><span class="dt"></span>' +
+      '<span class="dur"></span><span class="sz"></span><span class="dt"></span><span class="pl"></span>' +
       '<button class="fd"></button>' +
     '</div></details>';
   meta.querySelector(".name").textContent = file.name;
   meta.querySelector(".sz").textContent = fmtSize(file.size);
   meta.querySelector(".dt").textContent = fmtDate(file.modified);
+  const mk = getMark(file.id);
+  if (mk.plays) meta.querySelector(".pl").textContent =
+    `▶ ${mk.plays} 回　${fmtDate(new Date(mk.last).toISOString())}`;
   const fd = meta.querySelector(".fd");
   if (file.path){
     fd.textContent = "▸ " + file.path.split("/").filter(Boolean).slice(-1)[0];
@@ -1892,6 +1980,8 @@ function refreshCard(id){
   if (!ref) return;
   const m = getMark(id);
   ref.star.classList.toggle("on", m.fav);
+  const pl = ref.card.querySelector(".pl");
+  if (pl) pl.textContent = m.plays ? `▶ ${m.plays} 回　${fmtDate(new Date(m.last).toISOString())}` : "";
   paintTagList(id);
   if (currentFile && currentFile.id === id) els.pFav.style.color = m.fav ? "var(--amber)" : "";
 }
@@ -2040,6 +2130,7 @@ async function openPlayer(file, startAt){
   els.pVideo.muted = false;
   els.pVideo.volume = userVolume || 1;
   wantPlay = true;
+  playCounted = false;
   pendingStart = (startAt != null) ? startAt : null;
 
   // 区間配信が使えるなら、そちらで再生する（シークが速い）。
@@ -2255,7 +2346,14 @@ els.clear.addEventListener("click", async () => {
 let queryTouched = false;
 els.q.addEventListener("input", () => { queryTouched = true; });
 let qTimer = null;
-els.q.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { buildRail(); applyView(); }, 220); });
+els.q.addEventListener("input", () => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { buildRail(); applyView(); }, 220);
+  clearTimeout(boxSearchTimer);
+  const text = els.q.value.split(/\s+/).filter(t => t && !/^[-#]/.test(t) && !/:/.test(t)
+              && !["fav","untagged"].includes(t.toLowerCase())).join(" ");
+  if (text) boxSearchTimer = setTimeout(() => boxSearchMerge(text), 700);
+});
 els.sort.addEventListener("change", applyView);
 els.col.addEventListener("input", () => {
   const v = Math.max(200, Number(els.col.value) || 380);
@@ -2659,7 +2757,14 @@ els.pVideo.addEventListener("volumechange", () => {
   userVolume = els.pVideo.muted ? userVolume : els.pVideo.volume;
   localStorage.setItem("bcs_volume", String(userVolume));
 });
+let playCounted = false;
 els.pVideo.addEventListener("play",  () => { wantPlay = true;  updateMediaSession(); });
+els.pVideo.addEventListener("playing", () => {
+  if (!playCounted && currentFile){ playCounted = true; recordPlay(currentFile.id); }
+});
+els.pAudio.addEventListener("playing", () => {
+  if (!playCounted && currentFile){ playCounted = true; recordPlay(currentFile.id); }
+});
 els.pVideo.addEventListener("pause", () => { wantPlay = false; });
 
 // 条件が満たされるまで待つ（上限つき）
@@ -2943,7 +3048,9 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   bootErrors.forEach(m => log(m));
   db = await openDB().catch(() => null);
   for (const rec of await idbAll("marks"))
-    marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [], dirty:!!rec.dirty});
+    marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [],
+                       plays:rec.plays || 0, last:rec.last || 0, dirty:!!rec.dirty});
+  globalIndex = await idbAll("files");
 
   // 端末に保存された値を優先し、無ければ上の DEFAULTS を使う
   // 検索窓の値がブラウザに復元される問題への対策。
@@ -2959,7 +3066,14 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   els.q.replaceWith(fresh);
   els.q = fresh;
   els.q.addEventListener("input", () => { queryTouched = true; });
-  els.q.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { buildRail(); applyView(); }, 220); });
+  els.q.addEventListener("input", () => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { buildRail(); applyView(); }, 220);
+  clearTimeout(boxSearchTimer);
+  const text = els.q.value.split(/\s+/).filter(t => t && !/^[-#]/.test(t) && !/:/.test(t)
+              && !["fav","untagged"].includes(t.toLowerCase())).join(" ");
+  if (text) boxSearchTimer = setTimeout(() => boxSearchMerge(text), 700);
+});
 
   // 念のため、最初の数秒は復元されていないか見張る
   const guard = setInterval(() => {
