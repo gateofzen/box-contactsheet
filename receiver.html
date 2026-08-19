@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contact Sheet — テレビ受信ページ</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.7.11/shaka-player.compiled.js"></script>
+<style>
+  html,body{margin:0;height:100%;background:#000;color:#E6EAED;
+    font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;overflow:hidden}
+  #v{width:100%;height:100%;object-fit:contain;background:#000}
+  .panel{position:fixed;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:18px;background:#000;text-align:center;padding:6vh}
+  .panel.gone{display:none}
+  .mark{font-family:"Space Grotesk",system-ui,sans-serif;font-weight:700;
+    letter-spacing:.18em;text-transform:uppercase;font-size:2.2vw;color:#E8B04B}
+  .msg{font-size:1.6vw;color:#8B99A6;line-height:1.8}
+  .title{position:fixed;left:0;right:0;top:0;padding:2.4vh 3vw;font-size:1.8vw;
+    background:linear-gradient(180deg,rgba(0,0,0,.85),transparent);
+    opacity:0;transition:opacity .4s;pointer-events:none}
+  .title.show{opacity:1}
+  .err{color:#FF6B6B;font-size:1.4vw;max-width:80vw;word-break:break-all}
+</style>
+</head>
+<body>
+<video id="v" autoplay playsinline></video>
+<div id="title" class="title"></div>
+<div id="panel" class="panel">
+  <div class="mark">Contact&nbsp;Sheet</div>
+  <div class="msg" id="msg">接続を待っています…</div>
+  <div class="err" id="err"></div>
+</div>
+
+<script>
+"use strict";
+
+const v = document.getElementById("v");
+const panel = document.getElementById("panel");
+const msgEl = document.getElementById("msg");
+const errEl = document.getElementById("err");
+const titleEl = document.getElementById("title");
+
+let player = null;
+let token = "";
+let conns = [];
+
+function say(t){ msgEl.textContent = t; }
+function fail(t){ errEl.textContent = t; panel.classList.remove("gone"); }
+function showTitle(t){
+  titleEl.textContent = t || "";
+  titleEl.classList.add("show");
+  setTimeout(() => titleEl.classList.remove("show"), 4000);
+}
+
+// 送信側（スマートフォン）へ状態を返す
+function reply(obj){
+  const s = JSON.stringify(obj);
+  conns.forEach(c => { try{ c.send(s); }catch(_){} });
+}
+
+async function ensurePlayer(){
+  if (player) return player;
+  if (!window.shaka || !shaka.Player.isBrowserSupported()){
+    fail("この機器では再生の準備ができません（MSE 非対応）");
+    throw new Error("shaka unsupported");
+  }
+  shaka.polyfill.installAll();
+  player = new shaka.Player(v);
+
+  // 既定のままだと帯域を低く見積もって最低画質から始まり、
+  // 貯め込む量も少ないため途切れる。テレビ向けに設定し直す。
+  player.configure({
+    abr: {
+      enabled: true,
+      defaultBandwidthEstimate: 20000000,   // 20 Mbps から始める
+      switchInterval: 6,
+      bandwidthUpgradeTarget: 0.9,
+      bandwidthDowngradeTarget: 0.98
+    },
+    streaming: {
+      bufferingGoal: 40,      // 先読み 40 秒
+      rebufferingGoal: 5,     // 5 秒たまったら再開
+      bufferBehind: 30,
+      jumpLargeGaps: true,
+      retryParameters: { maxAttempts: 6, baseDelay: 500, backoffFactor: 1.5, timeout: 30000 }
+    },
+    manifest: { retryParameters: { maxAttempts: 4, baseDelay: 500 } }
+  });
+
+  // Box は区間ごとの取得にも認証が要る。すべての要求に付ける。
+  player.getNetworkingEngine().registerRequestFilter((type, request) => {
+    if (!token) return;
+    request.uris = request.uris.map(u =>
+      u.includes("access_token=") ? u : u + (u.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token));
+  });
+
+  player.addEventListener("error", e => {
+    const d = e.detail || {};
+    fail(`再生できません（コード ${d.code}）`);
+    reply({type:"error", code:d.code, message:String(d.message || "")});
+  });
+
+  player.addEventListener("adaptation", reportTrack);
+  player.addEventListener("variantchanged", reportTrack);
+
+  ["playing","pause","seeked","ended","waiting"].forEach(ev =>
+    v.addEventListener(ev, () => reply({type:"state", event:ev, time:v.currentTime,
+      duration:isFinite(v.duration)?v.duration:0, paused:v.paused})));
+
+  setInterval(() => {
+    if (!v.paused) reply({type:"time", time:v.currentTime,
+      duration:isFinite(v.duration)?v.duration:0});
+  }, 2000);
+
+  return player;
+}
+
+function reportTrack(){
+  if (!player) return;
+  const t = player.getVariantTracks().find(x => x.active);
+  if (!t) return;
+  reply({type:"track", width:t.width, height:t.height, bandwidth:t.bandwidth});
+  showTitle(`${t.width}x${t.height}  ${Math.round(t.bandwidth/1000)} kbps`);
+}
+
+function applyQuality(maxHeight){
+  if (!player) return;
+  const r = (!maxHeight || maxHeight >= 4320)
+    ? {minHeight:0, maxHeight:Infinity}
+    : {minHeight:0, maxHeight:maxHeight};
+  player.configure({restrictions: r});
+  log2(`画質の上限: ${maxHeight ? maxHeight + "p" : "制限なし"}`);
+}
+function log2(t){ msgEl.textContent = t; }
+
+async function loadMedia(m){
+  token = m.token || "";
+  errEl.textContent = "";
+  say("読み込んでいます…");
+  panel.classList.remove("gone");
+
+  try{
+    if (m.manifest){
+      const p = await ensurePlayer();
+      if (m.maxHeight) applyQuality(m.maxHeight);
+      await p.load(m.manifest, m.time || 0);
+      reportTrack();
+    }else if (m.url){
+      // 区間配信が使えない動画は単一ファイルで再生する
+      v.src = m.url;
+      if (m.time) v.currentTime = m.time;
+      await v.play().catch(() => {});
+    }else{
+      throw new Error("再生するものが指定されていません");
+    }
+    panel.classList.add("gone");
+    showTitle(m.title || "");
+    reply({type:"loaded", title:m.title || "", time:v.currentTime});
+  }catch(err){
+    fail("読み込みに失敗しました: " + (err && err.message ? err.message : err));
+    reply({type:"error", message:String(err && err.message || err)});
+  }
+}
+
+async function handle(raw){
+  let m;
+  try{ m = JSON.parse(raw); }catch(_){ return; }
+
+  switch (m.type){
+    case "load":   await loadMedia(m); break;
+    case "play":   v.play().catch(() => {}); break;
+    case "pause":  v.pause(); break;
+    case "seek":   if (isFinite(m.time)) v.currentTime = m.time; break;
+    case "seekBy": if (isFinite(m.delta)) v.currentTime = Math.max(0, v.currentTime + m.delta); break;
+    case "volume": if (isFinite(m.value)) v.volume = Math.min(1, Math.max(0, m.value)); break;
+    case "token":  // 期限切れ対策。次の区間取得から新しいものを使う
+      token = m.token || token;
+      reply({type:"token-ok"});
+      break;
+    case "stop":
+      try{ v.pause(); }catch(_){}
+      if (player) player.unload().catch(() => {});
+      v.removeAttribute("src");
+      say("停止しました");
+      panel.classList.remove("gone");
+      break;
+    case "quality": applyQuality(m.maxHeight); break;
+    case "ping": reply({type:"pong", time:v.currentTime}); break;
+  }
+}
+
+function attach(conn){
+  conns.push(conn);
+  conn.addEventListener("message", e => handle(e.data));
+  conn.addEventListener("close", () => { conns = conns.filter(c => c !== conn); });
+  conn.addEventListener("terminate", () => { conns = conns.filter(c => c !== conn); });
+  say("接続しました。再生の指示を待っています…");
+  reply({type:"ready"});
+}
+
+if (navigator.presentation && navigator.presentation.receiver){
+  navigator.presentation.receiver.connectionList.then(list => {
+    list.connections.forEach(attach);
+    list.addEventListener("connectionavailable", e => attach(e.connection));
+  }).catch(err => fail("接続を受け取れません: " + err.message));
+}else{
+  say("この画面はテレビ側で表示するためのものです。");
+}
+</script>
+</body>
+</html>
