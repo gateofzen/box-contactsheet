@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Contact Sheet — Box 動画ライブラリ</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0F1317">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -356,12 +361,13 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v62</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v63</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
              aria-label="絞り込み" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other">
     </div>
+    <button id="installBtn" class="btn btn-go" hidden>アプリとして追加</button>
     <button id="sortBtn" class="iconbtn" title="並び順" aria-label="並び順">⇅</button>
     <button id="loginTop" class="btn btn-go" hidden>ログイン</button>
     <button id="advBtn" class="iconbtn" title="設定" aria-label="設定">⚙</button>
@@ -635,7 +641,7 @@ const els = {};
 ["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
- "advBox","advBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
+ "advBox","advBtn","installBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
@@ -3189,14 +3195,33 @@ function castSupported(){
   return !!(els.pVideo.remote && typeof els.pVideo.remote.prompt === "function");
 }
 
+// テレビ側が自分で取りに行けるかを、実際に少しだけ読んで確かめる
+async function urlPlayable(url){
+  try{
+    const r = await fetch(url, {headers:{Range:"bytes=0-1023"}});
+    const type = r.headers.get("content-type") || "";
+    const ok = (r.status === 200 || r.status === 206) && /video|octet-stream|mp4/i.test(type);
+    log(`キャスト候補の確認: ${r.status} ${type || "(種別不明)"} → ${ok ? "使える" : "使えない"}`);
+    return ok;
+  }catch(err){ log("キャスト候補を確認できません: " + err.message); return false; }
+}
+
 async function castableUrl(file){
-  // まず Box の変換版（軽い）。無ければ原本。
+  const cands = [];
   try{
     const got = await waitForRep(await getRepresentation(file.id, "[mp4]") || {}, 6);
     const url = repContentUrl(got.rep);
-    if (url) return url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
-  }catch(_){}
-  return originalUrl(file);
+    if (url) cands.push({name:"mp4 変換版", url: url + (url.includes("?") ? "&" : "?")
+      + "access_token=" + encodeURIComponent(token())});
+    else log(got.pending ? "mp4 変換版を Box が生成中です" : "mp4 変換版がありません");
+  }catch(err){ log("mp4 変換版を取得できません: " + err.message); }
+  cands.push({name:"原本", url: originalUrl(file)});
+
+  for (const c of cands){
+    if (await urlPlayable(c.url)){ log("キャストに " + c.name + " を使います"); return c.url; }
+  }
+  log("どちらの URL もテレビから読めません");
+  return null;
 }
 
 async function startCast(){
@@ -3204,20 +3229,26 @@ async function startCast(){
   const t = els.pVideo.currentTime;
   const playing = !els.pVideo.paused;
   els.pCast.textContent = "…";
+  els.pNote.textContent = "キャストの準備をしています…";
   try{
-    if (videoKind === "DASH"){
+    if (videoKind !== "キャスト用"){
+      const url = await castableUrl(currentFile);
+      if (!url) throw new Error("テレビから読める形式が用意できません");
       dashMain.stop();                       // 区間配信のままでは渡せない
       videoKind = "キャスト用";
-      els.pVideo.src = await castableUrl(currentFile);
-      await new Promise(res => els.pVideo.addEventListener("loadedmetadata", res, {once:true}));
+      els.pVideo.src = url;
+      const ready = await waitFor(() => els.pVideo.readyState >= 1, 12000);
+      if (!ready) throw new Error("動画を読み込めません");
       els.pVideo.currentTime = t;
       if (playing) els.pVideo.play().catch(()=>{});
     }
+    log("リモート再生の状態: " + (els.pVideo.remote.state || "不明"));
     els.pNote.textContent = "キャスト先を選んでください…";
     await els.pVideo.remote.prompt();
   }catch(err){
     log("キャストできません: " + err.message);
     els.pNote.textContent = "キャストできません（" + err.message + "）";
+    say("キャストできません: " + err.message + " — 詳細は診断ログ", true);
   }finally{
     els.pCast.textContent = "📺";
   }
@@ -3227,6 +3258,11 @@ function bindCast(){
   if (!castSupported()){ els.pCast.hidden = true; return; }
   els.pCast.hidden = false;
   const r = els.pVideo.remote;
+  r.addEventListener("connecting", () => log("キャスト先に接続しています…"));
+  els.pVideo.addEventListener("error", () => {
+    if (videoKind === "キャスト用")
+      log("キャスト用の動画でエラー: code=" + (els.pVideo.error && els.pVideo.error.code));
+  });
   r.addEventListener("connect", () => {
     castMode = true;
     els.pCast.classList.add("btn-go");
@@ -3506,6 +3542,34 @@ document.addEventListener("keydown", e => {
 });
 new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.length) renderMore(); },
   {rootMargin:"400px"}).observe(els.sentinel);
+
+/* ---- アプリとしてのインストール ---- */
+let installPrompt = null;
+window.addEventListener("beforeinstallprompt", e => {
+  e.preventDefault();
+  installPrompt = e;
+  els.installBtn.hidden = false;
+  log("アプリとして追加できます");
+});
+els.installBtn.addEventListener("click", async () => {
+  if (!installPrompt) return;
+  els.installBtn.hidden = true;
+  installPrompt.prompt();
+  const r = await installPrompt.userChoice.catch(() => ({outcome:"dismissed"}));
+  log("インストール: " + r.outcome);
+  installPrompt = null;
+});
+window.addEventListener("appinstalled", () => {
+  els.installBtn.hidden = true;
+  say("ホーム画面に追加しました");
+});
+if ("serviceWorker" in navigator){
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js")
+      .then(() => log("アプリの下準備が整いました"))
+      .catch(err => log("service worker を登録できません: " + err.message));
+  });
+}
 
 /* ============ 起動 ============ */
 (async function init(){
