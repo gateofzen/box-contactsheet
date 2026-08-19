@@ -186,6 +186,21 @@ b{font-weight:600}
 .empty code{font-family:var(--mono);font-size:12px;color:var(--amber)}
 
 /* ---------- settings ---------- */
+/* 設定は画面中央に浮かべる。一覧の末尾に置くと、
+   動画が多いときにスクロールが追いつかず開けなくなるため。 */
+#advBox[open]{
+  position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:min(720px,94vw);max-height:86vh;overflow-y:auto;overscroll-behavior:contain;
+  z-index:66;margin:0;box-shadow:0 24px 70px rgba(0,0,0,.65);border-color:var(--line);
+}
+#advBox[open]>summary{position:sticky;top:0;background:var(--surface);z-index:1;
+  border-bottom:1px solid var(--line-soft)}
+#advBox[open]>summary::after{content:"閉じる";margin-left:auto;color:var(--amber)}
+@media (max-width:860px){
+  #advBox[open]{width:100vw;height:100vh;max-height:100vh;border-radius:0;border:none;
+    top:0;left:0;transform:none}
+}
+
 .panel{margin-top:20px;border:1px solid var(--line-soft);border-radius:10px;background:var(--surface)}
 .panel>summary{list-style:none;padding:12px 14px;cursor:pointer;font-family:var(--mono);font-size:10px;
   letter-spacing:.14em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:7px}
@@ -322,7 +337,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v43</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v45</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="contactsheet-filter" placeholder="動画を絞り込む"
@@ -645,8 +660,19 @@ function fmtSpan(sec){
 /* ============ IndexedDB ============ */
 let db = null;
 function openDB(){
-  return new Promise((res, rej) => {
+  return new Promise((res) => {
+    let settled = false;
+    const finish = v => { if (!settled){ settled = true; res(v); } };
+    // 別のタブが古い版を開いたままだと更新が始まらないことがある。
+    // 待ち続けると起動処理ごと止まるので、時間を切って先へ進む。
+    setTimeout(() => {
+      if (!settled){
+        log("保存領域を開けませんでした（別のタブが開いている可能性）。この回は保存なしで動きます。");
+        finish(null);
+      }
+    }, 4000);
     const rq = indexedDB.open("box-contact-sheet", 3);
+    rq.onblocked = () => log("保存領域の更新が他のタブに阻まれています。他のタブを閉じてください。");
     rq.onupgradeneeded = () => {
       const d = rq.result;
       if (!d.objectStoreNames.contains("thumbs")) d.createObjectStore("thumbs", {keyPath:"id"});
@@ -654,8 +680,8 @@ function openDB(){
       if (!d.objectStoreNames.contains("marks")) d.createObjectStore("marks", {keyPath:"id"});
       if (!d.objectStoreNames.contains("files")) d.createObjectStore("files", {keyPath:"id"});
     };
-    rq.onsuccess = () => res(rq.result);
-    rq.onerror = () => rej(rq.error);
+    rq.onsuccess = () => finish(rq.result);
+    rq.onerror = () => { log("保存領域を開けません"); finish(null); };
   });
 }
 function idbGet(store, key){
@@ -2268,7 +2294,7 @@ els.shareCheck.addEventListener("click", async () => {
   log(`  この端末だけで作った（未共有の）ぶん: ${localOnly} 本`);
   log(`  共有の設定: ${els.shareThumbs.checked ? "有効" : "無効"} / 書き込み: ${shareReadOnly ? "不可" : "可"}`);
   say(`共有済み ${matched}/${view.length} 本（置き場 ${folders} フォルダ）— 詳細は診断ログ`);
-  els.advBox.open = true;
+  setAdvOpen(true);
 });
 
 els.exportBtn.addEventListener("click", async () => {
@@ -2338,13 +2364,20 @@ function openDrawer(){ els.treePane.classList.add("open"); els.backdrop.classLis
 function closeDrawer(){ els.treePane.classList.remove("open"); els.backdrop.classList.remove("on"); }
 els.drawerBtn.addEventListener("click", openDrawer);
 els.drawerClose.addEventListener("click", closeDrawer);
-els.backdrop.addEventListener("click", closeDrawer);
+els.backdrop.addEventListener("click", () => { closeDrawer(); if (els.advBox.open) setAdvOpen(false); });
 
 /* ---- 上部アイコン ---- */
-els.advBtn.addEventListener("click", () => {
-  els.advBox.open = !els.advBox.open;
+function setAdvOpen(open){
+  els.advBox.open = open;
+  els.advBtn.classList.toggle("on", open);
+  els.backdrop.classList.toggle("on", open || els.treePane.classList.contains("open"));
+  if (open) els.advBox.scrollTop = 0;
+}
+els.advBtn.addEventListener("click", () => setAdvOpen(!els.advBox.open));
+els.advBox.addEventListener("toggle", () => {
+  // 見出しをクリックして閉じたときも背景を戻す
   els.advBtn.classList.toggle("on", els.advBox.open);
-  if (els.advBox.open && els.advBox.scrollIntoView) els.advBox.scrollIntoView({behavior:"smooth", block:"start"});
+  els.backdrop.classList.toggle("on", els.advBox.open || els.treePane.classList.contains("open"));
 });
 
 els.treeReload.addEventListener("click", async () => {
@@ -3026,6 +3059,7 @@ function nudgeVolume(d){
 document.addEventListener("keydown", e => {
   const open = els.scrim.classList.contains("open");
 
+  if (e.key === "Escape" && !open && els.advBox.open){ setAdvOpen(false); return; }
   if (e.key === "Escape" && open){ closePlayer(); return; }
   if (!open) return;
 
@@ -3081,55 +3115,48 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
 (async function init(){
  try{
   bootErrors.forEach(m => log(m));
-  db = await openDB().catch(() => null);
-  for (const rec of await idbAll("marks"))
-    marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [],
-                       plays:rec.plays || 0, last:rec.last || 0, dirty:!!rec.dirty});
-  globalIndex = await idbAll("files");
 
-  // 端末に保存された値を優先し、無ければ上の DEFAULTS を使う
-  // 検索窓の値がブラウザに復元される問題への対策。
-  // 復元は「HTML を解析して作られた要素」を狙うので、要素ごと作り替えて的を外す。
-  if (els.q.value) log("検索窓に復元された値を破棄しました: " + els.q.value);
+  // 画面まわりの初期化を先に済ませる。保存領域が開けない場合でも
+  // 設定欄が空のままにならないようにするため。
+  els.clientId.value = (localStorage.getItem("bcs_client") || "").trim() || DEFAULTS.clientId;
+  els.worker.value   = (localStorage.getItem("bcs_worker") || "").trim() || DEFAULTS.worker;
+  els.token.value    = localStorage.getItem("bcs_token") || "";
+  els.folder.value   = localStorage.getItem("bcs_treeroot") || "0";
+  els.col.value      = localStorage.getItem("bcs_col") || "380";
+  document.documentElement.style.setProperty("--col", els.col.value + "px");
+  els.redirUri.textContent = redirectUri();
+  updateCacheStatus();
+  loadAuth();
+  saveAuth();
+  renderTree();
+  log("ready");
+
+  // ブラウザが復元した検索欄の値を捨てる
+  if (els.q.value) log("検索欄に復元された値を破棄しました: " + els.q.value);
   const fresh = document.createElement("input");
   for (const a of ["type","name","placeholder","aria-label","autocomplete","autocorrect","spellcheck"]){
     const v = els.q.getAttribute(a);
     if (v !== null) fresh.setAttribute(a, v);
   }
-  fresh.id = "q";
-  fresh.value = "";
+  fresh.id = "q"; fresh.value = "";
   els.q.replaceWith(fresh);
   els.q = fresh;
   els.q.addEventListener("input", () => { queryTouched = true; });
-  els.q.addEventListener("input", () => {
-  clearTimeout(qTimer);
-  qTimer = setTimeout(() => { buildRail(); applyView(); }, 220);
-  clearTimeout(boxSearchTimer);
-  const text = els.q.value.split(/\s+/).filter(t => t && !/^[-#]/.test(t) && !/:/.test(t)
-              && !["fav","untagged"].includes(t.toLowerCase())).join(" ");
-  if (text) boxSearchTimer = setTimeout(() => boxSearchMerge(text), 700);
-});
-
-  // 念のため、最初の数秒は復元されていないか見張る
+  els.q.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { buildRail(); applyView(); }, 220); });
   const guard = setInterval(() => {
     if (queryTouched) return clearInterval(guard);
-    if (els.q.value){ log("検索窓が後から書き換えられたので消しました: " + els.q.value); els.q.value = ""; }
+    if (els.q.value) els.q.value = "";
   }, 250);
   setTimeout(() => clearInterval(guard), 4000);
   window.addEventListener("pageshow", () => { if (!queryTouched) els.q.value = ""; });
-  els.clientId.value = (localStorage.getItem("bcs_client") || "").trim() || DEFAULTS.clientId;
-  els.worker.value   = (localStorage.getItem("bcs_worker") || "").trim() || DEFAULTS.worker;
-  els.token.value    = localStorage.getItem("bcs_token") || "";
-  els.folder.value   = localStorage.getItem("bcs_treeroot") || "0";
-  updateCacheStatus();
-  els.col.value      = localStorage.getItem("bcs_col") || "380";
-  document.documentElement.style.setProperty("--col", els.col.value + "px");
-  els.redirUri.textContent = redirectUri();
-  renderTree();
 
-  loadAuth();
-  saveAuth();
-  log("ready — marks:", marks.size);
+  // ここから先は保存領域が必要な処理
+  db = await openDB();
+  for (const rec of await idbAll("marks"))
+    marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [],
+                       plays:rec.plays || 0, last:rec.last || 0, dirty:!!rec.dirty});
+  globalIndex = await idbAll("files");
+  log("marks: " + marks.size + " / 索引: " + globalIndex.length);
 
   // Box からの折り返し（?code=...）を処理する
   const params = new URLSearchParams(location.search);
@@ -3157,7 +3184,7 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   if (!auth.access && !els.token.value){
     setAuth(false, "未接続");
     if (!els.clientId.value || !els.worker.value){
-      els.advBox.open = true; els.setupBox.open = true;
+      setAdvOpen(true); els.setupBox.open = true;
       say("接続設定にクライアント ID と Worker URL を入力してください", true);
     }
     return;
