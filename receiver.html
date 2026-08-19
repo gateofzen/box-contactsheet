@@ -78,7 +78,7 @@ async function ensurePlayer(){
       bandwidthDowngradeTarget: 0.98
     },
     streaming: {
-      bufferingGoal: 40,      // 先読み 40 秒
+      bufferingGoal: 60,      // 先読み 60 秒
       rebufferingGoal: 5,     // 5 秒たまったら再開
       bufferBehind: 30,
       jumpLargeGaps: true,
@@ -111,8 +111,34 @@ async function ensurePlayer(){
     if (!v.paused) reply({type:"time", time:v.currentTime,
       duration:isFinite(v.duration)?v.duration:0});
   }, 2000);
+  setInterval(reportStats, 5000);
 
   return player;
+}
+
+function reportTracks(){
+  if (!player) return;
+  const list = player.getVariantTracks().map(t => ({
+    w:t.width, h:t.height, bw:Math.round((t.bandwidth||0)/1000), active:!!t.active
+  }));
+  reply({type:"tracks", list});
+}
+
+// 実際の通信速度・コマ落ち・停止時間を定期的に返す
+function reportStats(){
+  if (!player) return;
+  try{
+    const st = player.getStats();
+    const b = v.buffered.length ? v.buffered.end(v.buffered.length-1) - v.currentTime : 0;
+    reply({type:"stats",
+      estimate: Math.round((st.estimatedBandwidth||0)/1000),
+      stream: Math.round((st.streamBandwidth||0)/1000),
+      dropped: st.droppedFrames||0, decoded: st.decodedFrames||0,
+      stalls: Math.round(st.stallsDetected||0),
+      buffering: Math.round((st.bufferingTime||0)*10)/10,
+      ahead: Math.round(b*10)/10,
+      w: st.width||0, h: st.height||0});
+  }catch(_){}
 }
 
 function reportTrack(){
@@ -144,7 +170,9 @@ async function loadMedia(m){
       const p = await ensurePlayer();
       if (m.maxHeight) applyQuality(m.maxHeight);
       await p.load(m.manifest, m.time || 0);
+      reportTracks();
       reportTrack();
+      reportStats();
     }else if (m.url){
       // 区間配信が使えない動画は単一ファイルで再生する
       v.src = m.url;
