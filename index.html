@@ -361,7 +361,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v64</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v65</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2890,6 +2890,9 @@ function createDashEngine(name){
       if (this.stopped) return false;
       if (this.duration) try{ this.ms.duration = this.duration; }catch(_){}
 
+      // 入れ物は「全部先に」作る。
+      // 先にデータを流し込むと扱うトラックが確定してしまい、
+      // あとから追加しようとすると上限に達したと拒否される。
       this.tracks = [];
       for (const d of defs){
         let sb;
@@ -2903,11 +2906,14 @@ function createDashEngine(name){
           sb, next:d.start, busy:false, again:false, gen:0, retry:0, justSeeked:false,
           count: d.segDur ? Math.ceil(this.duration / d.segDur) : 0
         });
-        // 頭から読み始めると、途中の位置で始めたときに無駄な待ちが出る
         if (startAt > 0) tr.next = tr.start + Math.max(0, Math.floor(startAt / tr.segDur));
         this.tracks.push(tr);
-        await this.append(tr, await this.fetchSeg(d.init));
-        log(`${name}: ${d.kind} ${d.label} / 1 区間 ${d.segDur.toFixed(1)} 秒`
+      }
+
+      // 入れ物が揃ってから、それぞれの最初のデータを流し込む
+      for (const tr of this.tracks){
+        await this.append(tr, await this.fetchSeg(tr.init));
+        log(`${name}: ${tr.kind} ${tr.label} / 1 区間 ${tr.segDur.toFixed(1)} 秒`
           + (startAt > 0 ? ` / ${fmtTC(startAt)} から開始` : ""));
       }
 
@@ -3200,6 +3206,7 @@ function waitFor(cond, ms){
 let castMode = false;
 let castReadyUrl = null;     // 押した瞬間に使えるよう、先に用意しておく
 let castPreparing = false;
+let castPrompting = false;   // 選択画面を出している最中か
 
 async function prepareCast(file){
   if (castPreparing || castReadyUrl) return;
@@ -3267,6 +3274,8 @@ function startCast(){
     }, {once:true});
   }
 
+  if (castPrompting){ log("キャスト先の選択が既に開いています"); return; }
+  castPrompting = true;
   els.pNote.textContent = "キャスト先を選んでください…";
   els.pVideo.remote.prompt()
     .then(() => log("キャスト先を選びました"))
@@ -3274,7 +3283,8 @@ function startCast(){
       log("キャストできません: " + err.message);
       els.pNote.textContent = /dismiss/i.test(err.message)
         ? "キャストを取り消しました" : "キャストできません（" + err.message + "）";
-    });
+    })
+    .finally(() => { castPrompting = false; });
 }
 
 function bindCast(){
