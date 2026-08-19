@@ -372,7 +372,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v85</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v86</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -492,6 +492,11 @@ b{font-weight:600}
             <label class="check"><input id="autohq" type="checkbox"> 常に高画質で作る（遅い）</label>
             <label class="check"><input id="bgAudio" type="checkbox" checked> 画面を消しても音声を続ける</label>
             <label class="check"><input id="dashVideoOpt" type="checkbox" checked> 映像も区間配信で受け取る（シークが速い）</label>
+            <div class="field"><label for="castMethod">キャストの方式</label>
+              <select id="castMethod">
+                <option value="receiver" selected>受信ページ（手元で操作できる）</option>
+                <option value="standard">標準方式（滑らかさ優先・操作は簡素）</option>
+              </select></div>
             <label class="check"><input id="castFirst" type="checkbox"> テレビで観る（区間配信を使わず、押してすぐキャストできる）</label>
             <div class="field"><label for="castQuality">テレビ側の画質</label>
               <select id="castQuality">
@@ -690,7 +695,7 @@ function mdKey(base){
 
 const $ = id => document.getElementById(id);
 const els = {};
-["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt","castFirst","castQuality",
+["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt","castFirst","castQuality","castMethod",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
  "advBox","advBtn","installBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
@@ -2812,6 +2817,13 @@ els.castQ2.addEventListener("change", () => {
   els.castQuality.dispatchEvent(new Event("change"));
 });
 
+els.castMethod.addEventListener("change", () => {
+  localStorage.setItem("bcs_castmethod", els.castMethod.value);
+  say(els.castMethod.value === "standard"
+    ? "標準方式にしました。テレビ内蔵の再生機能へ直接渡します。"
+    : "受信ページ方式にしました。手元で操作できます。");
+});
+
 els.castQuality.addEventListener("change", () => {
   els.castQ2.value = els.castQuality.value;
   localStorage.setItem("bcs_castq", els.castQuality.value);
@@ -3083,6 +3095,9 @@ function createDashEngine(name){
       return new Promise((res, rej) => {
         if (this.stopped || !tr.sb || !this.tracks.includes(tr))
           return rej(new Error("停止済み"));
+        // 映像要素の差し替えで MediaSource が閉じていることがある
+        if (!this.ms || this.ms.readyState !== "open")
+          return rej(new Error("停止済み（受け口が閉じています）"));
         const done = () => { tr.sb.removeEventListener("updateend", done); res(); };
         tr.sb.addEventListener("updateend", done);
         try{ tr.sb.appendBuffer(buf); }
@@ -3604,6 +3619,48 @@ async function startPresentationCast(){
   }
 }
 
+// 標準方式：単一ファイルを読み込ませてから、端末標準の一覧を出す
+function startStandardCast(){
+  if (!currentFile || !castSupported()){
+    say("この端末では標準方式を使えません", true);
+    return;
+  }
+  const ready = videoKind === "キャスト用" && els.pVideo.readyState >= 1;
+  if (!ready){
+    if (!castReadyUrl){
+      els.pNote.textContent = "準備をしています。数秒後にもう一度押してください。";
+      prepareCast(currentFile);
+      return;
+    }
+    const t = els.pVideo.currentTime;
+    const playing = !els.pVideo.paused;
+    dashMain.stop();
+    videoKind = "キャスト用";
+    els.pVideo.src = els.castQuality.value === "orig" ? originalUrl(currentFile) : castReadyUrl;
+    els.pVideo.addEventListener("loadedmetadata", () => {
+      els.pVideo.currentTime = t;
+      if (playing) els.pVideo.play().catch(()=>{});
+      els.pNote.textContent = "準備できました。もう一度 📺 を押すとテレビの一覧が出ます。";
+      els.pCast.classList.add("btn-go");
+      playerToast("📺 もう一度押してください");
+    }, {once:true});
+    els.pNote.textContent = "キャスト用に切り替えています…（1〜2 秒）";
+    return;
+  }
+  if (castPrompting) return;
+  castPrompting = true;
+  els.pNote.textContent = "テレビを選んでください…";
+  els.pVideo.remote.prompt()
+    .then(() => { log("標準方式で接続しました"); els.pNote.textContent = "テレビで再生中（標準方式）"; })
+    .catch(err => {
+      log("キャストできません: " + err.message);
+      els.pNote.textContent = /dismiss/i.test(err.message)
+        ? "キャストを取り消しました（一覧が空なら少し待って再度）"
+        : "キャストできません（" + err.message + "）";
+    })
+    .finally(() => { castPrompting = false; });
+}
+
 /* ---- 従来方式（受信ページが使えない場合の予備） ---- */
 // Chromecast は「テレビ側が自分で URL を取りに行く」仕組みなので、
 // ブラウザ内で組み立てている区間配信の流れは渡せない。
@@ -3660,7 +3717,13 @@ async function castableUrl(file){
 }
 
 function startCast(){
-  // まずは受信ページ方式。押した瞬間に Chrome の機器一覧が出る。
+  // 標準方式：Chromecast 内蔵の再生機能へ直接渡す。
+  // ページを介さないぶん映像処理が最適化されており、滑らかさで有利。
+  if (els.castMethod.value === "standard"){
+    log("標準方式でキャストします");
+    startStandardCast();
+    return;
+  }
   if (presSupported() && receiverOk === false){
     say("テレビ用の受信ページ（receiver.html）が見つかりません。index.html と同じ場所に置いてください。", true);
     log("受信ページが無いため、従来方式に切り替えます: " + RECEIVER_URL);
@@ -4165,6 +4228,7 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   els.sort.value     = localStorage.getItem("bcs_sort") || "name";
   els.castQuality.value = localStorage.getItem("bcs_castq") || "-1080";
+  els.castMethod.value = localStorage.getItem("bcs_castmethod") || "receiver";
   els.personalTags.checked = localStorage.getItem("bcs_personal") !== "0";   // 既定は自分専用
   document.documentElement.style.setProperty("--col", els.col.value + "px");
   els.redirUri.textContent = redirectUri();
