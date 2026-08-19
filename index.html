@@ -303,6 +303,7 @@ b{font-weight:600}
 .castpanel .ctime{font-family:var(--mono);font-size:13px;color:var(--muted)}
 .castpanel input[type=range]{width:min(460px,86%);accent-color:var(--amber)}
 .castpanel .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.castq{background:var(--ink);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font-family:var(--mono);font-size:12px}
 .castpanel .sub{font-family:var(--mono);font-size:10.5px;color:var(--line)}
 .audioveil[hidden]{display:none}
 .audioveil{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;
@@ -371,7 +372,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v83</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v84</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -611,6 +612,14 @@ b{font-weight:600}
           <button id="castPlay" class="btn btn-go">一時停止</button>
           <button id="castFwd" class="btn">30秒 ▶▶</button>
         </div>
+        <div class="row">
+          <select id="castQ2" class="castq">
+            <option value="orig">原本のまま（最高画質）</option>
+            <option value="-1080">配信用・最高画質で固定</option>
+            <option value="0">自動（回線に合わせる）</option>
+            <option value="-480">低画質で固定</option>
+          </select>
+        </div>
         <div class="row"><button id="castStop" class="btn btn-stop">キャストを終える</button></div>
         <div class="sub" id="castInfo"></div>
       </div>
@@ -688,7 +697,7 @@ const els = {};
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logCopy","logClear","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
- "castPanel","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
+ "castPanel","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom",
  "pAudio","pAudioBtn","audioVeil","bgAudio","pCast","castProbe"].forEach(k => els[k] = $(k));
 
@@ -2797,7 +2806,14 @@ els.castSeek.addEventListener("change", () => {
   setTimeout(() => { castSeeking = false; }, 800);
 });
 
+// パネル側の切替は設定側と連動させる
+els.castQ2.addEventListener("change", () => {
+  els.castQuality.value = els.castQ2.value;
+  els.castQuality.dispatchEvent(new Event("change"));
+});
+
 els.castQuality.addEventListener("change", () => {
+  els.castQ2.value = els.castQuality.value;
   localStorage.setItem("bcs_castq", els.castQuality.value);
   if (presConn){
     // 原本と区間配信の切り替えは読み込み直しが要る
@@ -3465,6 +3481,7 @@ function bindPresConn(conn){
   try{ els.pVideo.removeAttribute("src"); els.pVideo.load(); }catch(_){}
   videoKind = "テレビ";
   els.castPanel.hidden = false;
+  els.castQ2.value = els.castQuality.value;
   els.castPlay.textContent = "一時停止";
   castPlaying = true;
   log(`手元の受信を停止しました（テレビ側で ${fmtTC(castStartTime)} から再生します）`);
@@ -3490,6 +3507,7 @@ function bindPresConn(conn){
       log(`テレビ側の状況: 実測 ${m.estimate} kbps / 再生中の画質 ${m.w}x${m.h} ${m.stream} kbps`
         + (m.fps ? ` / ${m.fps} コマ毎秒` : "")
         + ` / 先読み ${m.ahead} 秒 / 停止 ${m.stalls} 回 ${m.buffering} 秒`
+        + (m.gaps ? ` / 継ぎ目の飛び越し ${m.gaps} 回` : "")
         + ` / コマ落ち ${m.dropped}（${m.decoded} 中）`);
     }
     else if (m.type === "track"){
