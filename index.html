@@ -188,6 +188,8 @@ b{font-weight:600}
 /* ---------- settings ---------- */
 /* 設定は画面中央に浮かべる。一覧の末尾に置くと、
    動画が多いときにスクロールが追いつかず開けなくなるため。 */
+/* 設定は ⚙ から開く。一覧の下に見出しを残すと二重に見えるので隠す。 */
+#advBox:not([open]){display:none}
 #advBox[open]{
   position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
   width:min(720px,94vw);max-height:86vh;overflow-y:auto;overscroll-behavior:contain;
@@ -197,7 +199,9 @@ b{font-weight:600}
   border-bottom:1px solid var(--line-soft)}
 #advBox[open]>summary::after{content:"閉じる";margin-left:auto;color:var(--amber)}
 @media (max-width:860px){
-  #advBox[open]{width:100vw;height:100vh;max-height:100vh;border-radius:0;border:none;
+  /* 設定は ⚙ から開く。一覧の下に見出しを残すと二重に見えるので隠す。 */
+#advBox:not([open]){display:none}
+#advBox[open]{width:100vw;height:100vh;max-height:100vh;border-radius:0;border:none;
     top:0;left:0;transform:none}
 }
 
@@ -341,7 +345,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v48</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v49</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3175,25 +3179,8 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   renderTree();
   log("ready");
 
-  // ブラウザが復元した検索欄の値を捨てる
-  if (els.q.value) log("検索欄に復元された値を破棄しました: " + els.q.value);
-  const fresh = document.createElement("input");
-  for (const a of ["type","name","placeholder","aria-label","autocomplete","autocorrect",
-                   "autocapitalize","spellcheck","data-lpignore","data-1p-ignore","data-form-type"]){
-    const v = els.q.getAttribute(a);
-    if (v !== null) fresh.setAttribute(a, v);
-  }
-  fresh.id = "q"; fresh.value = "";
-  els.q.replaceWith(fresh);
-  els.q = fresh;
-  els.q.addEventListener("input", () => { queryTouched = true; });
-  els.q.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { buildRail(); applyView(); }, 220); });
-  const guard = setInterval(() => {
-    if (queryTouched) return clearInterval(guard);
-    if (els.q.value) els.q.value = "";
-  }, 250);
-  setTimeout(() => clearInterval(guard), 4000);
-  window.addEventListener("pageshow", () => { if (!queryTouched) els.q.value = ""; });
+  // 起動時に一度だけ空にする。ブラウザが値を復元することがあるため。
+  els.q.value = "";
 
   // ここから先は保存領域が必要な処理
   db = await openDB();
