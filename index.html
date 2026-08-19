@@ -372,7 +372,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v86</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v88</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -494,8 +494,9 @@ b{font-weight:600}
             <label class="check"><input id="dashVideoOpt" type="checkbox" checked> 映像も区間配信で受け取る（シークが速い）</label>
             <div class="field"><label for="castMethod">キャストの方式</label>
               <select id="castMethod">
-                <option value="receiver" selected>受信ページ（手元で操作できる）</option>
-                <option value="standard">標準方式（滑らかさ優先・操作は簡素）</option>
+                <option value="auto" selected>自動（端末に合わせる）</option>
+                <option value="receiver">受信ページ（手元で操作できる）</option>
+                <option value="standard">標準方式（パソコン向け）</option>
               </select></div>
             <label class="check"><input id="castFirst" type="checkbox"> テレビで観る（区間配信を使わず、押してすぐキャストできる）</label>
             <div class="field"><label for="castQuality">テレビ側の画質</label>
@@ -572,6 +573,7 @@ b{font-weight:600}
           <details class="debug"><summary>診断ログ</summary>
             <div class="rack" style="margin:6px 0">
               <button id="logCopy" class="btn btn-sm">ログをコピー</button>
+              <button id="logPrev" class="btn btn-sm">前回のログを表示</button>
               <button id="logClear" class="btn btn-sm">消去</button>
             </div>
             <pre id="log"></pre>
@@ -700,7 +702,7 @@ const els = {};
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
  "advBox","advBtn","installBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
- "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logCopy","logClear","sheet","sentinel","empty","railTags",
+ "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logCopy","logPrev","logClear","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
  "castPanel","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom",
@@ -726,10 +728,16 @@ let currentFile = null;
 
 /* ============ ログ ============ */
 const logLines = [];
+let logSaveTimer = null;
 function log(...a){
   logLines.push(new Date().toLocaleTimeString("ja-JP") + "  " + a.join(" "));
-  if (logLines.length > 400) logLines.shift();
+  if (logLines.length > 600) logLines.shift();
   els.log.textContent = logLines.join("\n");
+  // 止まったあとでも読めるよう控えておく（再読み込みしても残る）
+  clearTimeout(logSaveTimer);
+  logSaveTimer = setTimeout(() => {
+    try{ localStorage.setItem("bcs_log", logLines.slice(-400).join("\n")); }catch(_){}
+  }, 1500);
 }
 function say(t, err){
   els.msg.textContent = t || "";
@@ -2688,7 +2696,16 @@ els.logCopy.addEventListener("click", async () => {
   }
   setTimeout(() => { els.logCopy.textContent = "ログをコピー"; }, 1600);
 });
-els.logClear.addEventListener("click", () => { logLines.length = 0; els.log.textContent = ""; });
+els.logPrev.addEventListener("click", () => {
+  const prev = localStorage.getItem("bcs_log") || "";
+  els.log.textContent = prev || "（前回のログはありません）";
+  els.logPrev.textContent = "前回のログを表示中";
+  setTimeout(() => { els.logPrev.textContent = "前回のログを表示"; }, 2000);
+});
+els.logClear.addEventListener("click", () => {
+  logLines.length = 0; els.log.textContent = "";
+  try{ localStorage.removeItem("bcs_log"); }catch(_){}
+});
 
 els.exportBtn.addEventListener("click", async () => {
   const all = await idbAll("marks");
@@ -2819,8 +2836,9 @@ els.castQ2.addEventListener("change", () => {
 
 els.castMethod.addEventListener("change", () => {
   localStorage.setItem("bcs_castmethod", els.castMethod.value);
-  say(els.castMethod.value === "standard"
-    ? "標準方式にしました。テレビ内蔵の再生機能へ直接渡します。"
+  const m = castMethodNow();
+  say(m === "standard"
+    ? "標準方式にしました。テレビ内蔵の再生機能へ直接渡します（パソコン向け）。"
     : "受信ページ方式にしました。手元で操作できます。");
 });
 
@@ -3152,6 +3170,8 @@ function createDashEngine(name){
           if (tr.retry <= 20)
             setTimeout(() => { if (!this.stopped && this.tracks.includes(tr)) this.pump(tr); },
                        Math.min(15000, 1000*tr.retry));
+          else if (this.name === "音声のみ" && typeof restartAudioOnly === "function")
+            restartAudioOnly("区間の取得を繰り返し失敗");
         }
       }finally{
         tr.busy = false;
@@ -3309,13 +3329,19 @@ function watchAudioOnly(){
   });
 
   // 止まった／詰まったときに立て直す
+  let reviveCount = 0, reviveFrom = 0;
   const revive = why => {
     if (!audioOnly || !els.scrim.classList.contains("open")) return;
+    const now = Date.now();
+    if (now - reviveFrom > 30000){ reviveCount = 0; reviveFrom = now; }
+    reviveCount++;
     log(`音声のみ再生を立て直します（${why}） pos=${fmtTC(els.pAudio.currentTime)} `
-      + `ready=${els.pAudio.readyState} paused=${els.pAudio.paused}`);
+      + `ready=${els.pAudio.readyState} paused=${els.pAudio.paused} 回数=${reviveCount}`);
     try{ dashAudio.pumpAll(); }catch(_){}
     if (els.pAudio.paused)
       els.pAudio.play().catch(err => log("再開できません: " + err.message));
+    // 短い間に何度も立て直しているなら、流れごと作り直す
+    if (reviveCount >= 3) restartAudioOnly("立て直しでは戻らない");
   };
 
   els.pAudio.addEventListener("pause", () => {
@@ -3342,6 +3368,30 @@ function watchAudioOnly(){
       revive("6 秒進んでいない");
     }
   });
+}
+
+// 立て直しても駄目なときは、音声の流れごと作り直す。
+// 長時間の再生では、区間の取得が続けて失敗して諦めていることがある。
+let audioRestartAt = 0;
+
+async function restartAudioOnly(why){
+  if (!audioOnly || !currentFile) return;
+  if (Date.now() - audioRestartAt < 20000) return;   // 立て続けにやらない
+  audioRestartAt = Date.now();
+  const t = els.pAudio.currentTime || 0;
+  log(`音声の流れを作り直します（${why}） ${fmtTC(t)} から`);
+  try{
+    dashAudio.stop();
+    const ok = await dashAudio.start(currentFile, els.pAudio, ["audio"], t);
+    if (!ok) throw new Error("作り直せません");
+    els.pAudio.muted = false;
+    els.pAudio.volume = userVolume;
+    await els.pAudio.play();
+    log("音声の流れを作り直しました");
+  }catch(err){
+    log("作り直しに失敗: " + err.message);
+    say("音声が止まりました。🎧 を押し直すか、動画を開き直してください。", true);
+  }
 }
 
 function resetAudioState(){
@@ -3653,10 +3703,19 @@ function startStandardCast(){
   els.pVideo.remote.prompt()
     .then(() => { log("標準方式で接続しました"); els.pNote.textContent = "テレビで再生中（標準方式）"; })
     .catch(err => {
-      log("キャストできません: " + err.message);
-      els.pNote.textContent = /dismiss/i.test(err.message)
-        ? "キャストを取り消しました（一覧が空なら少し待って再度）"
-        : "キャストできません（" + err.message + "）";
+      const msg = err.message || "";
+      log("標準方式でキャストできません: " + msg);
+      if (/no screen|launch session|NotFound|NotSupported/i.test(msg)){
+        // この端末では標準方式が使えない。受信ページ方式へ切り替える。
+        els.castMethod.value = "receiver";
+        localStorage.setItem("bcs_castmethod", "receiver");
+        els.pNote.textContent = "この端末では標準方式を使えないため、受信ページ方式に切り替えました。もう一度 📺 を押してください。";
+        say("この端末では標準方式を使えません。受信ページ方式に切り替えました。", true);
+        log("受信ページ方式へ自動的に切り替えました");
+      }else{
+        els.pNote.textContent = /dismiss|closed/i.test(msg)
+          ? "キャストを取り消しました" : "キャストできません（" + msg + "）";
+      }
     })
     .finally(() => { castPrompting = false; });
 }
@@ -3716,10 +3775,17 @@ async function castableUrl(file){
   return null;
 }
 
+// Android の Chrome は標準の受け渡しに対応していない（No screen found になる）。
+// 自動のときは端末で選び分ける。
+function castMethodNow(){
+  const m = els.castMethod.value;
+  if (m !== "auto") return m;
+  const android = /Android/i.test(navigator.userAgent);
+  return android ? "receiver" : "standard";
+}
+
 function startCast(){
-  // 標準方式：Chromecast 内蔵の再生機能へ直接渡す。
-  // ページを介さないぶん映像処理が最適化されており、滑らかさで有利。
-  if (els.castMethod.value === "standard"){
+  if (castMethodNow() === "standard"){
     log("標準方式でキャストします");
     startStandardCast();
     return;
@@ -4228,7 +4294,7 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   els.sort.value     = localStorage.getItem("bcs_sort") || "name";
   els.castQuality.value = localStorage.getItem("bcs_castq") || "-1080";
-  els.castMethod.value = localStorage.getItem("bcs_castmethod") || "receiver";
+  els.castMethod.value = localStorage.getItem("bcs_castmethod") || "auto";
   els.personalTags.checked = localStorage.getItem("bcs_personal") !== "0";   // 既定は自分専用
   document.documentElement.style.setProperty("--col", els.col.value + "px");
   els.redirUri.textContent = redirectUri();
