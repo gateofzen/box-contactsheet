@@ -44,6 +44,7 @@ let player = null;
 let token = "";
 let conns = [];
 let lastQ = null;
+let attached = false;
 
 function say(t){ msgEl.textContent = t; }
 function fail(t){ errEl.textContent = t; panel.classList.remove("gone"); }
@@ -66,7 +67,9 @@ async function ensurePlayer(){
     throw new Error("shaka unsupported");
   }
   shaka.polyfill.installAll();
-  player = new shaka.Player(v);
+  player = new shaka.Player();
+  await player.attach(v);
+  attached = true;
 
   // 既定のままだと帯域を低く見積もって最低画質から始まり、
   // 貯め込む量も少ないため途切れる。テレビ向けに設定し直す。
@@ -127,7 +130,27 @@ function reportTracks(){
 
 // 実際の通信速度・コマ落ち・停止時間を定期的に返す
 function reportStats(){
-  if (!player) return;
+  try{
+    const b = v.buffered.length ? v.buffered.end(v.buffered.length-1) - v.currentTime : 0;
+    const q0 = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
+    const now0 = performance.now();
+    let fps0 = 0;
+    if (q0 && lastQ){
+      const dt = (now0 - lastQ.t) / 1000;
+      if (dt > 0) fps0 = Math.max(0, Math.round((q0.totalVideoFrames - lastQ.n) / dt));
+    }
+    if (!attached){
+      // 単一ファイル再生中は shaka の統計が使えないので、要素から直接読む
+      if (q0) lastQ = {n:q0.totalVideoFrames, t:now0};
+      reply({type:"stats", fps:fps0, estimate:0, stream:0,
+        dropped:(q0&&q0.droppedVideoFrames)||0, decoded:(q0&&q0.totalVideoFrames)||0,
+        stalls:0, gaps:0, buffering:0, ahead:Math.round(b*10)/10,
+        w:v.videoWidth||0, h:v.videoHeight||0, mode:"原本"});
+      return;
+    }
+  }catch(_){}
+
+  if (!player || !attached) return;
   try{
     const st = player.getStats();
     const b = v.buffered.length ? v.buffered.end(v.buffered.length-1) - v.currentTime : 0;
@@ -136,7 +159,7 @@ function reportStats(){
     let fps = 0;
     if (q && lastQ){
       const dt = (now - lastQ.t) / 1000;
-      if (dt > 0) fps = Math.round((q.totalVideoFrames - lastQ.n) / dt);
+      if (dt > 0) fps = Math.max(0, Math.round((q.totalVideoFrames - lastQ.n) / dt));
     }
     if (q) lastQ = {n:q.totalVideoFrames, t:now};
     reply({type:"stats", fps,
@@ -193,16 +216,35 @@ async function loadMedia(m){
   try{
     if (m.manifest){
       const p = await ensurePlayer();
+      // 直前に単一ファイルを再生していたら、その指定を外してから預け直す
+      if (!attached){
+        v.removeAttribute("src");
+        v.load();
+        await p.attach(v);
+        attached = true;
+      }
       if (m.maxHeight || m.fixed) applyQuality(m.maxHeight, m.fixed);
       await p.load(m.manifest, m.time || 0);
       reportTracks();
       reportTrack();
       reportStats();
     }else if (m.url){
-      // 区間配信が使えない動画は単一ファイルで再生する
+      // 単一ファイルで再生する。shaka が要素を掴んだままだと衝突するので手を離させる。
+      if (player && attached){
+        try{ await player.unload(); }catch(_){}
+        try{ await player.detach(); }catch(_){}
+        attached = false;
+      }
+      lastQ = null;
       v.src = m.url;
+      await new Promise(res => {
+        const done = () => { v.removeEventListener("loadedmetadata", done); res(); };
+        v.addEventListener("loadedmetadata", done);
+        setTimeout(res, 15000);
+      });
       if (m.time) v.currentTime = m.time;
       await v.play().catch(() => {});
+      reply({type:"track", width:v.videoWidth||0, height:v.videoHeight||0, bandwidth:0});
     }else{
       throw new Error("再生するものが指定されていません");
     }
