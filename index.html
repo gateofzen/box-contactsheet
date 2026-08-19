@@ -46,6 +46,16 @@ b{font-weight:600}
   overflow:hidden;text-overflow:ellipsis;max-width:34vw}
 .crumb b{color:var(--amber);font-weight:500}
 
+.menu{position:absolute;right:10px;top:calc(var(--bar) - 6px);z-index:62;
+  background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:6px;
+  min-width:210px;box-shadow:0 14px 40px rgba(0,0,0,.55)}
+.menu-item{display:block;width:100%;text-align:left;padding:9px 11px;border-radius:7px;
+  font-size:13px;color:var(--text)}
+.menu-item:hover{background:var(--surface-2)}
+.menu-item.on{background:var(--amber);color:#171208;font-weight:700}
+.menu-item.on::after{content:"　✓"}
+@media (max-width:860px){ .menu{left:10px;right:10px;min-width:0} }
+
 /* progress line */
 .pbar{height:2px;background:transparent}
 .pbar.on{background:linear-gradient(90deg,var(--amber),var(--mint),var(--amber));
@@ -346,14 +356,23 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v56</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v57</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
              aria-label="絞り込み" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other">
     </div>
+    <button id="sortBtn" class="iconbtn" title="並び順" aria-label="並び順">⇅</button>
     <button id="loginTop" class="btn btn-go" hidden>ログイン</button>
     <button id="advBtn" class="iconbtn" title="設定" aria-label="設定">⚙</button>
+  </div>
+  <div id="sortMenu" class="menu" hidden>
+    <button class="menu-item" data-value="name">名前</button>
+    <button class="menu-item" data-value="modified">更新が新しい順</button>
+    <button class="menu-item" data-value="size">サイズが大きい順</button>
+    <button class="menu-item" data-value="fav">お気に入り優先</button>
+    <button class="menu-item" data-value="plays">再生回数が多い順</button>
+    <button class="menu-item" data-value="recent">最近再生した順</button>
   </div>
   <div id="pbar" class="pbar"></div>
   <div id="statusline" class="statusline">
@@ -425,7 +444,7 @@ b{font-weight:600}
           <div class="rack">
             <div class="field"><label for="col">カードの幅</label>
               <input id="col" class="w-num" type="number" value="340" min="200" max="900" step="20"></div>
-            <div class="field"><label for="sort">並び順</label>
+            <div class="field" hidden><label for="sort">並び順</label>
               <select id="sort">
                 <option value="name">名前</option>
                 <option value="modified">更新が新しい順</option>
@@ -604,7 +623,7 @@ const els = {};
 ["token","folder","depth","sync","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
- "advBox","advBtn","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport",
+ "advBox","advBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport",
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
@@ -2540,6 +2559,32 @@ function setAdvOpen(open){
   if (open) els.advBox.scrollTop = 0;
 }
 els.advBtn.addEventListener("click", () => setAdvOpen(!els.advBox.open));
+
+/* ---- 並び順のメニュー ---- */
+function markSortMenu(){
+  els.sortMenu.querySelectorAll(".menu-item").forEach(b =>
+    b.classList.toggle("on", b.dataset.value === els.sort.value));
+}
+function openSortMenu(open){
+  els.sortMenu.hidden = !open;
+  els.sortBtn.classList.toggle("on", open);
+  if (open) markSortMenu();
+}
+els.sortBtn.addEventListener("click", e => {
+  e.stopPropagation();
+  openSortMenu(els.sortMenu.hidden);
+});
+els.sortMenu.addEventListener("click", e => {
+  const item = e.target.closest(".menu-item");
+  if (!item) return;
+  els.sort.value = item.dataset.value;
+  localStorage.setItem("bcs_sort", els.sort.value);
+  openSortMenu(false);
+  applyView();
+  say("並び順: " + item.textContent);
+});
+document.addEventListener("click", () => { if (!els.sortMenu.hidden) openSortMenu(false); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !els.sortMenu.hidden) openSortMenu(false); });
 els.advBox.addEventListener("toggle", () => {
   // 見出しをクリックして閉じたときも背景を戻す
   els.advBtn.classList.toggle("on", els.advBox.open);
@@ -3299,6 +3344,7 @@ new IntersectionObserver(en => { if (en[0].isIntersecting && rendered < view.len
   maskToken();
   els.folder.value   = localStorage.getItem("bcs_treeroot") || "0";
   els.col.value      = localStorage.getItem("bcs_col") || "380";
+  els.sort.value     = localStorage.getItem("bcs_sort") || "name";
   document.documentElement.style.setProperty("--col", els.col.value + "px");
   els.redirUri.textContent = redirectUri();
   updateCacheStatus();
