@@ -372,7 +372,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v91</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v93</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -933,9 +933,9 @@ function refreshTokens(){
   }
   return refreshing;
 }
-async function ensureFresh(){
+async function ensureFresh(force){
   if (!auth.access || !auth.refresh) return;
-  if (Date.now() < auth.exp - 10*60*1000) return;
+  if (!force && Date.now() < auth.exp - 10*60*1000) return;
   try{ await refreshTokens(); }
   catch(err){
     log("更新に失敗:", err.message);
@@ -3240,12 +3240,21 @@ function createDashEngine(name){
 
       tr.busy = true; tr.again = false;
       try{
+        // 音声を貯めるときは、まとめて同時に取りに行く。
+        // 1 つずつでは電波が切れる前に貯めきれない。
+        const par = (this.name === "音声のみ" && !tr.justSeeked) ? 6 : 1;
         while (!this.stopped && tr.gen === gen && tr.next <= last && this.aheadOf(tr) < this.targetOf(tr)){
-          const buf = await this.fetchSeg(tr.template(tr.next));
+          const nums = [];
+          for (let k = 0; k < par && tr.next + k <= last; k++) nums.push(tr.next + k);
+          // 取得は同時に、書き込みは順番に（順序が入れ替わると繋がらない）
+          const bufs = await Promise.all(nums.map(n => this.fetchSeg(tr.template(n))));
           if (this.stopped || tr.gen !== gen) break;
-          await this.append(tr, buf);
-          if (this.stopped || tr.gen !== gen) break;
-          tr.next++; tr.retry = 0;
+          for (const buf of bufs){
+            await this.append(tr, buf);
+            if (this.stopped || tr.gen !== gen) break;
+            tr.next++;
+          }
+          tr.retry = 0;
           await this.trim(tr);
         }
         if (!this.stopped && this.tracks.every(t => t.next > t.start + t.count - 1)){
@@ -3260,6 +3269,9 @@ function createDashEngine(name){
             log(`${this.name}: ${tr.kind} 区間の取得に失敗 ` + err.message
                 + (offline ? `（通信断とみなして待機。${tr.retry} 回目）` : ""));
           // 通信断なら諦めずに待ち続ける（復帰したら続きから取りに行く）
+          if (offline && this.name === "音声のみ" && tr.retry === 12
+              && typeof restartAudioOnly === "function")
+            restartAudioOnly("取得できない状態が続く");
           const limit = offline ? 1000 : 20;
           if (tr.retry <= limit)
             setTimeout(() => { if (!this.stopped && this.tracks.includes(tr)) this.pump(tr); },
@@ -3496,6 +3508,7 @@ let audioBufTimer = null;
 function startAudioBufferReport(){
   clearInterval(audioBufTimer);
   let lastShown = -1;
+  let loggedDone = false;
   audioBufTimer = setInterval(() => {
     if (!audioOnly){ clearInterval(audioBufTimer); audioBufTimer = null; return; }
     let ahead = 0;
@@ -3506,6 +3519,10 @@ function startAudioBufferReport(){
     const min = Math.floor(ahead / 60);
     if (min !== lastShown){
       lastShown = min;
+      if (!loggedDone && ahead >= Math.min(600, audioPrefetchSeconds()) - 20){
+        loggedDone = true;
+        log(`先読み完了: ${min} 分ぶんを手元に置きました`);
+      }
       els.castInfo && (els.castInfo.textContent = "");
       els.pNote.textContent = ahead > 60
         ? `音声のみ再生中（${min} 分先まで手元にあります）`
@@ -3522,6 +3539,9 @@ async function restartAudioOnly(why){
   log(`音声の流れを作り直します（${why}） ${fmtTC(t)} から`);
   try{
     dashAudio.stop();
+    // 配信元の場所は時間が経つと通らなくなる。取り直す。
+    mpdCache = {id:null, xml:null, url:null};
+    await ensureFresh(true).catch(() => {});
     const ok = await dashAudio.start(currentFile, els.pAudio, ["audio"], t);
     if (!ok) throw new Error("作り直せません");
     els.pAudio.muted = false;
@@ -3606,6 +3626,7 @@ let presConn = null;
 let castTimeTimer = null;
 let castTrack = "";
 let castStartTime = 0;
+let castCancelHint = false;
 let castPlaying = false;
 let castDuration = 0;
 let castSeeking = false;
@@ -3809,6 +3830,39 @@ async function startPresentationCast(){
   }
 }
 
+// キャストをやめて手元の再生に戻す。
+// 切り替えたまま戻れなくなると、映像が出ないまま取り残される。
+async function restoreLocalPlayback(reason){
+  if (!currentFile || !els.scrim.classList.contains("open")) return;
+  const t = els.pVideo.currentTime || castLastTime || castStartTime || 0;
+  log("手元の再生に戻します（" + reason + "） " + fmtTC(t));
+  els.pCast.classList.remove("btn-go");
+  els.pCast.disabled = false;
+  castStartTime = 0;
+
+  if (els.dashVideoOpt.checked){
+    try{
+      dashMain.stop();
+      if (await dashMain.start(currentFile, els.pVideo, ["video","audio"], t)){
+        if (await waitFor(() => els.pVideo.readyState >= 2, 5000)){
+          videoKind = "DASH";
+          els.pNote.textContent = "再生中（区間配信）";
+          if (wantPlay) els.pVideo.play().catch(()=>{});
+          return;
+        }
+      }
+      throw new Error("区間配信に戻せません");
+    }catch(err){ log(String(err.message)); dashMain.stop(); }
+  }
+  videoKind = "原本";
+  els.pVideo.src = originalUrl(currentFile);
+  els.pVideo.addEventListener("loadedmetadata", () => {
+    els.pVideo.currentTime = t;
+    if (wantPlay) els.pVideo.play().catch(()=>{});
+  }, {once:true});
+  els.pNote.textContent = "原本を再生中";
+}
+
 // 標準方式：単一ファイルを読み込ませてから、端末標準の一覧を出す
 function startStandardCast(){
   if (!currentFile || !castSupported()){
@@ -3833,8 +3887,15 @@ function startStandardCast(){
       els.pNote.textContent = "準備できました。もう一度 📺 を押すとテレビの一覧が出ます。";
       els.pCast.classList.add("btn-go");
       playerToast("📺 もう一度押してください");
+      log("キャスト用の読み込みが完了しました");
     }, {once:true});
     els.pNote.textContent = "キャスト用に切り替えています…（1〜2 秒）";
+    log("キャスト用に切り替えます: " + (els.pVideo.src || "").slice(0, 60));
+    // 読み込めないまま黒画面で取り残されないようにする
+    waitFor(() => els.pVideo.readyState >= 1, 8000).then(ok => {
+      if (!ok && videoKind === "キャスト用" && !presConn)
+        restoreLocalPlayback("キャスト用の映像を読み込めません");
+    });
     return;
   }
   if (castPrompting) return;
@@ -3845,6 +3906,12 @@ function startStandardCast(){
     .catch(err => {
       const msg = err.message || "";
       log("標準方式でキャストできません: " + msg);
+      if (/dismiss|closed|cancel|AbortError/i.test(msg)){
+        els.pNote.textContent = "キャストを取り消しました";
+        castCancelHint = true;
+        restoreLocalPlayback("キャストを取り消した");
+        return;
+      }
       if (/no screen|launch session|NotFound|NotSupported/i.test(msg)){
         // この端末では標準方式が使えない。受信ページ方式へ切り替える。
         els.castMethod.value = "receiver";
@@ -3926,6 +3993,12 @@ function castMethodNow(){
 
 function startCast(){
   if (castMethodNow() === "standard"){
+    // 繋がっていないのにキャスト用のままなら、押すたびに一覧を出すのではなく戻せるようにする
+    if (videoKind === "キャスト用" && !castPrompting && castCancelHint){
+      castCancelHint = false;
+      restoreLocalPlayback("キャストをやめる");
+      return;
+    }
     log("標準方式でキャストします");
     startStandardCast();
     return;
