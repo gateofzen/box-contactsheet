@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v107</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v108</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4125,15 +4125,17 @@ function bindPresConn(conn){
       if (!castModeLogged){ castModeLogged = true;
         log("再生しているのは: " + (m.mode === "専用アプリ" ? "専用アプリ ✓" : "受信ページ")); }
       // 帯域は足りているのにコマを落としている＝テレビ側の描画が追いついていない
-      if (m.decoded > 100 && m.dropped / m.decoded > 0.08
+      if (m.decoded > 300 && m.dropped / m.decoded > 0.08
           && m.estimate > (m.stream || 0) * 2 && !castAdvised){
         castAdvised = true;
         log(`テレビ側の描画が追いついていません（コマ落ち ${m.dropped}/${m.decoded}、`
           + `帯域は ${m.estimate} kbps で十分）`);
         say("回線は足りていますが、テレビ側の処理が追いついていません。低画質で固定すると改善することがあります。", true);
       }
-      // 回線に余裕がないと、いくら固定しても途切れる
-      else if (m.estimate && m.stream && m.estimate < m.stream * 1.6 && !castAdvised){
+      // 回線に余裕がないと、いくら固定しても途切れる。
+      // ただし再生開始直後の値は「まだ測っていない初期値」なので判断に使わない。
+      else if (m.decoded > 300 && m.estimate && m.stream
+               && m.estimate < m.stream * 1.6 && !castAdvised){
         castAdvised = true;
         const fixed = Number(els.castQuality.value) < 0;
         log(`回線に余裕がありません（実測 ${m.estimate} kbps に対し映像 ${m.stream} kbps）`);
