@@ -372,7 +372,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v93</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v94</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -501,9 +501,9 @@ b{font-weight:600}
             <label class="check"><input id="dashVideoOpt" type="checkbox" checked> 映像も区間配信で受け取る（シークが速い）</label>
             <div class="field"><label for="castMethod">キャストの方式</label>
               <select id="castMethod">
-                <option value="auto" selected>自動（端末に合わせる）</option>
+                <option value="auto" selected>自動（受信ページ方式）</option>
                 <option value="receiver">受信ページ（手元で操作できる）</option>
-                <option value="standard">標準方式（パソコン向け）</option>
+                <option value="standard">標準方式（多くの環境で一覧が出ません）</option>
               </select></div>
             <label class="check"><input id="castFirst" type="checkbox"> テレビで観る（区間配信を使わず、押してすぐキャストできる）</label>
             <div class="field"><label for="castQuality">テレビ側の画質</label>
@@ -3627,6 +3627,7 @@ let castTimeTimer = null;
 let castTrack = "";
 let castStartTime = 0;
 let castCancelHint = false;
+let promptedAt = 0;
 let castPlaying = false;
 let castDuration = 0;
 let castSeeking = false;
@@ -3900,6 +3901,7 @@ function startStandardCast(){
   }
   if (castPrompting) return;
   castPrompting = true;
+  promptedAt = Date.now();
   els.pNote.textContent = "テレビを選んでください…";
   els.pVideo.remote.prompt()
     .then(() => { log("標準方式で接続しました"); els.pNote.textContent = "テレビで再生中（標準方式）"; })
@@ -3907,8 +3909,17 @@ function startStandardCast(){
       const msg = err.message || "";
       log("標準方式でキャストできません: " + msg);
       if (/dismiss|closed|cancel|AbortError/i.test(msg)){
-        els.pNote.textContent = "キャストを取り消しました";
         castCancelHint = true;
+        // 一覧が出ないまま閉じられた場合は、使える方式へ促す
+        if (Date.now() - promptedAt < 1500 && presSupported()){
+          els.castMethod.value = "auto";
+          localStorage.setItem("bcs_castmethod", "auto");
+          els.pNote.textContent = "この環境では標準方式の一覧が出ません。受信ページ方式に戻しました。";
+          say("標準方式では一覧が出ないため、受信ページ方式に戻しました。もう一度 📺 を押してください。", true);
+          log("標準方式は一覧が出ないため、受信ページ方式へ戻しました");
+        }else{
+          els.pNote.textContent = "キャストを取り消しました";
+        }
         restoreLocalPlayback("キャストを取り消した");
         return;
       }
@@ -3982,13 +3993,12 @@ async function castableUrl(file){
   return null;
 }
 
-// Android の Chrome は標準の受け渡しに対応していない（No screen found になる）。
-// 自動のときは端末で選び分ける。
+// 標準方式（端末まかせの受け渡し）は、Android でも パソコンでも一覧が出なかった。
+// 受信ページ方式だけが両方で動くので、こちらを既定にする。
 function castMethodNow(){
   const m = els.castMethod.value;
   if (m !== "auto") return m;
-  const android = /Android/i.test(navigator.userAgent);
-  return android ? "receiver" : "standard";
+  return presSupported() ? "receiver" : "standard";
 }
 
 function startCast(){
