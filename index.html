@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v101</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v102</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -514,7 +514,7 @@ b{font-weight:600}
             <div class="field"><label for="castAppId">Cast アプリ ID</label>
               <input id="castAppId" class="w-token" type="text" placeholder="空にすると既定に戻ります"
                 autocomplete="off" spellcheck="false" data-lpignore="true"></div>
-            <label class="check"><input id="castAppOnly" type="checkbox"> 専用アプリだけを使う（登録済みの機器にしか出ません）</label>
+            <label class="check"><input id="castAppOnly" type="checkbox"> 専用アプリを使う（公開・登録が済んでから有効にしてください）</label>
             <div class="field"><label for="castMethod">キャストの方式</label>
               <select id="castMethod">
                 <option value="auto" selected>自動（受信ページ方式）</option>
@@ -3856,10 +3856,10 @@ async function checkReceiver(){
 
 function castUrls(){
   const id = (els.castAppId.value || "").trim();
-  if (!id) return [RECEIVER_URL];
-  // 専用アプリだけを試したいときは、予備を並べない。
-  // 予備があると、起動に失敗しても気づかずそちらで再生されてしまう。
-  return els.castAppOnly.checked ? ["cast:" + id] : ["cast:" + id, RECEIVER_URL];
+  // 候補を並べると、すべてを実行できる機器しか一覧に出ない。
+  // 専用アプリがまだ有効でない間は、それを混ぜるだけで機器が消えてしまう。
+  // どちらか一方だけを指定する。
+  return (els.castAppOnly.checked && id) ? ["cast:" + id] : [RECEIVER_URL];
 }
 
 function ensurePresRequest(){
@@ -3909,8 +3909,8 @@ function bindPresConn(conn){
   castViaApp = /^cast:/i.test(used);
   log("テレビ側で起動したもの: " + (used || "(不明)")
     + (castViaApp ? "  → 専用アプリ" : "  → 受信ページ"));
-  if (!castViaApp && (els.castAppId.value || "").trim() && !els.castAppOnly.checked)
-    say("専用アプリを起動できず、受信ページで再生しています。Chromecast の登録をご確認ください。", true);
+  if (els.castAppOnly.checked && !castViaApp)
+    say("専用アプリを起動できず、受信ページで再生しています。", true);
   castMode = true;
   els.pCast.classList.add("btn-go");
   els.pNote.textContent = "テレビへ送っています…";
