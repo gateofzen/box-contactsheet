@@ -134,39 +134,75 @@ pm.addEventListener(cast.framework.events.EventType.MEDIA_FINISHED, () => {
   reply({type:"state", event:"ended"});
 });
 
-/* ---- 起動 ---- */
+/* ---- 起動 ----
+   ここより上で例外が起きると、起動処理に到達できず session_error になる。
+   任意の処理はすべて個別に保護し、起動を最優先で行う。 */
+
+function safe(label, fn){
+  try{ fn(); }catch(err){
+    boot.textContent = "Contact Sheet（" + label + " を省略）";
+    reply({type:"warn", where:label, message:String(err && err.message || err)});
+  }
+}
+
 const options = new cast.framework.CastReceiverOptions();
 options.disableIdleTimeout = true;          // 操作待ちで勝手に終了しない
 options.playbackConfig = playbackConfig;
-options.customNamespaces = {};
-NS_CANDIDATES.forEach(ns => {
-  options.customNamespaces[ns] = cast.framework.system.MessageType.STRING;
+
+safe("経路の登録", () => {
+  options.customNamespaces = {};
+  options.customNamespaces[NS_OURS] = cast.framework.system.MessageType.STRING;
 });
 
-NS_CANDIDATES.forEach(ns => {
-  ctx.addCustomMessageListener(ns, e => {
-    reply({type:"ns", ns});               // どの経路で届いたかを知らせる
+safe("受信の待ち受け", () => {
+  ctx.addCustomMessageListener(NS_OURS, e => {
+    reply({type:"ns", ns:NS_OURS});
     handle(e.data);
   });
 });
 
-// Presentation API から来る指示は、システム側のイベントとして届くことがある
-ctx.addEventListener(cast.framework.system.EventType.MESSAGE, e => {
-  if (e && e.data) handle(e.data);
+safe("準備完了の通知", () => {
+  ctx.addEventListener(cast.framework.system.EventType.READY, () => reply({type:"ready"}));
 });
 
-ctx.addEventListener(cast.framework.system.EventType.READY, () => {
-  reply({type:"ready"});
+safe("再生エラーの検出", () => {
+  pm.addEventListener(cast.framework.events.EventType.ERROR, e => {
+    reply({type:"error", message:"再生エラー " + (e.detailedErrorCode || e.error || "")});
+  });
 });
+
+safe("終了の検出", () => {
+  pm.addEventListener(cast.framework.events.EventType.MEDIA_FINISHED, () => {
+    reply({type:"state", event:"ended"});
+  });
+});
+
+// 状況の報告（失敗しても再生は続ける）
+setInterval(() => {
+  try{
+    const st = (pm.getStats && pm.getStats()) || {};
+    const t = pm.getCurrentTimeSec();
+    const d = pm.getDurationSec();
+    if (!isFinite(t)) return;
+    reply({type:"time", time:t, duration:isFinite(d) ? d : 0});
+    reply({type:"stats",
+      estimate: Math.round((st.estimatedBandwidth || 0) / 1000),
+      stream:   Math.round((st.streamBandwidth || 0) / 1000),
+      dropped:  st.droppedFrames || 0,
+      decoded:  st.decodedFrames || 0,
+      w: st.width || 0, h: st.height || 0,
+      ahead: 0, stalls: 0, buffering: 0, gaps: 0, mode: "専用アプリ"});
+  }catch(_){}
+}, 4000);
 
 try{
   ctx.start(options);
+  boot.textContent = "Contact Sheet";
 }catch(err){
-  // 何らかの理由で起動できないときは、余計な指定を外して立ち上げ直す
+  // 指定が原因なら、最小限の構成で立ち上げ直す
   try{
     const basic = new cast.framework.CastReceiverOptions();
     basic.disableIdleTimeout = true;
-    basic.playbackConfig = playbackConfig;
     ctx.start(basic);
     boot.textContent = "Contact Sheet（簡易起動）";
   }catch(e2){
