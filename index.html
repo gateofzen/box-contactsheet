@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v108</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v109</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3216,6 +3216,11 @@ els.audioPrefetch.addEventListener("change", () => {
 
 els.castAppOnly.addEventListener("change", () => {
   localStorage.setItem("bcs_castapponly", els.castAppOnly.checked ? "1" : "0");
+  if (presStarting){
+    say("テレビの選択画面を閉じてから切り替えてください", true);
+    els.castAppOnly.checked = !els.castAppOnly.checked;   // 元に戻す
+    return;
+  }
   presReq = null; ensurePresRequest();
   say(els.castAppOnly.checked
     ? "専用アプリだけを使います。起動できない場合はその場で分かります。"
@@ -3226,6 +3231,10 @@ els.castAppId.addEventListener("change", () => {
   const v = els.castAppId.value.trim();
   if (v) localStorage.setItem("bcs_castappid", v);
   else { localStorage.removeItem("bcs_castappid"); els.castAppId.value = DEFAULTS.castAppId; }
+  if (presStarting){
+    say("テレビの選択画面を閉じてから変更してください", true);
+    return;
+  }
   presReq = null;                       // 指定が変わったので作り直す
   ensurePresRequest();
   say(els.castAppId.value.trim()
@@ -4232,18 +4241,36 @@ function endCast(){
   setTimeout(() => { castEnding = false; }, 500);
 }
 
+let presStarting = false;
+
 async function startPresentationCast(){
+  // 選択画面は同時に 1 つしか出せない。前の要求が残っていると拒否される。
+  if (presStarting){
+    log("選択画面を出している最中です");
+    els.pNote.textContent = "テレビの選択画面が開いています。そちらで選ぶか閉じてください。";
+    return false;
+  }
   const req = ensurePresRequest();
   if (!req) return false;
+  presStarting = true;
+  els.pNote.textContent = "テレビを選んでください…";
   try{
     const conn = await req.start();     // Chrome 標準の機器一覧が即座に出る
     bindPresConn(conn);
     return true;
   }catch(err){
-    log("キャストできません: " + err.message);
-    els.pNote.textContent = /cancel|dismiss|NotAllowed/i.test(err.message)
-      ? "キャストを取り消しました" : "キャストできません（" + err.message + "）";
+    const msg = err.message || "";
+    log("キャストできません: " + msg);
+    if (/unsettled Promise/i.test(msg)){
+      els.pNote.textContent = "前回の選択画面がまだ開いています。閉じてからもう一度お試しください。";
+      say("テレビの選択画面が開いたままです。閉じてからもう一度押してください。", true);
+    }else{
+      els.pNote.textContent = /cancel|dismiss|NotAllowed/i.test(msg)
+        ? "キャストを取り消しました" : "キャストできません（" + msg + "）";
+    }
     return false;
+  }finally{
+    presStarting = false;
   }
 }
 
