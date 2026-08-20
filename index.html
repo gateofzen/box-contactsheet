@@ -372,7 +372,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v98</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v99</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -502,6 +502,7 @@ b{font-weight:600}
             <div class="field"><label for="castAppId">Cast アプリ ID</label>
               <input id="castAppId" class="w-token" type="text" placeholder="空にすると既定に戻ります"
                 autocomplete="off" spellcheck="false" data-lpignore="true"></div>
+            <label class="check"><input id="castAppOnly" type="checkbox"> 専用アプリだけを使う（予備に切り替えない）</label>
             <div class="field"><label for="castMethod">キャストの方式</label>
               <select id="castMethod">
                 <option value="auto" selected>自動（受信ページ方式）</option>
@@ -709,7 +710,7 @@ function mdKey(base){
 
 const $ = id => document.getElementById(id);
 const els = {};
-["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt","castFirst","castQuality","castMethod","castAppId",
+["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt","castFirst","castQuality","castMethod","castAppId","castAppOnly",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
  "advBox","advBtn","installBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
@@ -2903,6 +2904,14 @@ els.audioPrefetch.addEventListener("change", () => {
   say(sec >= 100000 ? "音声を最後まで先読みします" : `音声を ${Math.round(sec/60)} 分ぶん先読みします`);
 });
 
+els.castAppOnly.addEventListener("change", () => {
+  localStorage.setItem("bcs_castapponly", els.castAppOnly.checked ? "1" : "0");
+  presReq = null; ensurePresRequest();
+  say(els.castAppOnly.checked
+    ? "専用アプリだけを使います。起動できない場合はその場で分かります。"
+    : "専用アプリが使えないときは受信ページに切り替えます。");
+});
+
 els.castAppId.addEventListener("change", () => {
   const v = els.castAppId.value.trim();
   if (v) localStorage.setItem("bcs_castappid", v);
@@ -3642,6 +3651,8 @@ let castTimeTimer = null;
 let castTrack = "";
 let castAdvised = false;
 let castNsSeen = false;
+let castViaApp = false;
+let castModeLogged = false;
 let castStartTime = 0;
 let castCancelHint = false;
 let promptedAt = 0;
@@ -3675,8 +3686,10 @@ async function checkReceiver(){
 
 function castUrls(){
   const id = (els.castAppId.value || "").trim();
-  // 専用の受信アプリがあれば最優先。無ければ受信ページ。
-  return id ? ["cast:" + id, RECEIVER_URL] : [RECEIVER_URL];
+  if (!id) return [RECEIVER_URL];
+  // 専用アプリだけを試したいときは、予備を並べない。
+  // 予備があると、起動に失敗しても気づかずそちらで再生されてしまう。
+  return els.castAppOnly.checked ? ["cast:" + id] : ["cast:" + id, RECEIVER_URL];
 }
 
 function ensurePresRequest(){
@@ -3722,6 +3735,12 @@ async function castLoadCurrent(){
 
 function bindPresConn(conn){
   presConn = conn;
+  const used = conn.url || "";
+  castViaApp = /^cast:/i.test(used);
+  log("テレビ側で起動したもの: " + (used || "(不明)")
+    + (castViaApp ? "  → 専用アプリ" : "  → 受信ページ"));
+  if (!castViaApp && (els.castAppId.value || "").trim() && !els.castAppOnly.checked)
+    say("専用アプリを起動できず、受信ページで再生しています。Chromecast の登録をご確認ください。", true);
   castMode = true;
   els.pCast.classList.add("btn-go");
   els.pNote.textContent = "テレビへ送っています…";
@@ -3729,6 +3748,7 @@ function bindPresConn(conn){
   castStartTime = els.pVideo.currentTime || 0;
   castAdvised = false;
   castNsSeen = false;
+  castModeLogged = false;
   els.pVideo.pause();
   dashMain.stop();
   try{ els.pVideo.removeAttribute("src"); els.pVideo.load(); }catch(_){}
@@ -3758,6 +3778,8 @@ function bindPresConn(conn){
         log(`  ${t.w}x${t.h}  ${t.bw} kbps${t.active ? "  ← 使用中" : ""}`));
     }
     else if (m.type === "stats"){
+      if (!castModeLogged){ castModeLogged = true;
+        log("再生しているのは: " + (m.mode === "専用アプリ" ? "専用アプリ ✓" : "受信ページ")); }
       // 帯域は足りているのにコマを落としている＝テレビ側の描画が追いついていない
       if (m.decoded > 100 && m.dropped / m.decoded > 0.08
           && m.estimate > (m.stream || 0) * 2 && !castAdvised){
@@ -4574,6 +4596,7 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   els.castQuality.value = localStorage.getItem("bcs_castq") || "0";
   els.castMethod.value = localStorage.getItem("bcs_castmethod") || "auto";
   els.castAppId.value = (localStorage.getItem("bcs_castappid") || "").trim() || DEFAULTS.castAppId;
+  els.castAppOnly.checked = localStorage.getItem("bcs_castapponly") === "1";
   els.audioPrefetch.value = localStorage.getItem("bcs_prefetch") || "auto";
   els.personalTags.checked = localStorage.getItem("bcs_personal") !== "0";   // 既定は自分専用
   document.documentElement.style.setProperty("--col", els.col.value + "px");
