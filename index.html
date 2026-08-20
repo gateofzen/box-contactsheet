@@ -372,7 +372,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v97</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v98</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -500,7 +500,7 @@ b{font-weight:600}
               </select></div>
             <label class="check"><input id="dashVideoOpt" type="checkbox" checked> 映像も区間配信で受け取る（シークが速い）</label>
             <div class="field"><label for="castAppId">Cast アプリ ID</label>
-              <input id="castAppId" class="w-token" type="text" placeholder="例: A1B2C3D4"
+              <input id="castAppId" class="w-token" type="text" placeholder="空にすると既定に戻ります"
                 autocomplete="off" spellcheck="false" data-lpignore="true"></div>
             <div class="field"><label for="castMethod">キャストの方式</label>
               <select id="castMethod">
@@ -686,6 +686,7 @@ window.addEventListener("unhandledrejection", e => reportError("rejection", e));
 const DEFAULTS = {
   clientId: "pniv75amaapkk57u84hdu8kew2o1s6zs",
   worker:   "https://box-oauth.gateofzen.workers.dev",   // 末尾のスラッシュは不要
+  castAppId: "C171C921",                                 // 専用の受信アプリ
 };
 
 const API = "https://api.box.com/2.0";
@@ -2903,7 +2904,9 @@ els.audioPrefetch.addEventListener("change", () => {
 });
 
 els.castAppId.addEventListener("change", () => {
-  localStorage.setItem("bcs_castappid", els.castAppId.value.trim());
+  const v = els.castAppId.value.trim();
+  if (v) localStorage.setItem("bcs_castappid", v);
+  else { localStorage.removeItem("bcs_castappid"); els.castAppId.value = DEFAULTS.castAppId; }
   presReq = null;                       // 指定が変わったので作り直す
   ensurePresRequest();
   say(els.castAppId.value.trim()
@@ -4570,7 +4573,7 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   els.sort.value     = localStorage.getItem("bcs_sort") || "name";
   els.castQuality.value = localStorage.getItem("bcs_castq") || "0";
   els.castMethod.value = localStorage.getItem("bcs_castmethod") || "auto";
-  els.castAppId.value = localStorage.getItem("bcs_castappid") || "";
+  els.castAppId.value = (localStorage.getItem("bcs_castappid") || "").trim() || DEFAULTS.castAppId;
   els.audioPrefetch.value = localStorage.getItem("bcs_prefetch") || "auto";
   els.personalTags.checked = localStorage.getItem("bcs_personal") !== "0";   // 既定は自分専用
   document.documentElement.style.setProperty("--col", els.col.value + "px");
