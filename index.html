@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v106</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v107</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2534,6 +2534,7 @@ async function openPlayer(file, startAt){
 
   pushLayer("player", () => closePlayerNow());
 
+  playerClosing = false;
   els.pVideo.onerror = null;
   els.pVideo.muted = false;
   els.pVideo.volume = userVolume || 1;
@@ -2620,7 +2621,15 @@ function closePlayer(){
   closePlayerNow();
 }
 
+let playerClosing = false;
+
 function closePlayerNow(){
+  // 閉じる最中であることを先に示す。
+  // これが無いと、キャストの終了処理が「手元での再生」を始めてしまい、
+  // 画面を閉じたのに音だけが鳴り続ける。
+  playerClosing = true;
+  wantPlay = false;
+
   if (presConn){ castSend({type:"stop"}); try{ presConn.terminate(); }catch(_){} endCast(); }
   stopCastSearch();
   castAvailBy.main = null;   // 探索用はそのまま生かしておく
@@ -2629,9 +2638,19 @@ function closePlayerNow(){
   resetAudioState();
   if ("mediaSession" in navigator) try{ navigator.mediaSession.metadata = null; }catch(_){}
   els.scrim.classList.remove("open");
+
+  // 受信を止め、音の出どころを断つ
+  dashMain.stop();
+  dashAudio.stop();
   els.pVideo.onerror = null;
-  els.pVideo.pause(); els.pVideo.removeAttribute("src"); els.pVideo.load();
+  els.pVideo.pause(); els.pVideo.removeAttribute("src");
+  try{ els.pVideo.load(); }catch(_){}
+  els.pAudio.pause(); els.pAudio.removeAttribute("src");
+  try{ els.pAudio.load(); }catch(_){}
+
   currentFile = null;
+  castStartTime = 0; castLastTime = 0;
+  setTimeout(() => { playerClosing = false; }, 800);
 }
 
 /* ============ 一括操作 ============ */
@@ -3419,6 +3438,8 @@ function createDashEngine(name){
     name, ms:null, el:null, tracks:[], duration:0, stopped:true, ready:false,
 
     async start(file, mediaEl, kinds, startAt){
+      // 閉じる最中は始めない（遅れて走る処理が音を鳴らし続けてしまう）
+      if (typeof playerClosing !== "undefined" && playerClosing) return false;
       this.stop();
       this.el = mediaEl; this.stopped = false;
 
@@ -4126,6 +4147,7 @@ function bindPresConn(conn){
         + (m.rate && m.rate !== 1 ? ` / 速度 ${m.rate}` : "")
         + (m.fit ? ` / 表示 ${m.fit}` : "")
         + ` / 先読み ${m.ahead} 秒 / 停止 ${m.stalls} 回 ${m.buffering} 秒`
+        + (m.aAhead != null && m.aAhead >= 0 ? ` / 音声の先読み ${m.aAhead} 秒` : "")
         + (m.gaps ? ` / 継ぎ目の飛び越し ${m.gaps} 回` : "")
         + ` / コマ落ち ${m.dropped}（${m.decoded} 中）`);
     }
@@ -4190,6 +4212,7 @@ function endCast(){
     // 区間配信に戻せるなら戻す（シークが軽いので）
     if (els.dashVideoOpt.checked){
       setTimeout(async () => {
+        if (playerClosing || !els.scrim.classList.contains("open")) return;
         try{
           const keep = els.pVideo.currentTime || resumeAt;
           if (await dashMain.start(f, els.pVideo, ["video","audio"], keep)){
@@ -4225,6 +4248,7 @@ async function startPresentationCast(){
 // キャストをやめて手元の再生に戻す。
 // 切り替えたまま戻れなくなると、映像が出ないまま取り残される。
 async function restoreLocalPlayback(reason){
+  if (playerClosing) return;
   if (!currentFile || !els.scrim.classList.contains("open")) return;
   const t = els.pVideo.currentTime || castLastTime || castStartTime || 0;
   log("手元の再生に戻します（" + reason + "） " + fmtTC(t));
