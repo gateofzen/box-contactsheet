@@ -372,7 +372,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v94</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v96</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -509,8 +509,8 @@ b{font-weight:600}
             <div class="field"><label for="castQuality">テレビ側の画質</label>
               <select id="castQuality">
                 <option value="orig">原本のまま（最高画質・シークは遅い）</option>
-                <option value="0">自動（回線に合わせる）</option>
-                <option value="-1080" selected>最高画質で固定（切り替わらない）</option>
+                <option value="0" selected>自動（回線に合わせる・推奨）</option>
+                <option value="-1080">最高画質で固定（回線に余裕があるとき）</option>
                 <option value="1080">1080p まで</option>
                 <option value="720">720p まで</option>
                 <option value="-480">低画質で固定（途切れにくい）</option>
@@ -631,7 +631,7 @@ b{font-weight:600}
           <select id="castQ2" class="castq">
             <option value="orig">原本のまま（最高画質）</option>
             <option value="-1080">配信用・最高画質で固定</option>
-            <option value="0">自動（回線に合わせる）</option>
+            <option value="0" selected>自動（回線に合わせる・推奨）</option>
             <option value="-480">低画質で固定</option>
           </select>
         </div>
@@ -3625,6 +3625,7 @@ let presReq = null;
 let presConn = null;
 let castTimeTimer = null;
 let castTrack = "";
+let castAdvised = false;
 let castStartTime = 0;
 let castCancelHint = false;
 let promptedAt = 0;
@@ -3703,6 +3704,7 @@ function bindPresConn(conn){
   els.pNote.textContent = "テレビへ送っています…";
   // 位置は「消す前」に控える。消してから読むと 0 になってしまう。
   castStartTime = els.pVideo.currentTime || 0;
+  castAdvised = false;
   els.pVideo.pause();
   dashMain.stop();
   try{ els.pVideo.removeAttribute("src"); els.pVideo.load(); }catch(_){}
@@ -3731,6 +3733,23 @@ function bindPresConn(conn){
         log(`  ${t.w}x${t.h}  ${t.bw} kbps${t.active ? "  ← 使用中" : ""}`));
     }
     else if (m.type === "stats"){
+      // 帯域は足りているのにコマを落としている＝テレビ側の描画が追いついていない
+      if (m.decoded > 100 && m.dropped / m.decoded > 0.08
+          && m.estimate > (m.stream || 0) * 2 && !castAdvised){
+        castAdvised = true;
+        log(`テレビ側の描画が追いついていません（コマ落ち ${m.dropped}/${m.decoded}、`
+          + `帯域は ${m.estimate} kbps で十分）`);
+        say("回線は足りていますが、テレビ側の処理が追いついていません。低画質で固定すると改善することがあります。", true);
+      }
+      // 回線に余裕がないと、いくら固定しても途切れる
+      else if (m.estimate && m.stream && m.estimate < m.stream * 1.6 && !castAdvised){
+        castAdvised = true;
+        const fixed = Number(els.castQuality.value) < 0;
+        log(`回線に余裕がありません（実測 ${m.estimate} kbps に対し映像 ${m.stream} kbps）`);
+        say(fixed
+          ? "回線に余裕がありません。画質を「自動」か「低画質で固定」にすると途切れにくくなります。"
+          : "回線に余裕がありません。自動で画質を落として調整します。", true);
+      }
       log(`テレビ側の状況: ${m.mode === "原本" ? "原本再生" : "実測 " + m.estimate + " kbps"}`
         + ` / ${m.w}x${m.h}${m.stream ? " " + m.stream + " kbps" : ""}`
         + (m.fps ? ` / ${m.fps} コマ毎秒` : "")
@@ -4527,7 +4546,7 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   els.folder.value   = localStorage.getItem("bcs_treeroot") || "0";
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   els.sort.value     = localStorage.getItem("bcs_sort") || "name";
-  els.castQuality.value = localStorage.getItem("bcs_castq") || "-1080";
+  els.castQuality.value = localStorage.getItem("bcs_castq") || "0";
   els.castMethod.value = localStorage.getItem("bcs_castmethod") || "auto";
   els.audioPrefetch.value = localStorage.getItem("bcs_prefetch") || "auto";
   els.personalTags.checked = localStorage.getItem("bcs_personal") !== "0";   // 既定は自分専用
