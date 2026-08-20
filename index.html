@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v105</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v106</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3964,17 +3964,47 @@ async function checkReceiver(){
   try{
     const r = await fetch(RECEIVER_URL, {cache:"no-store"});
     const text = r.ok ? await r.text() : "";
-    receiverOk = r.ok && /Contact\s*Sheet/.test(text);
-    log(receiverOk
-      ? "受信ページを確認しました: " + RECEIVER_URL
-      : `受信ページが見つかりません（${r.status}）: ${RECEIVER_URL}`);
+    // 中身がアプリ本体だと、テレビにログイン画面が映ってしまう。
+    // 受信ページだけが持つ印で見分ける。
+    const isReceiver = /<meta\s+name="cs-role"\s+content="receiver"/.test(text);
+    const looksLikeApp = /id="grid"/.test(text) || /id="treePane"/.test(text);
+
+    if (!r.ok){
+      receiverOk = false;
+      log(`受信ページが見つかりません（${r.status}）: ${RECEIVER_URL}`);
+      say("テレビ用の受信ページ（receiver.html）が見つかりません。index.html と同じ場所に置いてください。", true);
+    }else if (looksLikeApp && !isReceiver){
+      receiverOk = false;
+      log("receiver.html の中身がアプリ本体になっています: " + RECEIVER_URL);
+      say("receiver.html の中身がアプリ本体になっています。receiver.html を置き直してください。", true);
+    }else if (!isReceiver){
+      receiverOk = false;
+      log("receiver.html が想定と異なります（印が見つかりません）: " + RECEIVER_URL);
+      say("receiver.html が古いか、別のファイルのようです。最新のものに置き換えてください。", true);
+    }else{
+      receiverOk = true;
+      log("受信ページを確認しました: " + RECEIVER_URL);
+    }
   }catch(err){
     receiverOk = false;
     log("受信ページを確認できません: " + err.message);
+    say("テレビ用の受信ページを確認できません: " + err.message, true);
   }
-  if (!receiverOk)
-    say("テレビ用の受信ページ（receiver.html）が見つかりません。index.html と同じ場所に置いてください。", true);
   return receiverOk;
+}
+
+// 専用アプリ側の置き場も確かめる（登録した URL と実体がずれていないか）
+async function checkCastReceiver(){
+  const id = (els.castAppId.value || "").trim();
+  if (!id) return;
+  const url = new URL("cast-receiver.html", location.href).href;
+  try{
+    const r = await fetch(url, {cache:"no-store"});
+    const text = r.ok ? await r.text() : "";
+    const ok = r.ok && /<meta\s+name="cs-role"\s+content="cast-receiver"/.test(text);
+    log(ok ? "専用アプリの置き場を確認しました: " + url
+           : `専用アプリの置き場が見つかりません（${r.status}）: ${url}`);
+  }catch(err){ log("専用アプリの置き場を確認できません: " + err.message); }
 }
 
 function castUrls(){
@@ -4933,7 +4963,10 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
                        tags:rec.tags || [], plays:rec.plays || 0, last:rec.last || 0, dirty:!!rec.dirty});
   globalIndex = await idbAll("files");
   ensurePresRequest();    // Chrome が把握している機器をそのまま受け取る
-  if (presSupported()) checkReceiver();
+  if (presSupported()){
+    checkReceiver();
+    checkCastReceiver();
+  }
   primeCastProbe();       // 受信ページ方式が使えない場合の備え
   log("marks: " + marks.size + " / 索引: " + globalIndex.length);
 
