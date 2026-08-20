@@ -252,6 +252,7 @@ b{font-weight:600}
 .btn{background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:7px 12px;
   font-family:var(--mono);font-size:11px;transition:.14s}
 .btn:hover{border-color:var(--muted)}
+.btn.ready{border-color:var(--amber)}
 .btn-go{background:var(--amber);border-color:var(--amber);color:#171208;font-weight:700}
 .btn-go:hover{background:#F2BC5C}
 .btn-stop{border-color:var(--red);color:var(--red)}
@@ -382,7 +383,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v113</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v114</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4306,6 +4307,7 @@ function endCast(){
   castMode = false;
   castTrack = "";
   els.pCast.classList.remove("btn-go");
+  els.pCast.classList.remove("ready");
   els.castPanel.hidden = true;
   log("キャストを終了しました");
 
@@ -4441,7 +4443,7 @@ function startStandardCast(){
       els.pVideo.currentTime = t;
       if (playing) els.pVideo.play().catch(()=>{});
       els.pNote.textContent = "準備できました。もう一度 📺 を押すとテレビの一覧が出ます。";
-      els.pCast.classList.add("btn-go");
+      els.pCast.classList.add("ready");
       playerToast("📺 もう一度押してください");
       log("キャスト用の読み込みが完了しました");
     }, {once:true});
@@ -4557,7 +4559,13 @@ function castMethodNow(){
 }
 
 function startCast(){
-  if (castMethodNow() === "standard"){
+  const way = castMethodNow();
+  const sdk = (typeof chrome !== "undefined" && chrome.cast && castSdkReady) ? "SDK 使用可" : "SDK なし";
+  log(`📺 を押しました（方式: ${way} / 専用アプリ: ${els.castAppOnly.checked ? "使う" : "使わない"} / ${sdk}`
+    + ` / 機器: ${castAvailable === null ? "確認中" : castAvailable ? "あり" : "なし"}`
+    + ` / 状態: ${presConn ? "接続中" : "未接続"}）`);
+
+  if (way === "standard"){
     // 繋がっていないのにキャスト用のままなら、押すたびに一覧を出すのではなく戻せるようにする
     if (videoKind === "キャスト用" && !castPrompting && castCancelHint){
       castCancelHint = false;
@@ -4671,8 +4679,11 @@ function stopCastSearch(){ clearInterval(castSearchTimer); castSearchTimer = nul
 function refreshCastButton(){
   els.pCast.disabled = false;
   els.pCast.style.opacity = "";
-  els.pCast.classList.toggle("btn-go", castAvailable === true || !!presConn);
-  els.pCast.title = presConn ? "キャストをやめる" : "テレビにキャスト";
+  // 黄色は「テレビで再生中」の印。機器が見つかっただけでは点けない。
+  els.pCast.classList.toggle("btn-go", !!presConn);
+  els.pCast.classList.toggle("ready", !presConn && castAvailable === true);
+  els.pCast.title = presConn ? "キャストをやめる"
+    : castAvailable === true ? "テレビにキャスト（機器あり）" : "テレビにキャスト";
 }
 
 function setCastAvail(source, v){
