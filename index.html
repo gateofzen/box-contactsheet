@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v110</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v111</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4033,9 +4033,19 @@ function startSdkCast(){
     session => attachCastSdkSession(session),
     err => {
       const code = (err && err.code) || err;
-      log("専用アプリを起動できません: " + code);
-      els.pNote.textContent = (code === "cancel")
-        ? "キャストを取り消しました" : "専用アプリを起動できません（" + code + "）";
+      log("専用アプリを起動できません: " + code
+        + (err && err.description ? " / " + err.description : ""));
+      if (code === "cancel"){
+        els.pNote.textContent = "キャストを取り消しました";
+      }else if (code === "session_error"){
+        els.pNote.textContent = "テレビ側で専用アプリを開始できませんでした";
+        say("テレビ側で専用アプリを開始できませんでした。cast-receiver.html が最新か確認してください。", true);
+      }else if (code === "receiver_unavailable"){
+        els.pNote.textContent = "この機器では専用アプリを使えません";
+        say("この機器では専用アプリを使えません。「専用アプリを使う」を外してお使いください。", true);
+      }else{
+        els.pNote.textContent = "専用アプリを起動できません（" + code + "）";
+      }
     });
   return true;
 }
@@ -4193,7 +4203,10 @@ function bindPresConn(conn){
 
   conn.addEventListener("message", e => {
     let m; try{ m = JSON.parse(e.data); }catch(_){ return; }
-    if (m.type === "ns"){ if (!castNsSeen){ castNsSeen = true; log("テレビ側との経路: " + m.ns); } }
+    if (m.type === "warn"){
+      log(`テレビ側で ${m.where} を省略しました: ${m.message}`);
+    }
+    else if (m.type === "ns"){ if (!castNsSeen){ castNsSeen = true; log("テレビ側との経路: " + m.ns); } }
     else if (m.type === "ready") castLoadCurrent();
     else if (m.type === "loaded"){
       log("テレビで再生を開始しました");
