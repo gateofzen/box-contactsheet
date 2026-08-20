@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v112</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v113</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2535,6 +2535,7 @@ async function openPlayer(file, startAt){
   pushLayer("player", () => closePlayerNow());
 
   playerClosing = false;
+  lastGoodTime = 0;
   els.pVideo.onerror = null;
   els.pVideo.muted = false;
   els.pVideo.volume = userVolume || 1;
@@ -3930,6 +3931,10 @@ els.pVideo.addEventListener("volumechange", () => {
   localStorage.setItem("bcs_volume", String(userVolume));
 });
 let playCounted = false;
+els.pVideo.addEventListener("timeupdate", () => {
+  const t = els.pVideo.currentTime;
+  if (t > 1) lastGoodTime = t;
+});
 els.pVideo.addEventListener("play",  () => { wantPlay = true;  updateMediaSession(); });
 els.pVideo.addEventListener("playing", () => {
   if (!playCounted && currentFile){ playCounted = true; recordPlay(currentFile.id); }
@@ -4073,6 +4078,7 @@ let castPlaying = false;
 let castDuration = 0;
 let castSeeking = false;
 let castLastTime = 0;
+let lastGoodTime = 0;   // 読み込み直しの最中は位置が 0 に戻るため、直前の値を控える
 
 function presSupported(){ return typeof PresentationRequest === "function"; }
 
@@ -4188,7 +4194,11 @@ function bindPresConn(conn){
   els.pCast.classList.add("btn-go");
   els.pNote.textContent = "テレビへ送っています…";
   // 位置は「消す前」に控える。消してから読むと 0 になってしまう。
-  castStartTime = els.pVideo.currentTime || 0;
+  // 読み込み直しの最中は 0 になっている。直前まで観ていた位置を使う。
+  const now = els.pVideo.currentTime || 0;
+  castStartTime = (now > 1) ? now : (lastGoodTime || castLastTime || 0);
+  if (now <= 1 && castStartTime > 1)
+    log(`位置が取れなかったため、直前の ${fmtTC(castStartTime)} を使います`);
   castAdvised = false;
   castNsSeen = false;
   castModeLogged = false;
@@ -4422,7 +4432,7 @@ function startStandardCast(){
       prepareCast(currentFile);
       return;
     }
-    const t = els.pVideo.currentTime;
+    const t = (els.pVideo.currentTime > 1) ? els.pVideo.currentTime : (lastGoodTime || 0);
     const playing = !els.pVideo.paused;
     dashMain.stop();
     videoKind = "キャスト用";
