@@ -372,7 +372,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v99</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v100</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -502,7 +502,7 @@ b{font-weight:600}
             <div class="field"><label for="castAppId">Cast アプリ ID</label>
               <input id="castAppId" class="w-token" type="text" placeholder="空にすると既定に戻ります"
                 autocomplete="off" spellcheck="false" data-lpignore="true"></div>
-            <label class="check"><input id="castAppOnly" type="checkbox"> 専用アプリだけを使う（予備に切り替えない）</label>
+            <label class="check"><input id="castAppOnly" type="checkbox"> 専用アプリだけを使う（登録済みの機器にしか出ません）</label>
             <div class="field"><label for="castMethod">キャストの方式</label>
               <select id="castMethod">
                 <option value="auto" selected>自動（受信ページ方式）</option>
@@ -3653,6 +3653,7 @@ let castAdvised = false;
 let castNsSeen = false;
 let castViaApp = false;
 let castModeLogged = false;
+let castNoDeviceHinted = false;
 let castStartTime = 0;
 let castCancelHint = false;
 let promptedAt = 0;
@@ -4125,6 +4126,12 @@ function startCast(){
     return;
   }
 
+  if (castAvailable !== true && els.castAppOnly.checked && (els.castAppId.value || "").trim()){
+    say("専用アプリを使える機器が見つかりません。Chromecast の登録が反映されるまで待つか、"
+      + "「専用アプリだけを使う」を外すと従来の方式で使えます。", true);
+    log("専用アプリのみの設定で機器が見つかりません");
+    return;
+  }
   if (castAvailable !== true){
     // この状態で要求しても、ブラウザは選択画面を出さずに即座に閉じてしまう
     startCastSearch();
@@ -4188,7 +4195,14 @@ function setCastAvail(source, v){
   els.pCast.style.opacity = any ? "" : ".45";
   log(`キャストできる機器（${source === "probe" ? "探索用" : "本編"}）: ` + (v ? "あり" : "なし"));
   refreshCastButton();
+  if (!any && els.castAppOnly.checked && (els.castAppId.value || "").trim() && !castNoDeviceHinted){
+    // 専用アプリを実行できる端末しか一覧に出ない。見つからない＝まだ登録が効いていない。
+    castNoDeviceHinted = true;
+    log("専用アプリを実行できる機器が見つかりません（Chromecast の登録が未反映の可能性）");
+    els.pNote.textContent = "専用アプリを使える機器が見つかりません";
+  }
   if (any){
+    castNoDeviceHinted = false;
     stopCastSearch();
     if (els.scrim.classList.contains("open") && !castPrompting){
       els.pNote.textContent = "テレビが見つかりました。📺 を押すと選べます。";
