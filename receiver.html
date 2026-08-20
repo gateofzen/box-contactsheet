@@ -8,8 +8,10 @@
 <style>
   html,body{margin:0;height:100%;background:#000;color:#E6EAED;
     font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;overflow:hidden}
-  #v{width:100%;height:100%;object-fit:contain;background:#000;
-     display:block;will-change:auto}
+  /* object-fit の拡大縮小は合成処理を挟むことがある。
+     16:9 の映像を 16:9 の画面に出す限り fill と見た目は同じなので、
+     縦横比が一致する場合は fill にして負担を減らす。 */
+  #v{width:100%;height:100%;object-fit:fill;background:#000;display:block}
   .panel{position:fixed;inset:0;display:flex;flex-direction:column;
     align-items:center;justify-content:center;gap:18px;background:#000;text-align:center;padding:6vh}
   .panel.gone{display:none !important}
@@ -182,9 +184,21 @@ function reportStats(){
       play: Math.round(st.playTime||0),
       buffering: Math.round((st.bufferingTime||0)*10)/10,
       ahead: Math.round(b*10)/10,
-      w: st.width||0, h: st.height||0});
+      w: st.width || v.videoWidth || 0, h: st.height || v.videoHeight || 0,
+      rate: v.playbackRate, fit: v.style.objectFit || "-"});
   }catch(_){}
 }
+
+// 画面と縦横比が違う映像は、そのままだと歪む。その場合だけ contain に戻す。
+function fitVideo(){
+  const vw = v.videoWidth, vh = v.videoHeight;
+  if (!vw || !vh) return;
+  const screenRatio = window.innerWidth / window.innerHeight;
+  const videoRatio = vw / vh;
+  v.style.objectFit = (Math.abs(screenRatio - videoRatio) < 0.02) ? "fill" : "contain";
+}
+v.addEventListener("loadedmetadata", fitVideo);
+v.addEventListener("resize", fitVideo);
 
 function reportTrack(){
   if (!player) return;
@@ -260,6 +274,7 @@ async function loadMedia(m){
       throw new Error("再生するものが指定されていません");
     }
     panel.classList.add("gone");
+    if (panel.parentNode) panel.parentNode.removeChild(panel);   // 重なりを完全に無くす
     showTitle(m.title || "");
     reply({type:"loaded", title:m.title || "", time:v.currentTime});
   }catch(err){
