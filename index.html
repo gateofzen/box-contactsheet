@@ -252,7 +252,6 @@ b{font-weight:600}
 .btn{background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:7px 12px;
   font-family:var(--mono);font-size:11px;transition:.14s}
 .btn:hover{border-color:var(--muted)}
-.btn.ready{border-color:var(--amber)}
 .btn-go{background:var(--amber);border-color:var(--amber);color:#171208;font-weight:700}
 .btn-go:hover{background:#F2BC5C}
 .btn-stop{border-color:var(--red);color:var(--red)}
@@ -383,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v114</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v115</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4030,15 +4029,31 @@ function attachCastSdkSession(session){
   castLoadCurrent();          // 受信側の ready を待たずに送る
 }
 
+let sdkAsking = false;
 function startSdkCast(){
   if (!castSdkReady){
     say("専用アプリの準備がまだです。数秒後にもう一度お試しください。", true);
     loadCastSdk();
     return false;
   }
+  if (sdkAsking){ log("専用アプリの選択画面を出している最中です"); return false; }
+  sdkAsking = true;
+  log("専用アプリの選択画面を出します");
+  els.pNote.textContent = "テレビを選んでください…";
+
+  // 応答が返らない場合に気づけるようにする
+  const watch = setTimeout(() => {
+    if (sdkAsking) log("専用アプリの応答がまだありません（30 秒経過）");
+  }, 30000);
+
   chrome.cast.requestSession(
-    session => attachCastSdkSession(session),
+    session => {
+      sdkAsking = false; clearTimeout(watch);
+      log("専用アプリの選択が完了しました");
+      attachCastSdkSession(session);
+    },
     err => {
+      sdkAsking = false; clearTimeout(watch);
       const code = (err && err.code) || err;
       log("専用アプリを起動できません: " + code
         + (err && err.description ? " / " + err.description : ""));
@@ -4185,6 +4200,7 @@ async function castLoadCurrent(){
 
 function bindPresConn(conn){
   presConn = conn;
+  els.pCast.classList.add("btn-go");
   const used = conn.url || "";
   castViaApp = /^cast:/i.test(used);
   log("テレビ側で起動したもの: " + (used || "(不明)")
@@ -4192,7 +4208,7 @@ function bindPresConn(conn){
   if (els.castAppOnly.checked && !castViaApp)
     say("専用アプリを起動できず、受信ページで再生しています。", true);
   castMode = true;
-  els.pCast.classList.add("btn-go");
+  refreshCastButton();   // 点灯は「テレビで再生中」のときだけ
   els.pNote.textContent = "テレビへ送っています…";
   // 位置は「消す前」に控える。消してから読むと 0 になってしまう。
   // 読み込み直しの最中は 0 になっている。直前まで観ていた位置を使う。
@@ -4261,7 +4277,8 @@ function bindPresConn(conn){
         + (m.fps ? ` / ${m.fps} コマ毎秒` : "")
         + (m.rate && m.rate !== 1 ? ` / 速度 ${m.rate}` : "")
         + (m.fit ? ` / 表示 ${m.fit}` : "")
-        + ` / 先読み ${m.ahead} 秒 / 停止 ${m.stalls} 回 ${m.buffering} 秒`
+        + (m.ahead != null ? ` / 先読み ${m.ahead} 秒` : "")
+        + (m.stalls != null ? ` / 停止 ${m.stalls} 回 ${m.buffering != null ? m.buffering + " 秒" : ""}` : "")
         + (m.aAhead != null && m.aAhead >= 0 ? ` / 音声の先読み ${m.aAhead} 秒` : "")
         + (m.gaps ? ` / 継ぎ目の飛び越し ${m.gaps} 回` : "")
         + ` / コマ落ち ${m.dropped}（${m.decoded} 中）`);
@@ -4443,7 +4460,7 @@ function startStandardCast(){
       els.pVideo.currentTime = t;
       if (playing) els.pVideo.play().catch(()=>{});
       els.pNote.textContent = "準備できました。もう一度 📺 を押すとテレビの一覧が出ます。";
-      els.pCast.classList.add("ready");
+      refreshCastButton();
       playerToast("📺 もう一度押してください");
       log("キャスト用の読み込みが完了しました");
     }, {once:true});
@@ -4609,7 +4626,7 @@ function startCast(){
         if (playing) els.pVideo.play().catch(()=>{});
         els.pNote.textContent = "準備できました。もう一度 📺 を押すとテレビの一覧が出ます。";
         els.pCast.disabled = false;
-        els.pCast.classList.add("btn-go");
+        refreshCastButton();   // 点灯は「テレビで再生中」のときだけ
         els.pCast.style.opacity = "";
         playerToast("📺 もう一度押してください");
         log("キャスト用の読み込みが完了しました");
@@ -4681,7 +4698,6 @@ function refreshCastButton(){
   els.pCast.style.opacity = "";
   // 黄色は「テレビで再生中」の印。機器が見つかっただけでは点けない。
   els.pCast.classList.toggle("btn-go", !!presConn);
-  els.pCast.classList.toggle("ready", !presConn && castAvailable === true);
   els.pCast.title = presConn ? "キャストをやめる"
     : castAvailable === true ? "テレビにキャスト（機器あり）" : "テレビにキャスト";
 }
@@ -4709,7 +4725,7 @@ function setCastAvail(source, v){
     stopCastSearch();
     if (els.scrim.classList.contains("open") && !castPrompting){
       els.pNote.textContent = "テレビが見つかりました。📺 を押すと選べます。";
-      els.pCast.classList.add("btn-go");
+      refreshCastButton();   // 点灯は「テレビで再生中」のときだけ
       playerToast("📺 テレビが見つかりました");
     }
   }
@@ -4765,7 +4781,7 @@ function bindCast(){
   });
   r.addEventListener("connect", () => {
     castMode = true;
-    els.pCast.classList.add("btn-go");
+    refreshCastButton();   // 点灯は「テレビで再生中」のときだけ
     els.pNote.textContent = "テレビで再生中（この画面から操作できます）";
     log("キャスト開始");
   });
