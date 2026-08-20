@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Contact Sheet — テレビ受信アプリ</title>
+<style>
+  /* 映像は Chromecast 内蔵の再生機構が描く。
+     ページ側で何も重ねないことが滑らかさの条件。 */
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  cast-media-player{--background-color:#000;--progress-color:#E8B04B;
+    --splash-image:none;--theme-hue:38}
+  #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:#000;color:#E8B04B;font-family:system-ui,sans-serif;
+    font-size:2vw;letter-spacing:.18em;text-transform:uppercase}
+  #boot.gone{display:none}
+</style>
+<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+</head>
+<body>
+<cast-media-player></cast-media-player>
+<div id="boot">Contact&nbsp;Sheet</div>
+
+<script>
+"use strict";
+
+const boot = document.getElementById("boot");
+const ctx = cast.framework.CastReceiverContext.getInstance();
+const pm  = ctx.getPlayerManager();
+
+let token = "";
+const NS_OURS = "urn:x-cast:com.contactsheet";
+// Chrome の Presentation API から届く経路。環境によって名前が異なるため複数を待つ。
+const NS_CANDIDATES = [
+  NS_OURS,
+  "urn:x-cast:com.google.cast.presentation",
+  "urn:x-cast:com.google.cast.presentationapi",
+];
+
+function withToken(url){
+  if (!token || !url) return url;
+  return url.includes("access_token=") ? url
+    : url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token);
+}
+
+// 送信側（スマートフォン）へ返す
+function reply(obj){
+  const s = JSON.stringify(obj);
+  NS_CANDIDATES.forEach(ns => { try{ ctx.sendCustomMessage(ns, undefined, s); }catch(_){} });
+}
+
+/* ---- 認証つきの取得 ---- */
+const playbackConfig = new cast.framework.PlaybackConfig();
+playbackConfig.autoResumeDuration = 5;
+playbackConfig.manifestRequestHandler = r => { r.url = withToken(r.url); };
+playbackConfig.segmentRequestHandler  = r => { r.url = withToken(r.url); };
+playbackConfig.licenseRequestHandler  = r => { r.url = withToken(r.url); };
+
+/* ---- 送信側からの指示 ---- */
+async function handle(raw){
+  let m;
+  try{ m = (typeof raw === "string") ? JSON.parse(raw) : raw; }catch(_){ return; }
+  if (!m || !m.type) return;
+
+  switch (m.type){
+    case "load": {
+      token = m.token || token;
+      boot.classList.add("gone");
+      const req = new cast.framework.messages.LoadRequestData();
+      req.media = new cast.framework.messages.MediaInformation();
+      if (m.manifest){
+        req.media.contentUrl  = m.manifest;
+        req.media.contentType = "application/dash+xml";
+      }else{
+        req.media.contentUrl  = m.url;
+        req.media.contentType = "video/mp4";
+      }
+      req.media.streamType = cast.framework.messages.StreamType.BUFFERED;
+      req.media.metadata = new cast.framework.messages.GenericMediaMetadata();
+      req.media.metadata.title = m.title || "Contact Sheet";
+      req.currentTime = m.time || 0;
+      req.autoplay = true;
+      try{
+        await pm.load(req);
+        reply({type:"loaded", title:m.title || "", time:pm.getCurrentTimeSec()});
+      }catch(err){
+        reply({type:"error", message:String((err && err.message) || err)});
+      }
+      break;
+    }
+    case "play":   pm.play(); break;
+    case "pause":  pm.pause(); break;
+    case "seek":   if (isFinite(m.time)) pm.seek(m.time); break;
+    case "seekBy": if (isFinite(m.delta)) pm.seek(Math.max(0, pm.getCurrentTimeSec() + m.delta)); break;
+    case "stop":   pm.stop(); boot.classList.remove("gone"); break;
+    case "token":  token = m.token || token; reply({type:"token-ok"}); break;
+    case "quality": applyQuality(m.maxHeight, m.fixed); break;
+    case "ping":   reply({type:"pong", time:pm.getCurrentTimeSec()}); break;
+  }
+}
+
+/* ---- 画質の制限 ---- */
+function applyQuality(maxHeight, fixed){
+  try{
+    const p = pm.getStats();
+    // CAF は内部で自動調整する。上限だけ伝える。
+    const cfg = pm.getPlaybackConfig() || playbackConfig;
+    cfg.maxBitrate = maxHeight ? (maxHeight >= 1080 ? 12000000
+                        : maxHeight >= 720 ? 5000000 : 2500000) : undefined;
+    pm.setPlaybackConfig(cfg);
+    reply({type:"quality-ok", maxHeight: maxHeight || 0});
+  }catch(err){ reply({type:"error", message:"画質の指定に失敗: " + err.message}); }
+}
+
+/* ---- 状況の報告 ---- */
+setInterval(() => {
+  try{
+    const st = pm.getStats() || {};
+    const t = pm.getCurrentTimeSec();
+    const d = pm.getDurationSec();
+    if (!isFinite(t)) return;
+    reply({type:"time", time:t, duration:isFinite(d) ? d : 0});
+    reply({type:"stats",
+      estimate: Math.round((st.estimatedBandwidth || 0) / 1000),
+      stream:   Math.round((st.streamBandwidth || 0) / 1000),
+      dropped:  st.droppedFrames || 0,
+      decoded:  st.decodedFrames || 0,
+      w: st.width || 0, h: st.height || 0,
+      ahead: 0, stalls: 0, buffering: 0, gaps: 0, mode: "専用アプリ"});
+  }catch(_){}
+}, 4000);
+
+pm.addEventListener(cast.framework.events.EventType.ERROR, e => {
+  reply({type:"error", message:"再生エラー " + (e.detailedErrorCode || e.error || "")});
+});
+pm.addEventListener(cast.framework.events.EventType.MEDIA_FINISHED, () => {
+  reply({type:"state", event:"ended"});
+});
+
+/* ---- 起動 ---- */
+const options = new cast.framework.CastReceiverOptions();
+options.disableIdleTimeout = true;          // 操作待ちで勝手に終了しない
+options.playbackConfig = playbackConfig;
+options.customNamespaces = {};
+NS_CANDIDATES.forEach(ns => {
+  options.customNamespaces[ns] = cast.framework.system.MessageType.STRING;
+});
+
+NS_CANDIDATES.forEach(ns => {
+  ctx.addCustomMessageListener(ns, e => {
+    reply({type:"ns", ns});               // どの経路で届いたかを知らせる
+    handle(e.data);
+  });
+});
+
+ctx.addEventListener(cast.framework.system.EventType.READY, () => {
+  reply({type:"ready"});
+});
+
+ctx.start(options);
+</script>
+</body>
+</html>
