@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v104</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v105</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -595,7 +595,8 @@ b{font-weight:600}
           </div>
           <details class="debug"><summary>診断ログ</summary>
             <div class="rack" style="margin:6px 0">
-              <button id="logCopy" class="btn btn-sm btn-go">要約をコピー</button>
+              <button id="logShare" class="btn btn-sm btn-go">要約を共有</button>
+              <button id="logCopy" class="btn btn-sm">要約をコピー</button>
               <button id="logFull" class="btn btn-sm">全文をコピー</button>
               <button id="logPrev" class="btn btn-sm">前回のログを表示</button>
               <button id="logClear" class="btn btn-sm">消去</button>
@@ -735,7 +736,7 @@ const els = {};
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
  "advBox","advBtn","installBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
- "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logCopy","logFull","logPrev","logClear","sheet","sentinel","empty","railTags",
+ "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logShare","logCopy","logFull","logPrev","logClear","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom",
@@ -2931,6 +2932,54 @@ async function copyText(text, btn, label){
 }
 
 els.logFull.addEventListener("click", () => copyText(els.log.textContent || "", els.logFull, "全文をコピー"));
+
+/* ---- 診断内容を共有する ---- */
+// 端末の共有画面を開き、メールでも LINE でも送れるようにする。
+els.logShare.addEventListener("click", async () => {
+  const text = logDigest();
+  els.log.textContent = text;
+  const title = "Contact Sheet の診断（" + new Date().toLocaleString("ja-JP") + "）";
+
+  // 1) 添付として送る（長い内容でも欠けない）
+  try{
+    const file = new File([text], "contactsheet-log.txt", {type:"text/plain"});
+    if (navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title, text:"不具合の報告です。"});
+      els.logShare.textContent = "共有しました";
+      setTimeout(() => { els.logShare.textContent = "要約を共有"; }, 1600);
+      return;
+    }
+  }catch(err){
+    if (err && err.name === "AbortError"){ return; }   // 利用者が取り消した
+    log("添付での共有が使えません: " + err.message);
+  }
+
+  // 2) 本文として送る
+  try{
+    if (navigator.share){
+      await navigator.share({title, text});
+      els.logShare.textContent = "共有しました";
+      setTimeout(() => { els.logShare.textContent = "要約を共有"; }, 1600);
+      return;
+    }
+  }catch(err){
+    if (err && err.name === "AbortError") return;
+    log("共有できません: " + err.message);
+  }
+
+  // 3) 共有機能が無い環境ではメールの下書きを開く
+  const body = text.length > 1800 ? text.slice(0, 1800) + "\n…（以下省略。全文はコピーで取得できます）" : text;
+  const url = "mailto:?subject=" + encodeURIComponent(title) + "&body=" + encodeURIComponent(body);
+  try{
+    location.href = url;
+    els.logShare.textContent = "メールを開きました";
+  }catch(_){
+    await copyText(text, els.logShare, "要約を共有");
+    say("共有機能が使えないため、内容をコピーしました。貼り付けて送ってください。");
+    return;
+  }
+  setTimeout(() => { els.logShare.textContent = "要約を共有"; }, 2000);
+});
 
 els.logCopy.addEventListener("click", async () => {
   const text = logDigest();
