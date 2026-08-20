@@ -146,6 +146,15 @@ function startStatsLoop(){
 function reportStats(){
   try{
     const b = v.buffered.length ? v.buffered.end(v.buffered.length-1) - v.currentTime : 0;
+    // 音声だけの貯まり具合。映像が足りていても音が足りないことがある。
+    let aAhead = -1;
+    try{
+      const bt = player && player.getBufferedInfo ? player.getBufferedInfo() : null;
+      if (bt && bt.audio && bt.audio.length){
+        const seg = bt.audio[bt.audio.length-1];
+        aAhead = Math.round((seg.end - v.currentTime) * 10) / 10;
+      }
+    }catch(_){}
     const q0 = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
     const now0 = performance.now();
     let fps0 = 0;
@@ -168,6 +177,15 @@ function reportStats(){
   try{
     const st = player.getStats();
     const b = v.buffered.length ? v.buffered.end(v.buffered.length-1) - v.currentTime : 0;
+    // 音声だけの貯まり具合。映像が足りていても音が足りないことがある。
+    let aAhead = -1;
+    try{
+      const bt = player && player.getBufferedInfo ? player.getBufferedInfo() : null;
+      if (bt && bt.audio && bt.audio.length){
+        const seg = bt.audio[bt.audio.length-1];
+        aAhead = Math.round((seg.end - v.currentTime) * 10) / 10;
+      }
+    }catch(_){}
     const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
     const now = performance.now();
     let fps = 0;
@@ -184,7 +202,7 @@ function reportStats(){
       gaps: Math.round(st.gapsJumped||0),
       play: Math.round(st.playTime||0),
       buffering: Math.round((st.bufferingTime||0)*10)/10,
-      ahead: Math.round(b*10)/10,
+      ahead: Math.round(b*10)/10, aAhead,
       w: st.width || v.videoWidth || 0, h: st.height || v.videoHeight || 0,
       rate: v.playbackRate, fit: v.style.objectFit || "-"});
   }catch(_){}
