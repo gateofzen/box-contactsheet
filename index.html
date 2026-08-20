@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v102</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v103</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3970,6 +3970,8 @@ function bindPresConn(conn){
       log(`テレビ側の状況: ${m.mode === "専用アプリ" ? "専用アプリ" : (m.mode === "原本" ? "原本再生" : "実測 " + m.estimate + " kbps")}`
         + ` / ${m.w}x${m.h}${m.stream ? " " + m.stream + " kbps" : ""}`
         + (m.fps ? ` / ${m.fps} コマ毎秒` : "")
+        + (m.rate && m.rate !== 1 ? ` / 速度 ${m.rate}` : "")
+        + (m.fit ? ` / 表示 ${m.fit}` : "")
         + ` / 先読み ${m.ahead} 秒 / 停止 ${m.stalls} 回 ${m.buffering} 秒`
         + (m.gaps ? ` / 継ぎ目の飛び越し ${m.gaps} 回` : "")
         + ` / コマ落ち ${m.dropped}（${m.decoded} 中）`);
