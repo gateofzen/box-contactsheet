@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v109</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v110</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3222,6 +3222,7 @@ els.castAppOnly.addEventListener("change", () => {
     return;
   }
   presReq = null; ensurePresRequest();
+  if (els.castAppOnly.checked) loadCastSdk();
   say(els.castAppOnly.checked
     ? "専用アプリだけを使います。起動できない場合はその場で分かります。"
     : "専用アプリが使えないときは受信ページに切り替えます。");
@@ -3961,6 +3962,84 @@ function waitFor(cond, ms){
   });
 }
 
+/* ---- 専用アプリを起動する（Cast SDK 経由） ----
+   画面共有の仕組みで cast:アプリID を指定する方法は、環境によっては
+   専用アプリを扱えない。Cast SDK が使える場合はそちらを優先する。 */
+let castSdkReady = false;
+let castSdkSession = null;
+const CAST_NS = "urn:x-cast:com.contactsheet";
+
+function loadCastSdk(){
+  if (window.__castSdkLoading) return;
+  window.__castSdkLoading = true;
+  window.__onGCastApiAvailable = ok => {
+    if (!ok){ log("Cast SDK を使えません"); return; }
+    initCastSdk();
+  };
+  const sc = document.createElement("script");
+  sc.src = "https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=0";
+  sc.onerror = () => log("Cast SDK を読み込めません");
+  document.head.appendChild(sc);
+}
+
+function initCastSdk(){
+  const id = (els.castAppId.value || "").trim() || DEFAULTS.castAppId;
+  try{
+    const sessionRequest = new chrome.cast.SessionRequest(id);
+    const cfg = new chrome.cast.ApiConfig(
+      sessionRequest,
+      session => { attachCastSdkSession(session); },        // 既存の接続を拾う
+      function(avail){
+        const has = avail === chrome.cast.ReceiverAvailability.AVAILABLE;
+        castSdkReady = true;
+        setCastAvail("sdk", has);
+        log("Cast SDK: 専用アプリを使える機器が " + (has ? "あります" : "ありません"));
+      },
+      chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED
+    );
+    chrome.cast.initialize(cfg,
+      () => log("Cast SDK の準備ができました（専用アプリ " + id + "）"),
+      err => log("Cast SDK を準備できません: " + (err && err.code || err)));
+  }catch(err){ log("Cast SDK の初期化に失敗: " + err.message); }
+}
+
+// Cast SDK の接続を、受信ページ方式と同じ形で扱えるようにする
+function attachCastSdkSession(session){
+  castSdkSession = session;
+  const handlers = [];
+  const conn = {
+    url: "cast:" + ((els.castAppId.value || "").trim() || DEFAULTS.castAppId),
+    send(text){ try{ session.sendMessage(CAST_NS, text); }catch(err){ log("送信に失敗: " + err.message); } },
+    terminate(){ try{ session.stop(() => {}, () => {}); }catch(_){} },
+    addEventListener(type, fn){ handlers.push([type, fn]); },
+  };
+  const fire = (type, ev) => handlers.filter(h => h[0] === type).forEach(h => h[1](ev));
+
+  session.addMessageListener(CAST_NS, (ns, message) => fire("message", {data: message}));
+  session.addUpdateListener(alive => { if (!alive) fire("close", {}); });
+
+  log("専用アプリに接続しました");
+  bindPresConn(conn);
+  castLoadCurrent();          // 受信側の ready を待たずに送る
+}
+
+function startSdkCast(){
+  if (!castSdkReady){
+    say("専用アプリの準備がまだです。数秒後にもう一度お試しください。", true);
+    loadCastSdk();
+    return false;
+  }
+  chrome.cast.requestSession(
+    session => attachCastSdkSession(session),
+    err => {
+      const code = (err && err.code) || err;
+      log("専用アプリを起動できません: " + code);
+      els.pNote.textContent = (code === "cancel")
+        ? "キャストを取り消しました" : "専用アプリを起動できません（" + code + "）";
+    });
+  return true;
+}
+
 /* ---- テレビへのキャスト（自前の受信ページ方式） ---- */
 // Chromecast に受信ページ（receiver.html）を読み込ませ、テレビ側で DASH を再生させる。
 // 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
@@ -4031,7 +4110,7 @@ async function checkCastReceiver(){
   try{
     const r = await fetch(url, {cache:"no-store"});
     const text = r.ok ? await r.text() : "";
-    const ok = r.ok && /<meta\s+name="cs-role"\s+content="cast-receiver"/.test(text);
+    const ok = r.ok && /cs-role/.test(text) && /cast-receiver/.test(text);
     log(ok ? "専用アプリの置き場を確認しました: " + url
            : `専用アプリの置き場が見つかりません（${r.status}）: ${url}`);
   }catch(err){ log("専用アプリの置き場を確認できません: " + err.message); }
@@ -4244,6 +4323,13 @@ function endCast(){
 let presStarting = false;
 
 async function startPresentationCast(){
+  // 専用アプリを使う場合は Cast SDK を通す（画面共有の仕組みでは起動できない環境がある）
+  if (els.castAppOnly.checked && (els.castAppId.value || "").trim()
+      && typeof chrome !== "undefined" && chrome.cast && castSdkReady){
+    startSdkCast();
+    return true;
+  }
+
   // 選択画面は同時に 1 つしか出せない。前の要求が残っていると拒否される。
   if (presStarting){
     log("選択画面を出している最中です");
@@ -4503,7 +4589,8 @@ function startCast(){
     return;
   }
 
-  if (castAvailable !== true && els.castAppOnly.checked && (els.castAppId.value || "").trim()){
+  if (castAvailable !== true && els.castAppOnly.checked && (els.castAppId.value || "").trim()
+      && !(typeof chrome !== "undefined" && chrome.cast && castSdkReady)){
     say("専用アプリを使える機器が見つかりません。Chromecast の登録が反映されるまで待つか、"
       + "「専用アプリだけを使う」を外すと従来の方式で使えます。", true);
     log("専用アプリのみの設定で機器が見つかりません");
@@ -4537,7 +4624,7 @@ let castWatchId = null;
 
 // 機器の探索は「キャストできる再生元を持つ要素」があって初めて始まる。
 // 本編は区間配信なので対象外。隠し要素に単一 URL を持たせて先に探させる。
-const castAvailBy = {probe:null, main:null};
+const castAvailBy = {probe:null, main:null, sdk:null};
 
 let castSearchTimer = null;
 let castSearchFrom = 0;
@@ -4565,14 +4652,17 @@ function refreshCastButton(){
 
 function setCastAvail(source, v){
   castAvailBy[source] = !!v;
-  const any = castAvailBy.probe === true || castAvailBy.main === true;
-  const known = castAvailBy.probe !== null || castAvailBy.main !== null;
+  const any = castAvailBy.probe === true || castAvailBy.main === true || castAvailBy.sdk === true;
+  const known = castAvailBy.probe !== null || castAvailBy.main !== null || castAvailBy.sdk !== null;
   castAvailable = known ? any : null;
   els.pCast.title = any ? "テレビにキャスト" : "キャストできる機器を探しています";
   els.pCast.style.opacity = any ? "" : ".45";
-  log(`キャストできる機器（${source === "probe" ? "探索用" : "本編"}）: ` + (v ? "あり" : "なし"));
+  log(`キャストできる機器（${source === "probe" ? "探索用" : source === "sdk" ? "専用アプリ" : "本編"}）: `
+    + (v ? "あり" : "なし"));
   refreshCastButton();
-  if (!any && els.castAppOnly.checked && (els.castAppId.value || "").trim() && !castNoDeviceHinted){
+  const sdkUsable = typeof chrome !== "undefined" && chrome.cast && castSdkReady;
+  if (!any && !sdkUsable && els.castAppOnly.checked
+      && (els.castAppId.value || "").trim() && !castNoDeviceHinted){
     // 専用アプリを実行できる端末しか一覧に出ない。見つからない＝まだ登録が効いていない。
     castNoDeviceHinted = true;
     log("専用アプリを実行できる機器が見つかりません（Chromecast の登録が未反映の可能性）");
@@ -5020,6 +5110,7 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
     checkReceiver();
     checkCastReceiver();
   }
+  if (els.castAppOnly.checked) loadCastSdk();
   primeCastProbe();       // 受信ページ方式が使えない場合の備え
   log("marks: " + marks.size + " / 索引: " + globalIndex.length);
 
