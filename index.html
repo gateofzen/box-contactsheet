@@ -372,7 +372,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v96</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v97</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -499,6 +499,9 @@ b{font-weight:600}
                 <option value="5">5 分ぶん（通信量を抑える）</option>
               </select></div>
             <label class="check"><input id="dashVideoOpt" type="checkbox" checked> 映像も区間配信で受け取る（シークが速い）</label>
+            <div class="field"><label for="castAppId">Cast アプリ ID</label>
+              <input id="castAppId" class="w-token" type="text" placeholder="例: A1B2C3D4"
+                autocomplete="off" spellcheck="false" data-lpignore="true"></div>
             <div class="field"><label for="castMethod">キャストの方式</label>
               <select id="castMethod">
                 <option value="auto" selected>自動（受信ページ方式）</option>
@@ -705,7 +708,7 @@ function mdKey(base){
 
 const $ = id => document.getElementById(id);
 const els = {};
-["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt","castFirst","castQuality","castMethod",
+["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt","castFirst","castQuality","castMethod","castAppId",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
  "advBox","advBtn","installBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
@@ -2899,6 +2902,15 @@ els.audioPrefetch.addEventListener("change", () => {
   say(sec >= 100000 ? "音声を最後まで先読みします" : `音声を ${Math.round(sec/60)} 分ぶん先読みします`);
 });
 
+els.castAppId.addEventListener("change", () => {
+  localStorage.setItem("bcs_castappid", els.castAppId.value.trim());
+  presReq = null;                       // 指定が変わったので作り直す
+  ensurePresRequest();
+  say(els.castAppId.value.trim()
+    ? "専用の受信アプリを使います（テレビ内蔵の再生機構で再生されます）"
+    : "受信ページ方式に戻しました");
+});
+
 els.castMethod.addEventListener("change", () => {
   localStorage.setItem("bcs_castmethod", els.castMethod.value);
   const m = castMethodNow();
@@ -3626,6 +3638,7 @@ let presConn = null;
 let castTimeTimer = null;
 let castTrack = "";
 let castAdvised = false;
+let castNsSeen = false;
 let castStartTime = 0;
 let castCancelHint = false;
 let promptedAt = 0;
@@ -3657,10 +3670,17 @@ async function checkReceiver(){
   return receiverOk;
 }
 
+function castUrls(){
+  const id = (els.castAppId.value || "").trim();
+  // 専用の受信アプリがあれば最優先。無ければ受信ページ。
+  return id ? ["cast:" + id, RECEIVER_URL] : [RECEIVER_URL];
+}
+
 function ensurePresRequest(){
   if (presReq || !presSupported()) return presReq;
   try{
-    presReq = new PresentationRequest([RECEIVER_URL]);
+    presReq = new PresentationRequest(castUrls());
+    log("キャスト先の指定: " + castUrls().join(" / "));
     // 機器の有無は Chrome 側の探索結果がそのまま届く（こちらで探さない）
     presReq.getAvailability().then(av => {
       setCastAvail("presentation", av.value);
@@ -3705,6 +3725,7 @@ function bindPresConn(conn){
   // 位置は「消す前」に控える。消してから読むと 0 になってしまう。
   castStartTime = els.pVideo.currentTime || 0;
   castAdvised = false;
+  castNsSeen = false;
   els.pVideo.pause();
   dashMain.stop();
   try{ els.pVideo.removeAttribute("src"); els.pVideo.load(); }catch(_){}
@@ -3717,7 +3738,8 @@ function bindPresConn(conn){
 
   conn.addEventListener("message", e => {
     let m; try{ m = JSON.parse(e.data); }catch(_){ return; }
-    if (m.type === "ready") castLoadCurrent();
+    if (m.type === "ns"){ if (!castNsSeen){ castNsSeen = true; log("テレビ側との経路: " + m.ns); } }
+    else if (m.type === "ready") castLoadCurrent();
     else if (m.type === "loaded"){
       log("テレビで再生を開始しました");
       els.pNote.textContent = "テレビで再生中（この画面から操作できます）";
@@ -3750,7 +3772,7 @@ function bindPresConn(conn){
           ? "回線に余裕がありません。画質を「自動」か「低画質で固定」にすると途切れにくくなります。"
           : "回線に余裕がありません。自動で画質を落として調整します。", true);
       }
-      log(`テレビ側の状況: ${m.mode === "原本" ? "原本再生" : "実測 " + m.estimate + " kbps"}`
+      log(`テレビ側の状況: ${m.mode === "専用アプリ" ? "専用アプリ" : (m.mode === "原本" ? "原本再生" : "実測 " + m.estimate + " kbps")}`
         + ` / ${m.w}x${m.h}${m.stream ? " " + m.stream + " kbps" : ""}`
         + (m.fps ? ` / ${m.fps} コマ毎秒` : "")
         + ` / 先読み ${m.ahead} 秒 / 停止 ${m.stalls} 回 ${m.buffering} 秒`
@@ -4548,6 +4570,7 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   els.sort.value     = localStorage.getItem("bcs_sort") || "name";
   els.castQuality.value = localStorage.getItem("bcs_castq") || "0";
   els.castMethod.value = localStorage.getItem("bcs_castmethod") || "auto";
+  els.castAppId.value = localStorage.getItem("bcs_castappid") || "";
   els.audioPrefetch.value = localStorage.getItem("bcs_prefetch") || "auto";
   els.personalTags.checked = localStorage.getItem("bcs_personal") !== "0";   // 既定は自分専用
   document.documentElement.style.setProperty("--col", els.col.value + "px");
