@@ -155,6 +155,15 @@ b{font-weight:600}
 .overlay{position:absolute;top:8px;display:flex;gap:6px;z-index:2}
 .overlay.left{left:8px}
 .overlay.right{right:8px}
+/* 5 段階の評価。カードの右上に並べる。 */
+.overlay.rate{gap:0;background:rgba(11,14,17,.6);border-radius:8px;padding:3px 5px;
+  opacity:0;transition:opacity .15s}
+.card:hover .overlay.rate, .overlay.rate.has{opacity:1}
+.rb{background:transparent;border:none;padding:1px;font-size:15px;line-height:1;
+  color:rgba(255,255,255,.32);cursor:pointer}
+.rb.on{color:var(--amber)}
+@media (max-width:860px){ .overlay.rate{opacity:1} .rb{font-size:17px;padding:2px} }
+
 .ob{background:rgba(11,14,17,.72);border:1px solid rgba(255,255,255,.18);border-radius:7px;
   width:30px;height:30px;display:flex;align-items:center;justify-content:center;
   font-family:var(--mono);font-size:13px;line-height:1;color:#fff;opacity:.55;transition:.14s}
@@ -265,6 +274,7 @@ b{font-weight:600}
 .bulkbar.on{display:flex}
 .bulkbar input[type=text]{background:#171208;color:#F0E6D2;border:none;border-radius:6px;
   padding:6px 9px;font-family:var(--mono);font-size:11px;width:150px}
+.bulkrate{display:flex;align-items:center;gap:3px;font-size:12px}
 .bulkbar .btn{background:#171208;border-color:#171208;color:#F0E6D2}
 
 /* ---------- player ---------- */
@@ -372,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v100</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v101</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -387,7 +397,8 @@ b{font-weight:600}
     <button class="menu-item" data-value="name">名前</button>
     <button class="menu-item" data-value="modified">更新が新しい順</button>
     <button class="menu-item" data-value="size">サイズが大きい順</button>
-    <button class="menu-item" data-value="fav">お気に入り優先</button>
+    <button class="menu-item" data-value="rateDesc">★ が多い順</button>
+    <button class="menu-item" data-value="rateAsc">★ が少ない順</button>
     <button class="menu-item" data-value="plays">再生回数が多い順</button>
     <button class="menu-item" data-value="recent">最近再生した順</button>
   </div>
@@ -466,7 +477,8 @@ b{font-weight:600}
                 <option value="name">名前</option>
                 <option value="modified">更新が新しい順</option>
                 <option value="size">サイズが大きい順</option>
-                <option value="fav">お気に入り優先</option>
+                <option value="rateDesc">★ が多い順</option>
+                <option value="rateAsc">★ が少ない順</option>
           <option value="plays">再生回数が多い順</option>
           <option value="recent">最近再生した順</option>
               </select></div>
@@ -602,8 +614,15 @@ b{font-weight:600}
   <input id="bulkTag" type="text" placeholder="タグ名" list="tagOptions">
   <button id="bulkAdd" class="btn btn-sm">付ける</button>
   <button id="bulkDel" class="btn btn-sm">外す</button>
-  <button id="bulkFav" class="btn btn-sm">★</button>
-  <button id="bulkUnfav" class="btn btn-sm">★解除</button>
+  <span class="bulkrate">★
+    <button class="btn btn-sm" data-rate="1">1</button>
+    <button class="btn btn-sm" data-rate="2">2</button>
+    <button class="btn btn-sm" data-rate="3">3</button>
+    <button class="btn btn-sm" data-rate="4">4</button>
+    <button class="btn btn-sm" data-rate="5">5</button>
+    <button class="btn btn-sm" data-rate="0">解除</button>
+  </span>
+  <button id="bulkTrash" class="btn btn-sm btn-stop">ゴミ箱へ移動</button>
   <button id="bulkAll" class="btn btn-sm">表示中すべて</button>
   <button id="bulkNone" class="btn btn-sm">解除</button>
 </div>
@@ -699,6 +718,7 @@ const MD_SCOPE = "global", MD_TPL = "properties";
 const CACHE_FOLDER_NAME = "_ContactSheetCache";
 const UPLOAD_API = "https://upload.box.com/api/2.0";
 const K_FAV = "csFav", K_TAGS = "csTags", K_PLAYS = "csPlays", K_LAST = "csLast";
+const K_RATE = "csRate";   // 5 段階の評価（0 は未評価）
 
 let boxUserId = "";   // ログイン中の Box 利用者 ID（自分専用の記録に使う）
 
@@ -716,7 +736,7 @@ const els = {};
  "advBox","advBtn","installBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logCopy","logFull","logPrev","logClear","sheet","sentinel","empty","railTags",
- "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkFav","bulkUnfav","bulkAll","bulkNone","tagOptions",
+ "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom",
  "pAudio","pAudioBtn","audioVeil","bgAudio","audioPrefetch","pCast","castProbe"].forEach(k => els[k] = $(k));
@@ -838,6 +858,16 @@ function idbPutMany(store, vals){
     const os = tx.objectStore(store);
     for (const v of vals) os.put(v);
     tx.oncomplete = () => res(); tx.onerror = () => res();
+  });
+}
+function idbDelete(store, key){
+  return new Promise(res => {
+    if (!db) return res();
+    try{
+      const tx = db.transaction(store, "readwrite");
+      tx.objectStore(store).delete(key);
+      tx.oncomplete = () => res(); tx.onerror = () => res();
+    }catch(_){ res(); }
   });
 }
 function idbPut(store, val){
@@ -1024,17 +1054,35 @@ async function checkAuth(){
 /* ============ タグ・お気に入り ============ */
 function getMark(id){
   let m = marks.get(id);
-  if (!m){ m = {id, fav:false, tags:[], plays:0, last:0, dirty:false}; marks.set(id, m); }
+  if (!m){ m = {id, fav:false, rate:0, tags:[], plays:0, last:0, dirty:false}; marks.set(id, m); }
   if (m.plays == null) m.plays = 0;
   if (m.last == null) m.last = 0;
+  if (m.rate == null) m.rate = m.fav ? 5 : 0;   // 以前のお気に入りは ★5 として扱う
   return m;
+}
+
+// 評価を付ける（0 は未評価に戻す）
+function setRate(id, n){
+  const m = getMark(id);
+  m.rate = Math.max(0, Math.min(5, Number(n) || 0));
+  m.fav = m.rate >= 4;                 // 以前のお気に入りとの整合を保つ
+  m.dirty = true;
+  saveMark(id);
+  queueSync(id);
+  refreshCard(id);
+  refreshCounts();
+}
+
+function saveMark(id){
+  const m = getMark(id);
+  idbPut("marks", {id, fav:m.fav, rate:m.rate, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
 }
 
 // 実際に再生が始まったら 1 回と数える
 function recordPlay(id){
   const m = getMark(id);
   m.plays++; m.last = Date.now();
-  idbPut("marks", {id, fav:m.fav, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
+  idbPut("marks", {id, fav:m.fav, rate:m.rate, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
   queueSync(id);
   refreshCard(id);
   log(`再生回数: ${m.plays} 回目`);
@@ -1055,7 +1103,8 @@ async function runMdQueue(){
   while (mdQueue.length){
     const id = mdQueue.shift();
     const m = getMark(id);
-    const payload = {[mdKey(K_FAV)]: m.fav ? "1" : "0", [mdKey(K_TAGS)]: m.tags.join(","),
+    const payload = {[mdKey(K_FAV)]: m.fav ? "1" : "0", [mdKey(K_RATE)]: String(m.rate || 0),
+                     [mdKey(K_TAGS)]: m.tags.join(","),
                      [mdKey(K_PLAYS)]: String(m.plays || 0), [mdKey(K_LAST)]: String(m.last || 0)};
     try{
       await writeMetadata(id, payload);
@@ -1065,7 +1114,7 @@ async function runMdQueue(){
       log("metadata 書き込み失敗", id, err.message);
       say("Box へのタグ保存に失敗しました（ローカルには保存済み）", true);
     }
-    await idbPut("marks", {id, fav:m.fav, tags:m.tags, dirty:m.dirty});
+    await idbPut("marks", {id, fav:m.fav, rate:m.rate, tags:m.tags, dirty:m.dirty});
   }
   mdBusy = false;
 }
@@ -1099,7 +1148,7 @@ async function writeMetadata(id, payload){
 function setFav(id, val){
   const m = getMark(id);
   m.fav = val;
-  idbPut("marks", {id, fav:m.fav, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
+  idbPut("marks", {id, fav:m.fav, rate:m.rate, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
   queueSync(id);
   refreshCard(id); refreshCounts(); buildRail();
 }
@@ -1109,7 +1158,7 @@ function addTag(id, tag){
   const m = getMark(id);
   if (m.tags.includes(t)) return;
   m.tags.push(t); m.tags.sort((a,b)=>a.localeCompare(b,"ja"));
-  idbPut("marks", {id, fav:m.fav, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
+  idbPut("marks", {id, fav:m.fav, rate:m.rate, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
   queueSync(id);
   refreshCard(id); buildRail();
 }
@@ -1118,7 +1167,7 @@ function removeTag(id, tag){
   const i = m.tags.indexOf(tag);
   if (i < 0) return;
   m.tags.splice(i,1);
-  idbPut("marks", {id, fav:m.fav, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
+  idbPut("marks", {id, fav:m.fav, rate:m.rate, tags:m.tags, plays:m.plays, last:m.last, dirty:true});
   queueSync(id);
   refreshCard(id); buildRail();
 }
@@ -1396,7 +1445,24 @@ function parseQuery(s){
     else if (low.startsWith("tag:"))  (neg ? q.notTags : q.tags).push(normTag(low.slice(4)).toLowerCase());
     else if (low.startsWith("ext:"))  q.exts.push(low.slice(4).replace(/^\./,""));
     else if (low.startsWith("folder:")) (neg ? q.notFolders : q.folders).push(low.slice(7));
-    else if (low === "fav" || low === "is:fav" || low === "★"){ if (neg) q.noFav = true; else q.fav = true; }
+    else if (low === "fav" || low === "is:fav"){ if (neg) q.noFav = true; else q.fav = true; }
+    else if (/^(★+|star:\d|★[<>]=?\d|star[<>]=?\d|未評価|norate)$/.test(low) || /^★?\s*[<>]=?\s*\d$/.test(low)){
+      // ★★★ / star:3 / ★>=4 / ★<2 / 未評価
+      if (low === "未評価" || low === "norate"){ q.rateMax = 0; q.rateMin = 0; }
+      else if (/^★+$/.test(low)){ q.rateMin = low.length; }
+      else {
+        const m2 = /^(?:★|star)\s*(:|>=|<=|>|<)?\s*(\d)$/.exec(low);
+        if (m2){
+          const n = Number(m2[2]);
+          const op = m2[1] || ":";
+          if (op === ":") { q.rateMin = n; q.rateMax = n; }
+          else if (op === ">=") q.rateMin = n;
+          else if (op === ">")  q.rateMin = n + 1;
+          else if (op === "<=") q.rateMax = n;
+          else if (op === "<")  q.rateMax = n - 1;
+        }
+      }
+    }
     else if (low === "untagged" || low === "is:untagged") q.untagged = !neg;
     else (neg ? q.notText : q.text).push(low);
   }
@@ -1415,6 +1481,9 @@ function matches(f, q){
   for (const t of q.notTags) if (lowTags.includes(t)) return false;
   if (q.fav && !m.fav) return false;
   if (q.noFav && m.fav) return false;
+  const rate = m.rate || 0;
+  if (q.rateMin != null && rate < q.rateMin) return false;
+  if (q.rateMax != null && rate > q.rateMax) return false;
   if (q.untagged && lowTags.length) return false;
   if (q.exts.length){
     const ext = (f.name.split(".").pop() || "").toLowerCase();
@@ -1469,10 +1538,13 @@ function absorbMetadata(entry){
     return (md[own] !== undefined) ? md[own] : md[base];
   };
   m.fav = pick(K_FAV) === "1";
+  const rv = pick(K_RATE);
+  m.rate = (rv === undefined || rv === null || rv === "") ? (m.fav ? 5 : 0)
+         : Math.max(0, Math.min(5, Number(rv) || 0));
   m.tags = String(pick(K_TAGS) || "").split(",").map(normTag).filter(Boolean);
   m.plays = Number(pick(K_PLAYS) || 0) || 0;
   m.last = Number(pick(K_LAST) || 0) || 0;
-  idbPut("marks", {id:entry.id, fav:m.fav, tags:m.tags, plays:m.plays, last:m.last, dirty:false});
+  idbPut("marks", {id:entry.id, fav:m.fav, rate:m.rate, tags:m.tags, plays:m.plays, last:m.last, dirty:false});
 }
 
 async function scan(scanTarget, deep){
@@ -2090,6 +2162,12 @@ function applyView(){
 
   const mode = els.sort.value;
   view.sort((a,b) => {
+    if (mode === "rateDesc" || mode === "rateAsc"){
+      const ra = (marks.get(a.id) || {}).rate || 0;
+      const rb = (marks.get(b.id) || {}).rate || 0;
+      if (ra !== rb) return mode === "rateDesc" ? rb - ra : ra - rb;
+      return a.name.localeCompare(b.name, "ja");
+    }
     if (mode === "fav"){
       const fa = (marks.get(a.id)||{}).fav ? 0 : 1, fb = (marks.get(b.id)||{}).fav ? 0 : 1;
       if (fa !== fb) return fa - fb;
@@ -2189,12 +2267,25 @@ function makeCard(file){
   });
   left.appendChild(pick);
 
-  const right = document.createElement("div"); right.className = "overlay right";
-  const star = document.createElement("button");
-  star.className = "ob" + (m.fav ? " on" : "");
-  star.textContent = "★"; star.title = "お気に入り";
-  star.addEventListener("click", e => { e.stopPropagation(); setFav(file.id, !getMark(file.id).fav); });
-  right.appendChild(star);
+  const right = document.createElement("div"); right.className = "overlay right rate";
+  const stars = [];
+  for (let i = 1; i <= 5; i++){
+    const b = document.createElement("button");
+    b.className = "rb";
+    b.textContent = "★";
+    b.title = i + " つ星";
+    b.addEventListener("click", e => {
+      e.stopPropagation();
+      // 同じ星をもう一度押したら未評価に戻す
+      const cur = getMark(file.id).rate;
+      setRate(file.id, cur === i ? 0 : i);
+    });
+    right.appendChild(b);
+    stars.push(b);
+  }
+  const star = right;          // 既存の参照（refreshCard 用）
+  star.stars = stars;
+  paintStars(right, m.rate);
 
   strip.appendChild(left); strip.appendChild(right);
   strip.addEventListener("click", () => openPlayer(file));
@@ -2268,15 +2359,24 @@ function paintTagList(id){
   });
   box.appendChild(add);
 }
+// 星の見た目を評価に合わせる
+function paintStars(box, rate){
+  const list = box.stars || [];
+  list.forEach((b, i) => b.classList.toggle("on", i < (rate || 0)));
+  box.title = rate ? `${rate} つ星` : "未評価";
+  box.classList.toggle("has", !!rate);
+}
+
 function refreshCard(id){
   const ref = cardById.get(id);
   if (!ref) return;
   const m = getMark(id);
-  ref.star.classList.toggle("on", m.fav);
+  if (ref.star && ref.star.stars) paintStars(ref.star, m.rate);
   const pl = ref.card.querySelector(".pl");
   if (pl) pl.textContent = m.plays ? `▶ ${m.plays} 回　${fmtDate(new Date(m.last).toISOString())}` : "";
   paintTagList(id);
-  if (currentFile && currentFile.id === id) els.pFav.style.color = m.fav ? "var(--amber)" : "";
+  if (currentFile && currentFile.id === id)
+    els.pFav.style.color = m.rate ? "var(--amber)" : "";
 }
 
 const thumbObserver = new IntersectionObserver(entries => {
@@ -2542,8 +2642,77 @@ els.bulkDel.addEventListener("click", () => {
   bulk(id => removeTag(id, t));
   say(`${picked.size} 件から「${t}」を外しました`);
 });
-els.bulkFav.addEventListener("click", () => bulk(id => setFav(id, true)));
-els.bulkUnfav.addEventListener("click", () => bulk(id => setFav(id, false)));
+document.querySelector(".bulkrate").addEventListener("click", e => {
+  const b = e.target.closest("[data-rate]");
+  if (!b) return;
+  const n = Number(b.dataset.rate);
+  bulk(id => setRate(id, n));
+  say(n ? `${picked.size || ""} 件を ★${n} にしました` : "評価を解除しました");
+});
+
+/* ---- ゴミ箱へ移動（Box 側で復元できる） ---- */
+let trashArmed = false;
+let trashTimer = null;
+
+els.bulkTrash.addEventListener("click", async () => {
+  const ids = [...picked];
+  if (!ids.length) return;
+
+  // 一度目は確認。取り返しのつかない操作なので、二段階にする。
+  if (!trashArmed){
+    trashArmed = true;
+    const names = ids.slice(0, 3).map(id => (findFile(id) || {}).name || id);
+    els.bulkTrash.textContent = `本当に ${ids.length} 件？`;
+    say(`${ids.length} 件を Box のゴミ箱へ移します（${names.join(" / ")}`
+      + (ids.length > 3 ? " ほか" : "") + "）。もう一度押すと実行します。", true);
+    clearTimeout(trashTimer);
+    trashTimer = setTimeout(() => {
+      trashArmed = false;
+      els.bulkTrash.textContent = "ゴミ箱へ移動";
+    }, 8000);
+    return;
+  }
+
+  clearTimeout(trashTimer);
+  trashArmed = false;
+  els.bulkTrash.disabled = true;
+  els.bulkTrash.textContent = "移動中…";
+
+  let ok = 0, ng = 0;
+  for (const id of ids){
+    const f = findFile(id) || {};
+    try{
+      await ensureFresh();
+      const r = await fetch(`${API}/files/${id}`, {
+        method: "DELETE",
+        headers: {Authorization: "Bearer " + token()}
+      });
+      if (r.ok || r.status === 204){
+        ok++;
+        log("ゴミ箱へ移動: " + (f.name || id));
+        // 手元の一覧からも取り除く
+        files = files.filter(x => x.id !== id);
+        globalIndex = globalIndex.filter(x => x.id !== id);
+        viewById.delete(id);
+        await idbDelete("files", id).catch(() => {});
+        const card = cardById.get(id);
+        if (card && card.card && card.card.remove) card.card.remove();
+        cardById.delete(id);
+      }else{
+        ng++;
+        log(`ゴミ箱へ移せません（${r.status}）: ` + (f.name || id));
+      }
+    }catch(err){ ng++; log("ゴミ箱へ移せません: " + err.message); }
+  }
+
+  picked.clear();
+  els.bulkTrash.disabled = false;
+  els.bulkTrash.textContent = "ゴミ箱へ移動";
+  applyView();
+  refreshCounts();
+  say(ng ? `${ok} 件を移動、${ng} 件は失敗しました（詳細は診断ログ）`
+         : `${ok} 件を Box のゴミ箱へ移しました。Box から元に戻せます。`, !!ng);
+});
 els.bulkAll.addEventListener("click", () => {
   view.forEach(f => picked.add(f.id));
   document.querySelectorAll(".card").forEach(c => {
@@ -4627,8 +4796,8 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   // ここから先は保存領域が必要な処理
   db = await openDB();
   for (const rec of await idbAll("marks"))
-    marks.set(rec.id, {id:rec.id, fav:!!rec.fav, tags:rec.tags || [],
-                       plays:rec.plays || 0, last:rec.last || 0, dirty:!!rec.dirty});
+    marks.set(rec.id, {id:rec.id, fav:!!rec.fav, rate:rec.rate != null ? rec.rate : (rec.fav ? 5 : 0),
+                       tags:rec.tags || [], plays:rec.plays || 0, last:rec.last || 0, dirty:!!rec.dirty});
   globalIndex = await idbAll("files");
   ensurePresRequest();    // Chrome が把握している機器をそのまま受け取る
   if (presSupported()) checkReceiver();
