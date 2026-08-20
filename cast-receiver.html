@@ -30,12 +30,9 @@ const pm  = ctx.getPlayerManager();
 
 let token = "";
 const NS_OURS = "urn:x-cast:com.contactsheet";
-// Chrome の Presentation API から届く経路。環境によって名前が異なるため複数を待つ。
-const NS_CANDIDATES = [
-  NS_OURS,
-  "urn:x-cast:com.google.cast.presentation",
-  "urn:x-cast:com.google.cast.presentationapi",
-];
+// urn:x-cast:com.google.cast.* は Cast の予約名。
+// 登録しようとすると起動そのものが失敗する（launch timeout）。
+const NS_CANDIDATES = [NS_OURS];
 
 function withToken(url){
   if (!token || !url) return url;
@@ -153,11 +150,29 @@ NS_CANDIDATES.forEach(ns => {
   });
 });
 
+// Presentation API から来る指示は、システム側のイベントとして届くことがある
+ctx.addEventListener(cast.framework.system.EventType.MESSAGE, e => {
+  if (e && e.data) handle(e.data);
+});
+
 ctx.addEventListener(cast.framework.system.EventType.READY, () => {
   reply({type:"ready"});
 });
 
-ctx.start(options);
+try{
+  ctx.start(options);
+}catch(err){
+  // 何らかの理由で起動できないときは、余計な指定を外して立ち上げ直す
+  try{
+    const basic = new cast.framework.CastReceiverOptions();
+    basic.disableIdleTimeout = true;
+    basic.playbackConfig = playbackConfig;
+    ctx.start(basic);
+    boot.textContent = "Contact Sheet（簡易起動）";
+  }catch(e2){
+    boot.textContent = "起動できません: " + (e2 && e2.message || e2);
+  }
+}
 </script>
 </body>
 </html>
