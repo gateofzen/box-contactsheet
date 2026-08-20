@@ -8,17 +8,19 @@
 <style>
   html,body{margin:0;height:100%;background:#000;color:#E6EAED;
     font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;overflow:hidden}
-  #v{width:100%;height:100%;object-fit:contain;background:#000}
+  #v{width:100%;height:100%;object-fit:contain;background:#000;
+     display:block;will-change:auto}
   .panel{position:fixed;inset:0;display:flex;flex-direction:column;
     align-items:center;justify-content:center;gap:18px;background:#000;text-align:center;padding:6vh}
-  .panel.gone{display:none}
+  .panel.gone{display:none !important}
   .mark{font-family:"Space Grotesk",system-ui,sans-serif;font-weight:700;
     letter-spacing:.18em;text-transform:uppercase;font-size:2.2vw;color:#E8B04B}
   .msg{font-size:1.6vw;color:#8B99A6;line-height:1.8}
-  .title{position:fixed;left:0;right:0;top:0;padding:2.4vh 3vw;font-size:1.8vw;
-    background:linear-gradient(180deg,rgba(0,0,0,.85),transparent);
-    opacity:0;transition:opacity .4s;pointer-events:none}
-  .title.show{opacity:1}
+  /* 映像の上に半透明の帯を重ねると、機器によっては専用の描画経路から外れて
+     コマ落ちの原因になる。出すときだけ配置し、普段は完全に取り除く。 */
+  .title{display:none;position:fixed;left:0;right:0;top:0;padding:2.4vh 3vw;
+    font-size:1.8vw;background:#000;color:#E6EAED}
+  .title.show{display:block}
   .err{color:#FF6B6B;font-size:1.4vw;max-width:80vw;word-break:break-all}
 </style>
 </head>
@@ -48,10 +50,13 @@ let attached = false;
 
 function say(t){ msgEl.textContent = t; }
 function fail(t){ errEl.textContent = t; panel.classList.remove("gone"); }
+let titleTimer = null;
 function showTitle(t){
   titleEl.textContent = t || "";
   titleEl.classList.add("show");
-  setTimeout(() => titleEl.classList.remove("show"), 4000);
+  clearTimeout(titleTimer);
+  // 4 秒で完全に消す（残しておくと映像の描画に影響する）
+  titleTimer = setTimeout(() => titleEl.classList.remove("show"), 4000);
 }
 
 // 送信側（スマートフォン）へ状態を返す
@@ -76,14 +81,14 @@ async function ensurePlayer(){
   player.configure({
     abr: {
       enabled: true,
-      defaultBandwidthEstimate: 20000000,   // 20 Mbps から始める
-      switchInterval: 6,
-      bandwidthUpgradeTarget: 0.9,
-      bandwidthDowngradeTarget: 0.98
+      defaultBandwidthEstimate: 12000000,   // 12 Mbps から始める（過大に見積もらない）
+      switchInterval: 8,                    // 頻繁に切り替えない
+      bandwidthUpgradeTarget: 0.80,         // 上げるときは慎重に
+      bandwidthDowngradeTarget: 0.90        // 下げるときは早めに
     },
     streaming: {
       bufferingGoal: 60,      // 先読み 60 秒
-      rebufferingGoal: 5,     // 5 秒たまったら再開
+      rebufferingGoal: 8,     // 8 秒たまってから再開（すぐ止まらないように）
       bufferBehind: 30,
       jumpLargeGaps: true,
       retryParameters: { maxAttempts: 6, baseDelay: 500, backoffFactor: 1.5, timeout: 30000 }
@@ -186,7 +191,6 @@ function reportTrack(){
   const t = player.getVariantTracks().find(x => x.active);
   if (!t) return;
   reply({type:"track", width:t.width, height:t.height, bandwidth:t.bandwidth});
-  showTitle(`${t.width}x${t.height}  ${Math.round(t.bandwidth/1000)} kbps`);
 }
 
 function applyQuality(maxHeight, fixed){
