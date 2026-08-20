@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v111</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v112</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3216,31 +3216,20 @@ els.audioPrefetch.addEventListener("change", () => {
 
 els.castAppOnly.addEventListener("change", () => {
   localStorage.setItem("bcs_castapponly", els.castAppOnly.checked ? "1" : "0");
-  if (presStarting){
-    say("テレビの選択画面を閉じてから切り替えてください", true);
-    els.castAppOnly.checked = !els.castAppOnly.checked;   // 元に戻す
-    return;
-  }
-  presReq = null; ensurePresRequest();
-  if (els.castAppOnly.checked) loadCastSdk();
+  // 方式を切り替えると、前の要求がブラウザ側に残って次が拒否される。
+  // 読み込み直すのが最も確実。
   say(els.castAppOnly.checked
-    ? "専用アプリだけを使います。起動できない場合はその場で分かります。"
-    : "専用アプリが使えないときは受信ページに切り替えます。");
+    ? "専用アプリを使う設定にしました。読み込み直します…"
+    : "受信ページ方式に戻しました。読み込み直します…");
+  setTimeout(() => location.reload(), 700);
 });
 
 els.castAppId.addEventListener("change", () => {
   const v = els.castAppId.value.trim();
   if (v) localStorage.setItem("bcs_castappid", v);
   else { localStorage.removeItem("bcs_castappid"); els.castAppId.value = DEFAULTS.castAppId; }
-  if (presStarting){
-    say("テレビの選択画面を閉じてから変更してください", true);
-    return;
-  }
-  presReq = null;                       // 指定が変わったので作り直す
-  ensurePresRequest();
-  say(els.castAppId.value.trim()
-    ? "専用の受信アプリを使います（テレビ内蔵の再生機構で再生されます）"
-    : "受信ページ方式に戻しました");
+  say("アプリ ID を変更しました。読み込み直します…");
+  setTimeout(() => location.reload(), 700);
 });
 
 els.castMethod.addEventListener("change", () => {
@@ -3962,6 +3951,18 @@ function waitFor(cond, ms){
   });
 }
 
+// 固まった状態から抜け出すための案内
+function showCastReset(){
+  if (document.getElementById("castReset")) return;
+  const b = document.createElement("button");
+  b.id = "castReset";
+  b.className = "btn btn-go";
+  b.textContent = "キャストをやり直す";
+  b.style.cssText = "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:90";
+  b.addEventListener("click", () => location.reload());
+  document.body.appendChild(b);
+}
+
 /* ---- 専用アプリを起動する（Cast SDK 経由） ----
    画面共有の仕組みで cast:アプリID を指定する方法は、環境によっては
    専用アプリを扱えない。Cast SDK が使える場合はそちらを優先する。 */
@@ -4361,8 +4362,9 @@ async function startPresentationCast(){
     const msg = err.message || "";
     log("キャストできません: " + msg);
     if (/unsettled Promise/i.test(msg)){
-      els.pNote.textContent = "前回の選択画面がまだ開いています。閉じてからもう一度お試しください。";
-      say("テレビの選択画面が開いたままです。閉じてからもう一度押してください。", true);
+      els.pNote.textContent = "キャストの状態が固まっています。読み込み直してください。";
+      say("キャストの要求が残ったままです。「やり直す」を押すか、画面を読み込み直してください。", true);
+      showCastReset();
     }else{
       els.pNote.textContent = /cancel|dismiss|NotAllowed/i.test(msg)
         ? "キャストを取り消しました" : "キャストできません（" + msg + "）";
