@@ -410,7 +410,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v155</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v157</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -638,8 +638,8 @@ details.sub[open]>summary{color:var(--text)}
           </div>
           <details class="debug"><summary>診断ログ</summary>
             <div class="rack" style="margin:6px 0">
-              <button id="logShare" class="btn btn-sm btn-go">要約を共有</button>
-              <button id="logCopy" class="btn btn-sm">要約をコピー</button>
+              <button id="logShare" class="btn btn-sm">共有</button>
+              <button id="logCopy" class="btn btn-sm btn-go">短くコピー</button>
               <button id="logFull" class="btn btn-sm">全文をコピー</button>
               <button id="logPrev" class="btn btn-sm">前回のログを表示</button>
               <button id="logClear" class="btn btn-sm">消去</button>
@@ -1619,9 +1619,13 @@ function currentFolderName(){
 }
 
 function clearSheet(name){
-  files = []; cardById.clear(); picked.clear(); viewById.clear();
+  // view も空にする。残っていると、スクロールによる追加描画が
+  // 古い一覧の続きを描いてしまう。
+  files = []; view = []; viewById.clear();
+  cardById.clear(); picked.clear();
   rendered = 0;
   els.sheet.innerHTML = "";
+  els.sentinel.textContent = "";
   const box = document.createElement("div");
   box.className = "loading";
   box.innerHTML = `<div class="spin"></div><div class="lt">`
@@ -2987,47 +2991,63 @@ els.statsBtn.addEventListener("click", async () => {
 
 // 同じ内容が続く行をまとめ、貼り付けられる長さにする。
 // 数百行のままでは、貼り付け先で添付扱いになって中身が失われることがある。
-function logDigest(){
+function logDigest(limit){
+  const budget = limit || 800;         // この文字数に収める
   const src = (els.log.textContent || "").split("\n").filter(Boolean);
   const c = (typeof connKind === "function") ? connKind() : {type:"?"};
+
+  // 端末は要点だけ（長い申告文をそのまま入れない）
+  const ua = navigator.userAgent;
+  const dev = /Android/i.test(ua) ? "Android" : /iPhone|iPad/i.test(ua) ? "iOS"
+            : /Windows/i.test(ua) ? "Windows" : /Mac/i.test(ua) ? "Mac" : "その他";
   const head = [
-    `【Contact Sheet ${els.ver ? els.ver.textContent : ""} の診断要約】`,
-    `端末: ${navigator.userAgent.slice(0, 90)}`,
-    `回線: ${c.type}${c.saveData ? "（節約）" : ""} / 接続: ${navigator.onLine === false ? "切断" : "あり"}`,
-    `設定: 区間配信=${els.dashVideoOpt.checked ? "入" : "切"} / 先読み=${els.audioPrefetch.value}`
-      + ` / キャスト=${els.castMethod.value} / 画質=${els.castQuality.value}`,
-    `記録 ${src.length} 行`,
-    ""
+    `【CS ${els.ver ? els.ver.textContent : ""}】${dev} / ${c.type}`
+      + ` / 画質=${els.castQuality.value} 手元=${els.localQuality.value}`,
   ];
 
-  // 変わりやすい部分をぼかして種類ごとに集計する。
-  // 同じ内容が何百行も続くため、そのままでは貼り付けられない。
+  // 変わりやすい部分をぼかして種類ごとにまとめる
   const key = b => b
-    .replace(/pos=\S+/g, "pos=…").replace(/回数=\d+/g, "回数=…")
-    .replace(/\d+ 回目/g, "N 回目").replace(/\d+(\.\d+)? 秒/g, "… 秒")
-    .replace(/\b\d{2,}\b/g, "…");
+    .replace(/pos=\S+/g, "pos=…").replace(/回数=\d+/g, "").replace(/\d+ 回目/g, "")
+    .replace(/\b\d{3,}\b/g, "…");
 
   const groups = new Map();
   const order = [];
   for (const line of src){
     const m = /^(\d+:\d+:\d+)\s+([\s\S]*)$/.exec(line);
-    const t = m ? m[1] : "";
-    const k = key(m ? m[2] : line);
-    if (!groups.has(k)){ groups.set(k, {n:0, first:t, last:t, sample:(m ? m[2] : line)}); order.push(k); }
-    const g = groups.get(k);
-    g.n++; g.last = t;
+    const t = m ? m[1].replace(/^\d+:/, "") : "";     // 時:分:秒 → 分:秒
+    const body = m ? m[2] : line;
+    const k = key(body);
+    if (!groups.has(k)){ groups.set(k, {n:0, first:t, sample:body}); order.push(k); }
+    groups.get(k).n++;
   }
 
-  const body = order.map(k => {
-    const g = groups.get(k);
-    return g.n === 1 ? `${g.first}  ${g.sample}`
-                     : `${g.first}〜${g.last}  ${g.sample}  ×${g.n}`;
-  });
+  // 目立たない行は落とす（毎回同じで、原因究明に効かないもの）
+  const dull = new RegExp([
+    "キャストできる機器", "Cast SDK", "prefetch done", "scan done", "内訳", "marks:",
+    "受信ページを確認", "置き場を確認", "フォルダ「", "下準備", "テレビからの通知:",
+    "再生しているのは", "区間 5\\.0 秒", "codecs=", "キャスト先の指定", "探索を開始",
+    "共有サムネイル", "再生回数:", "キャスト候補の確認", "キャストに mp4", "キャストの準備",
+    "起動しました", "アプリとして追加", "テレビ側の受信アプリが起動",
+  ].join("|"));
+  const lines = order
+    .filter(k => !dull.test(groups.get(k).sample))
+    .map(k => {
+      const g = groups.get(k);
+      let body = g.sample.replace(/https?:\/\/\S+/g, u => "…/" + u.split("/").pop());
+      if (body.length > 60) body = body.slice(0, 60) + "…";
+      return `${g.first} ${body}` + (g.n > 1 ? ` ×${g.n}` : "");
+    });
 
-  const tail = ["", "--- 最後の 15 行（そのまま） ---", ...src.slice(-15)];
-  let out = body;
-  if (body.length > 60) out = [...body.slice(0, 30), `…（中略 ${body.length - 60} 種類）…`, ...body.slice(-30)];
-  return head.concat(out, tail).join("\n");
+  // 新しいものを優先して、予算に収める
+  const out = [];
+  let used = head.join("\n").length;
+  for (let i = lines.length - 1; i >= 0; i--){
+    if (used + lines[i].length + 1 > budget) break;
+    out.unshift(lines[i]);
+    used += lines[i].length + 1;
+  }
+  if (out.length < lines.length) out.unshift(`…（前半 ${lines.length - out.length} 行は省略）`);
+  return head.concat(out).join("\n");
 }
 
 async function copyText(text, btn, label){
@@ -3060,7 +3080,7 @@ els.logShare.addEventListener("click", async () => {
     if (navigator.canShare && navigator.canShare({files:[file]})){
       await navigator.share({files:[file], title, text:"不具合の報告です。"});
       els.logShare.textContent = "共有しました";
-      setTimeout(() => { els.logShare.textContent = "要約を共有"; }, 1600);
+      setTimeout(() => { els.logShare.textContent = "共有"; }, 1600);
       return;
     }
   }catch(err){
@@ -3073,7 +3093,7 @@ els.logShare.addEventListener("click", async () => {
     if (navigator.share){
       await navigator.share({title, text});
       els.logShare.textContent = "共有しました";
-      setTimeout(() => { els.logShare.textContent = "要約を共有"; }, 1600);
+      setTimeout(() => { els.logShare.textContent = "共有"; }, 1600);
       return;
     }
   }catch(err){
@@ -3088,17 +3108,17 @@ els.logShare.addEventListener("click", async () => {
     location.href = url;
     els.logShare.textContent = "メールを開きました";
   }catch(_){
-    await copyText(text, els.logShare, "要約を共有");
+    await copyText(text, els.logShare, "共有");
     say("共有機能が使えないため、内容をコピーしました。貼り付けて送ってください。");
     return;
   }
-  setTimeout(() => { els.logShare.textContent = "要約を共有"; }, 2000);
+  setTimeout(() => { els.logShare.textContent = "共有"; }, 2000);
 });
 
 els.logCopy.addEventListener("click", async () => {
   const text = logDigest();
   els.log.textContent = text;      // 何を渡したか、その場で目にできるようにする
-  await copyText(text, els.logCopy, "要約をコピー");
+  await copyText(text, els.logCopy, "短くコピー");
 });
 els.logPrev.addEventListener("click", () => {
   const prev = localStorage.getItem("bcs_log") || "";
