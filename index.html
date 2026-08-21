@@ -404,7 +404,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v139</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v143</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -532,6 +532,12 @@ details.sub[open]>summary{color:var(--text)}
                 <option value="10">10 分ぶん</option>
                 <option value="5">5 分ぶん（通信量を抑える）</option>
               </select></div>
+            <div class="field"><label for="localQuality">手元の画質</label>
+              <select id="localQuality">
+                <option value="auto" selected>自動（回線に応じて原本まで上げる）</option>
+                <option value="dash">配信用 1080p（通信量を抑える）</option>
+                <option value="orig">常に原本（最高画質）</option>
+              </select></div>
             <label class="check"><input id="castAppOnly" type="checkbox" checked> テレビへは専用アプリで送る（推奨）</label>
 
             <details class="sub"><summary>詳しい設定</summary>
@@ -555,7 +561,8 @@ details.sub[open]>summary{color:var(--text)}
                 <option value="orig">元ファイルのまま（最高画質・通信量 2 倍）</option>
               </select></div>
             <p class="note" style="margin-top:6px">
-              <b>自動</b>は回線の速さに合わせて 1080p と 480p を切り替えます。<br>
+              <b>自動</b>は回線の速さに合わせて、480p → 1080p → 元ファイルの順に
+              できるだけ高い画質を選びます。途切れれば下げ、しばらくしてからまた上げ直します。<br>
               <b>元ファイル</b>は Box に置いた動画そのものです。再圧縮を経ないぶん最も綺麗ですが、
               通信量が約 2 倍になり、シークの反応も鈍くなります。</p>
             <div class="field"><label for="conc">同時取得</label>
@@ -767,7 +774,7 @@ const els = {};
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio","audioPrefetch","pCast","castProbe"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","audioPrefetch","localQuality","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -2570,6 +2577,8 @@ async function openPlayer(file, startAt){
 
   playerClosing = false;
   lastGoodTime = 0;
+  resetLocalTune();
+  startLocalTune();
   els.pVideo.onerror = null;
   els.pVideo.muted = false;
   els.pVideo.volume = userVolume || 1;
@@ -2598,6 +2607,13 @@ async function openPlayer(file, startAt){
         log("キャスト前提の再生で始めます");
         usedDash = true;   // 区間配信の処理を飛ばす
       }
+    }
+    if (!usedDash && els.localQuality.value === "orig"){
+      videoKind = "原本";
+      els.pVideo.src = originalUrl(file);
+      localState = "原本";
+      usedDash = true;
+      log("原本で再生します（設定による）");
     }
     if (!usedDash && els.dashVideoOpt.checked){
       try{
@@ -2683,6 +2699,7 @@ function closePlayerNow(){
   els.pAudio.pause(); els.pAudio.removeAttribute("src");
   try{ els.pAudio.load(); }catch(_){}
 
+  clearInterval(localTuneTimer); localTuneTimer = null;
   currentFile = null;
   castStartTime = 0; castLastTime = 0;
   setTimeout(() => { playerClosing = false; }, 800);
@@ -3254,6 +3271,13 @@ els.castQ2.addEventListener("change", () => {
   els.castQuality.dispatchEvent(new Event("change"));
 });
 
+els.localQuality.addEventListener("change", () => {
+  localStorage.setItem("bcs_localq", els.localQuality.value);
+  resetLocalTune();
+  say(els.localQuality.value === "auto" ? "回線に余裕があれば原本まで上げます"
+    : els.localQuality.value === "orig" ? "常に原本で再生します" : "配信用 1080p で再生します");
+});
+
 els.audioPrefetch.addEventListener("change", () => {
   localStorage.setItem("bcs_prefetch", els.audioPrefetch.value);
   const sec = audioPrefetchSeconds();
@@ -3284,6 +3308,8 @@ els.castMethod.addEventListener("change", () => {
 
 els.castQuality.addEventListener("change", () => {
   els.castQ2.value = els.castQuality.value;
+  if (els.castQuality.value === "orig")
+    say("元ファイルは通信量が約 2 倍です。途切れる場合は自動に戻してください。");
   localStorage.setItem("bcs_castq", els.castQuality.value);
   if (presConn){
     // 原本と区間配信の切り替えは読み込み直しが要る
@@ -3493,13 +3519,13 @@ function audioPrefetchSeconds(){
 
 function createDashEngine(name){
   return {
-    name, ms:null, el:null, tracks:[], duration:0, stopped:true, ready:false,
+    name, ms:null, el:null, tracks:[], duration:0, stopped:true, ready:false, kbps:0,
 
     async start(file, mediaEl, kinds, startAt){
       // 閉じる最中は始めない（遅れて走る処理が音を鳴らし続けてしまう）
       if (typeof playerClosing !== "undefined" && playerClosing) return false;
       this.stop();
-      this.el = mediaEl; this.stopped = false;
+      this.el = mediaEl; this.stopped = false; this.kbps = 0;
 
       const mpd = await getMpd(file);
       if (!mpd) return false;
@@ -3580,13 +3606,21 @@ function createDashEngine(name){
     async fetchSeg(url){
       if (navigator.onLine === false) throw new Error("圏外");
       await ensureFresh();
+      const t0 = performance.now();
       let r = await fetch(this.auth(url));
       if (r.status === 401){
         try{ await refreshTokens(); r = await fetch(this.auth(url)); }
         catch(err){ throw new Error("トークン更新に失敗: " + err.message); }
       }
       if (!r.ok) throw new Error("区間 " + r.status);
-      return r.arrayBuffer();
+      const buf = await r.arrayBuffer();
+      // 実測の速さを控える（直近を重めに見る）
+      const sec = (performance.now() - t0) / 1000;
+      if (sec > 0.05 && buf.byteLength > 20000){
+        const kbps = buf.byteLength * 8 / sec / 1000;
+        this.kbps = this.kbps ? this.kbps * 0.7 + kbps * 0.3 : kbps;
+      }
+      return buf;
     },
 
     append(tr, buf){
@@ -4042,6 +4076,9 @@ els.pVideo.addEventListener("volumechange", () => {
   localStorage.setItem("bcs_volume", String(userVolume));
 });
 let playCounted = false;
+els.pVideo.addEventListener("waiting", () => {
+  if (!audioOnly && !presConn) localStalls++;
+});
 els.pVideo.addEventListener("timeupdate", () => {
   const t = els.pVideo.currentTime;
   if (t > 1) lastGoodTime = t;
@@ -4229,7 +4266,7 @@ function startSdkCast(){
 // 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
 // テレビ側でもシークが速く、スマートフォンの負担も小さい。
 const RECEIVER_URL = new URL("receiver.html", location.href).href;
-const CAST_RECEIVER_VERSION = 17;   // cast-receiver.html に期待する版
+const CAST_RECEIVER_VERSION = 18;   // cast-receiver.html に期待する版
 
 let presReq = null;
 let presConn = null;
@@ -4256,6 +4293,7 @@ let castLoadRetry = null;
 let castLoadAcked = false;
 const castSawTypes = new Set();
 let castStartedLogged = false;
+let castDowngraded = false;
 let lastGoodTime = 0;   // 読み込み直しの最中は位置が 0 に戻るため、直前の値を控える
 let lastGoodDuration = 0;
 
@@ -4341,6 +4379,13 @@ function ensurePresRequest(){
   return presReq;
 }
 
+// 元ファイルの重さを見積もる。大きさと長さから求める。
+function origKbps(){
+  const f = currentFile;
+  if (!f || !f.size || !castDuration) return 0;
+  return Math.round(f.size * 8 / castDuration / 1000);
+}
+
 // テレビからの通知は、環境によって形が変わる。
 // そのままの値、文字列、二重に包まれた文字列、いずれも読めるようにする。
 function readCastMessage(data){
@@ -4356,9 +4401,9 @@ function castSend(obj){
   try{ presConn.send(JSON.stringify(obj)); }catch(err){ log("テレビへの送信に失敗: " + err.message); }
 }
 
-async function castLoadCurrent(){
+async function castLoadCurrent(forceQuality){
   if (!presConn || !currentFile) return;
-  const q = els.castQuality.value;
+  const q = forceQuality || els.castQuality.value;
   const payload = {type:"load", token: token(), title: currentFile.name,
                    time: castStartTime || 0,
                    maxHeight: q === "orig" ? 0 : (Math.abs(Number(q)) || 0),
@@ -4419,6 +4464,8 @@ function bindPresConn(conn){
   castLoadAcked = false;
   castSawTypes.clear();
   castStartedLogged = false;
+  castDowngraded = false;
+  resetAutoTune();
   els.pVideo.pause();
   dashMain.stop();
   try{ els.pVideo.removeAttribute("src"); els.pVideo.load(); }catch(_){}
@@ -4482,6 +4529,21 @@ function bindPresConn(conn){
         log(`  ${t.w}x${t.h}  ${t.bw} kbps${t.active ? "  ← 使用中" : ""}`));
     }
     else if (m.type === "stats"){
+      // 【自動】余裕があれば元ファイルへ、足りなければ配信用へ。
+      if (els.castQuality.value === "0") autoTune(m);
+
+      // 元ファイルは重い。途切れるようなら配信用へ移す。
+      if (m.stalls >= 3 && els.castQuality.value === "orig" && !castDowngraded){
+        castDowngraded = true;
+        log(`元ファイルでは途切れます（${m.stalls} 回 / ${m.buffering} 秒）。配信用に切り替えます。`);
+        say("回線に対して重いため、配信用の画質に切り替えました。", true);
+        els.castQuality.value = "0";
+        els.castQ2.value = "0";
+        localStorage.setItem("bcs_castq", "0");
+        castStartTime = castLastTime || castStartTime;
+        castTrack = "";
+        castLoadCurrent();
+      }
       // 画質の通知が来ない場合は、状況の報告から補う
       if (m.w && m.h && !castTrack){
         const label = m.h >= 1080 ? "フル HD" : m.h >= 720 ? "HD" : m.h >= 480 ? "標準画質" : "低画質";
@@ -4515,7 +4577,7 @@ function bindPresConn(conn){
         + (m.rate && m.rate !== 1 ? ` / 速度 ${m.rate}` : "")
         + (m.fit ? ` / 表示 ${m.fit}` : "")
         + (m.ahead != null ? ` / 先読み ${m.ahead} 秒` : "")
-        + (m.stalls != null ? ` / 停止 ${m.stalls} 回 ${m.buffering != null ? m.buffering + " 秒" : ""}` : "")
+        + (m.stalls ? ` / 途切れ ${m.stalls} 回 ${m.buffering != null ? m.buffering + " 秒" : ""}` : "")
         + (m.aAhead != null && m.aAhead >= 0 ? ` / 音声の先読み ${m.aAhead} 秒` : "")
         + (m.gaps ? ` / 継ぎ目の飛び越し ${m.gaps} 回` : "")
         + ` / コマ落ち ${m.dropped}（${m.decoded} 中）`);
@@ -4605,6 +4667,144 @@ function stopCastPlayback(){
     try{ if (presConn && presConn.terminate) presConn.terminate(); }catch(_){}
     castSdkSession = null;
   }, 250);
+}
+
+/* ---- 手元の再生の画質調整 ----
+   Box の配信用は 1080p / 8128 kbps。その上に原本がある。
+   区間の取得速度を測り、余裕があるときだけ原本へ引き上げる。 */
+let localState = "配信用";     // 配信用 / 原本
+let localGoodFrom = 0;
+let localStalls = 0;
+let localTuneTimer = null;
+let localRetryAt = 0;      // この時刻を過ぎたら、また上げてよい
+let localFails = 0;        // 失敗した回数（多いほど間を置く）
+
+function resetLocalTune(){
+  localState = "配信用"; localGoodFrom = 0; localStalls = 0;
+  localRetryAt = 0; localFails = 0;
+}
+
+function localOrigKbps(){
+  const f = currentFile;
+  const dur = isFinite(els.pVideo.duration) ? els.pVideo.duration
+            : (dashMain.duration || lastGoodDuration || 0);
+  if (!f || !f.size || !dur) return 0;
+  return Math.round(f.size * 8 / dur / 1000);
+}
+
+function startLocalTune(){
+  clearInterval(localTuneTimer);
+  localTuneTimer = setInterval(() => {
+    if (!currentFile || !els.scrim.classList.contains("open") || presConn || audioOnly) return;
+    const mode = els.localQuality.value;
+    if (mode !== "auto") return;
+
+    const need = localOrigKbps();
+    if (!need) return;
+
+    if (localState === "配信用"){
+      if (videoKind !== "DASH") return;
+      if (Date.now() < localRetryAt) return;      // 直後の上げ直しは避ける
+      const have = Math.round(dashMain.kbps || 0);
+      // 途切れておらず、原本に十分な余裕があるか
+      if (!have || have < need * 1.5 || localStalls){
+        localGoodFrom = 0;
+        localStalls = 0;                          // 古い途切れは持ち越さない
+        return;
+      }
+      if (!localGoodFrom) localGoodFrom = Date.now();
+      if (Date.now() - localGoodFrom < 8000) return;   // 8 秒続いたら上げる
+      localGoodFrom = 0;
+      switchLocalTo("原本", have, need);
+    }else{
+      // 原本で途切れるようなら配信用へ戻す。
+      // ただし回線は移動中に変わるので、時間を置いてまた試す。
+      if (localStalls >= 2){
+        localFails++;
+        const wait = Math.min(5, localFails) * 60000;   // 1・2・3・4・5 分と延ばす
+        localRetryAt = Date.now() + wait;
+        switchLocalTo("配信用", 0, need);
+        log(`${Math.round(wait/60000)} 分後にもう一度、原本を試します`);
+      }
+    }
+  }, 2000);
+}
+
+async function switchLocalTo(to, have, need){
+  const t = els.pVideo.currentTime || lastGoodTime || 0;
+  const playing = !els.pVideo.paused;
+  localStalls = 0;
+
+  if (to === "原本"){
+    log(`回線に余裕があります（実測 ${have} kbps / 原本 ${need} kbps）。原本へ上げます。`);
+    localState = "原本";
+    dashMain.stop();
+    videoKind = "原本";
+    els.pVideo.src = originalUrl(currentFile);
+    els.pVideo.addEventListener("loadedmetadata", () => {
+      els.pVideo.currentTime = t;
+      if (playing) els.pVideo.play().catch(() => {});
+    }, {once:true});
+    els.pNote.textContent = "原本で再生中（最高画質）";
+    setTimeout(() => { els.pNote.textContent = ""; }, 4000);
+  }else{
+    log("原本では途切れます。配信用へ戻します。");
+    localState = "配信用";
+    try{
+      if (await dashMain.start(currentFile, els.pVideo, ["video","audio"], t)){
+        videoKind = "DASH";
+        if (playing) els.pVideo.play().catch(() => {});
+      }
+    }catch(err){ log("配信用に戻せません: " + err.message); }
+  }
+}
+
+/* ---- 自動での画質調整 ----
+   Box が用意する配信用（1080p / 480p）はテレビ側が切り替える。
+   その上に「元ファイル」があるので、余裕があるときだけこちらで引き上げる。 */
+let autoState = "配信用";     // 配信用 / 元ファイル
+let autoGoodFrom = 0;
+let autoRetryAt = 0;
+let autoFails = 0;
+let autoStallBase = 0;        // 切り替え時点の途切れ回数（差分で見る）
+
+function resetAutoTune(){
+  autoState = "配信用"; autoGoodFrom = 0; autoRetryAt = 0; autoFails = 0; autoStallBase = 0;
+}
+
+function autoTune(m){
+  const need = origKbps();
+  if (!need) return;
+
+  if (autoState === "配信用"){
+    if (Date.now() < autoRetryAt) return;
+    // 途切れておらず、元ファイルに十分な余裕があるか
+    const roomy = (m.stalls || 0) <= autoStallBase && m.estimate >= need * 1.4 && (m.h || 0) >= 1080;
+    if (!roomy){ autoGoodFrom = 0; return; }
+    if (!autoGoodFrom) autoGoodFrom = Date.now();
+    if (Date.now() - autoGoodFrom < 10000) return;   // 10 秒続いたら上げる
+
+    autoState = "元ファイル";
+    autoGoodFrom = 0;
+    autoStallBase = m.stalls || 0;
+    castStartTime = castLastTime || castStartTime;
+    castTrack = "";
+    log(`回線に余裕があります（実測 ${m.estimate} kbps / 元ファイル ${need} kbps）。最高画質へ上げます。`);
+    castLoadCurrent("orig");
+  }else{
+    // 元ファイルにしてから途切れが増えたら、配信用へ戻す
+    if ((m.stalls || 0) - autoStallBase >= 2){
+      autoState = "配信用";
+      autoFails++;
+      const wait = Math.min(5, autoFails) * 60000;
+      autoRetryAt = Date.now() + wait;
+      autoStallBase = m.stalls || 0;
+      castStartTime = castLastTime || castStartTime;
+      castTrack = "";
+      log(`最高画質では途切れます。配信用へ戻します（${Math.round(wait/60000)} 分後にまた試します）`);
+      castLoadCurrent();
+    }
+  }
 }
 
 function endCast(){
@@ -5417,6 +5617,7 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   els.castAppId.value = (localStorage.getItem("bcs_castappid") || "").trim() || DEFAULTS.castAppId;
   els.castAppOnly.checked = localStorage.getItem("bcs_castapponly") !== "0";
   els.audioPrefetch.value = localStorage.getItem("bcs_prefetch") || "auto";
+  els.localQuality.value = localStorage.getItem("bcs_localq") || "auto";
   els.personalTags.checked = localStorage.getItem("bcs_personal") !== "0";   // 既定は自分専用
   document.documentElement.style.setProperty("--col", els.col.value + "px");
   els.redirUri.textContent = redirectUri();
