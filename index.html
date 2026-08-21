@@ -404,7 +404,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v153</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v154</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3626,7 +3626,8 @@ function createDashEngine(name){
       this.tracks.forEach(t => { t.gen++; });
       (this.listeners || []).forEach(([el, ev, fn]) => el.removeEventListener(ev, fn));
       this.listeners = [];
-      try{ if (this.ms && this.ms.readyState === "open") this.ms.endOfStream(); }catch(_){}
+      // ここで endOfStream すると「最後まで再生した」ことになってしまう。
+      // 途中で止める場合もあるので伝えない。
       this.ms = null; this.tracks = []; this.duration = 0;
     },
 
@@ -3755,7 +3756,7 @@ function createDashEngine(name){
         if (!tr.sb || tr.sb.updating || !tr.sb.buffered.length) return;
         const t = this.el.currentTime;
         const start = tr.sb.buffered.start(0);
-        const until = Math.max(start, t - 20);
+        const until = Math.max(start, t - 10);   // 過ぎたぶんは 10 秒だけ残す
         if (until > start){
           await new Promise(res => {
             const done = () => { tr.sb.removeEventListener("updateend", done); res(); };
@@ -3773,7 +3774,9 @@ function createDashEngine(name){
         if (!/quota|full|QuotaExceeded/i.test(msg)) throw err;
         await this.evict(tr);
         const ahead = this.aheadOf(tr);
-        tr.capped = Math.max(180, Math.floor(ahead * 0.8));
+        // 抑えすぎると、通信が乱れたときに持ちこたえられない。
+        // 古い部分を捨てた直後なので、いま持っている量より少し多めを目標にする。
+        tr.capped = Math.max(600, Math.floor(ahead * 0.9) + 120);
         log(`${this.name}: 保存領域がいっぱいのため、先読みを ${Math.round(tr.capped/60)} 分に抑えます`);
         try{ await this.append(tr, buf); return true; }
         catch(_){ return false; }
@@ -3891,6 +3894,7 @@ async function enterAudioOnly(){
   // 先に見た目を切り替える。待ってから切り替えると反応が鈍く感じられる。
   audioOnly = true;
   audioLastT = -1; audioStuckAt = 0;
+  audioRetry = 0; clearTimeout(audioRetryTimer);
   const sec = audioPrefetchSeconds();
   const c = connKind();
   log(`音声のみ再生: 回線 ${c.type}${c.saveData ? "（節約）" : ""} / ${Math.round(sec/60)} 分ぶん先読みします`);
@@ -4014,6 +4018,8 @@ function watchAudioOnly(){
 // 立て直しても駄目なときは、音声の流れごと作り直す。
 // 長時間の再生では、区間の取得が続けて失敗して諦めていることがある。
 let audioRestartAt = 0;
+let audioRetry = 0;
+let audioRetryTimer = null;
 
 // 先読みがどこまで進んだかを覚えておく（電波が切れても安心して画面を消せるように）
 let audioBufTimer = null;
@@ -4059,10 +4065,23 @@ async function restartAudioOnly(why){
     els.pAudio.muted = false;
     els.pAudio.volume = userVolume;
     await els.pAudio.play();
+    audioRetry = 0;
     log("音声の流れを作り直しました");
   }catch(err){
     log("作り直しに失敗: " + err.message);
-    say("音声が止まりました。🎧 を押し直してください。", true);
+    // 一時的な乱れのことが多い。間を置いて何度か試す。
+    audioRetry++;
+    if (audioRetry <= 5){
+      const wait = Math.min(30000, 3000 * Math.pow(2, audioRetry - 1));
+      log(`${Math.round(wait/1000)} 秒後にもう一度試します（${audioRetry} 回目）`);
+      clearTimeout(audioRetryTimer);
+      audioRetryTimer = setTimeout(() => {
+        audioRestartAt = 0;                 // すぐ試せるようにする
+        restartAudioOnly("作り直しの再挑戦");
+      }, wait);
+    }else{
+      say("音声が止まりました。🎧 を押し直してください。", true);
+    }
   }
 }
 
@@ -5780,6 +5799,18 @@ window.addEventListener("online", () => {
   try{ dashMain.pumpAll(); }catch(_){}
 });
 window.addEventListener("offline", () => log("通信が切れました"));
+
+// 手元にあるぶんを再生し終えただけで「終わり」にしない
+els.pAudio.addEventListener("ended", () => {
+  if (!audioOnly) return;
+  const dur = dashAudio.duration || 0;
+  const pos = els.pAudio.currentTime || 0;
+  if (dur && pos < dur - 3){
+    log(`途中で終わってしまいました（${fmtTC(pos)} / ${fmtTC(dur)}）。続きから立て直します。`);
+    audioRestartAt = 0;
+    restartAudioOnly("途中で終わってしまった");
+  }
+});
 
 watchAudioOnly();   // 音声のみ再生の見張りを開始する
 
