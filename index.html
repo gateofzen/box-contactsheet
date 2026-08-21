@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v127</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v128</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4126,7 +4126,7 @@ function startSdkCast(){
 // 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
 // テレビ側でもシークが速く、スマートフォンの負担も小さい。
 const RECEIVER_URL = new URL("receiver.html", location.href).href;
-const CAST_RECEIVER_VERSION = 13;   // cast-receiver.html に期待する版
+const CAST_RECEIVER_VERSION = 14;   // cast-receiver.html に期待する版
 
 let presReq = null;
 let presConn = null;
@@ -4150,6 +4150,7 @@ let castSeekedAt = 0;
 let castLoadRetry = null;
 let castLoadAcked = false;
 const castSawTypes = new Set();
+let castStartedLogged = false;
 let lastGoodTime = 0;   // 読み込み直しの最中は位置が 0 に戻るため、直前の値を控える
 let lastGoodDuration = 0;
 
@@ -4312,6 +4313,7 @@ function bindPresConn(conn){
   castGotTime = false;
   castLoadAcked = false;
   castSawTypes.clear();
+  castStartedLogged = false;
   els.pVideo.pause();
   dashMain.stop();
   try{ els.pVideo.removeAttribute("src"); els.pVideo.load(); }catch(_){}
@@ -4333,7 +4335,11 @@ function bindPresConn(conn){
     const m = readCastMessage(e.data);
     if (!m) return;
     if (!castSawTypes.has(m.type)){ castSawTypes.add(m.type); log("テレビからの通知: " + m.type); }
-    if (m.type === "load-received" || m.type === "loaded"){
+    if (m.type === "quality-ok"){
+      log("テレビ側の画質の上限: " + (m.maxHeight ? m.maxHeight + "p" : "制限なし")
+        + (m.fixed ? "（固定）" : ""));
+    }
+    else if (m.type === "load-received" || m.type === "loaded"){
       if (!castLoadAcked){
         castLoadAcked = true;
         clearInterval(castLoadRetry); castLoadRetry = null;
