@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v126</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v127</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4126,7 +4126,7 @@ function startSdkCast(){
 // 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
 // テレビ側でもシークが速く、スマートフォンの負担も小さい。
 const RECEIVER_URL = new URL("receiver.html", location.href).href;
-const CAST_RECEIVER_VERSION = 12;   // cast-receiver.html に期待する版
+const CAST_RECEIVER_VERSION = 13;   // cast-receiver.html に期待する版
 
 let presReq = null;
 let presConn = null;
@@ -4235,6 +4235,16 @@ function ensurePresRequest(){
   return presReq;
 }
 
+// テレビからの通知は、環境によって形が変わる。
+// そのままの値、文字列、二重に包まれた文字列、いずれも読めるようにする。
+function readCastMessage(data){
+  try{
+    let m = data;
+    for (let i = 0; i < 3 && typeof m === "string"; i++) m = JSON.parse(m);
+    return (m && typeof m === "object") ? m : null;
+  }catch(_){ return null; }
+}
+
 function castSend(obj){
   if (!presConn) return;
   try{ presConn.send(JSON.stringify(obj)); }catch(err){ log("テレビへの送信に失敗: " + err.message); }
@@ -4320,7 +4330,8 @@ function bindPresConn(conn){
   log(`手元の受信を停止しました（テレビ側で ${fmtTC(castStartTime)} から再生します）`);
 
   conn.addEventListener("message", e => {
-    let m; try{ m = JSON.parse(e.data); }catch(_){ return; }
+    const m = readCastMessage(e.data);
+    if (!m) return;
     if (!castSawTypes.has(m.type)){ castSawTypes.add(m.type); log("テレビからの通知: " + m.type); }
     if (m.type === "load-received" || m.type === "loaded"){
       if (!castLoadAcked){
@@ -4418,7 +4429,8 @@ function bindPresConn(conn){
   let ticks = 0;
   let startedSeen = false;
   conn.addEventListener("message", e => {
-    try{ if (JSON.parse(e.data).type === "started") startedSeen = true; }catch(_){}
+    const m = readCastMessage(e.data);
+    if (m && m.type === "started") startedSeen = true;
   });
   castTickTimer = setInterval(() => {
     if (!presConn) return clearInterval(castTickTimer);
