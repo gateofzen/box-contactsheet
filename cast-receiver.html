@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="9">
+<meta name="cs-version" content="10">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -26,7 +26,26 @@ var pm  = ctx.getPlayerManager();
 var NS  = "urn:x-cast:com.contactsheet";
 var token = "";
 
-function reply(o){ try{ ctx.sendCustomMessage(NS, undefined, JSON.stringify(o)); }catch(e){} }
+var lastSender = null;   // 送り先。届いた指示から拾う。
+var sendFail = 0;
+
+function reply(o){
+  var text = JSON.stringify(o);
+  var ok = false;
+  // 相手を指定して送る
+  if (lastSender){
+    try{ ctx.sendCustomMessage(NS, lastSender, text); ok = true; }catch(e){}
+  }
+  // 指定なしでも送ってみる（環境によってはこちらが通る）
+  if (!ok){
+    try{ ctx.sendCustomMessage(NS, undefined, text); ok = true; }catch(e){}
+  }
+  if (!ok && sendFail < 3){
+    sendFail++;
+    msg.style.display = "";
+    msg.textContent = "Contact Sheet（手元への通知を送れません）";
+  }
+}
 
 function withToken(url){
   if (!token || !url) return url;
@@ -43,6 +62,7 @@ try{
 }catch(e){ msg.textContent = "Contact Sheet（認証の設定を省略）"; }
 
 ctx.addCustomMessageListener(NS, function(e){
+  if (e && e.senderId) lastSender = e.senderId;
   var m;
   try{ m = typeof e.data === "string" ? JSON.parse(e.data) : e.data; }catch(_){ return; }
   if (!m || !m.type) return;
@@ -93,6 +113,15 @@ try{
   }
 }catch(e){ /* 使えなければ、受け取りの登録だけで進める */ }
 
+try{
+  if (cast.framework.system && cast.framework.system.EventType
+      && cast.framework.system.EventType.SENDER_CONNECTED){
+    ctx.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, function(e){
+      if (e && e.senderId) lastSender = e.senderId;
+    });
+  }
+}catch(e){}
+
 var startErr = null;
 try{
   ctx.start();               // 設定は渡さない
@@ -104,8 +133,8 @@ try{
 }
 
 if (!startErr){
-  setTimeout(function(){ reply({type:"started", version:9}); }, 800);
-  setTimeout(function(){ reply({type:"started", version:9}); }, 3000);
+  setTimeout(function(){ reply({type:"started", version:10}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:10}); }, 3000);
 }
 
 </script>
