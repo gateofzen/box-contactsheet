@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="13">
+<meta name="cs-version" content="14">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -71,12 +71,32 @@ try{
 }catch(e){ msg.textContent = "Contact Sheet（認証の設定を省略）"; }
 
 var announced = false;
+// 画質の上限を伝える。低い値のまま張り付くのを防ぐため、下限も添える。
+function applyQuality(maxHeight, fixed){
+  try{
+    var cfg = (pm.getPlaybackConfig && pm.getPlaybackConfig()) || new cast.framework.PlaybackConfig();
+    if (!maxHeight){
+      cfg.maxBitrate = undefined;
+    }else if (maxHeight >= 1080){
+      cfg.maxBitrate = 12000000;
+      if (fixed) cfg.initialBandwidth = 12000000;   // 高い方から始める
+    }else if (maxHeight >= 720){
+      cfg.maxBitrate = 5000000;
+      if (fixed) cfg.initialBandwidth = 5000000;
+    }else{
+      cfg.maxBitrate = 2500000;
+    }
+    pm.setPlaybackConfig(cfg);
+    reply({type:"quality-ok", maxHeight: maxHeight || 0, fixed: !!fixed});
+  }catch(err){ reply({type:"warn", where:"画質の指定", message:String(err && err.message || err)}); }
+}
+
 ctx.addCustomMessageListener(NS, function(e){
   if (e && e.senderId){
     lastSender = e.senderId;
     if (!announced){          // 送り先が分かった時点で名乗り直す
       announced = true;
-      reply({type:"started", version:13});
+      reply({type:"started", version:14});
     }
   }
   var m;
@@ -92,10 +112,12 @@ ctx.addCustomMessageListener(NS, function(e){
     req.media.contentType = m.manifest ? "application/dash+xml" : "video/mp4";
     req.currentTime = m.time || 0;
     req.autoplay = true;
+    if (m.maxHeight || m.fixed) applyQuality(m.maxHeight, m.fixed);
     reply({type:"load-received", time:req.currentTime});   // 受け取った合図
     pm.load(req).then(function(){ reply({type:"loaded", time:req.currentTime}); },
                       function(err){ reply({type:"error", message:String(err)}); });
   }
+  else if (m.type === "quality") applyQuality(m.maxHeight, m.fixed);
   else if (m.type === "play")   pm.play();
   else if (m.type === "pause")  pm.pause();
   else if (m.type === "seek")   pm.seek(m.time);
@@ -150,8 +172,8 @@ try{
 }
 
 if (!startErr){
-  setTimeout(function(){ reply({type:"started", version:13}); }, 800);
-  setTimeout(function(){ reply({type:"started", version:13}); }, 3000);
+  setTimeout(function(){ reply({type:"started", version:14}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:14}); }, 3000);
 }
 
 </script>
