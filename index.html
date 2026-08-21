@@ -415,7 +415,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v162</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v163</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3863,9 +3863,11 @@ function createDashEngine(name){
             log(`${this.name}: ${tr.kind} 区間の取得に失敗 ` + err.message
                 + (offline ? `（通信断とみなして待機。${tr.retry} 回目）` : ""));
           // 通信断なら諦めずに待ち続ける（復帰したら続きから取りに行く）
-          if (offline && this.name === "音声のみ" && tr.retry === 12
-              && typeof restartAudioOnly === "function")
-            restartAudioOnly("取得できない状態が続く");
+          // 通信断のときは作り直さない。
+          // 作り直すと、せっかく手元にある音声まで捨ててしまい、
+          // しかも新しい経路も取れないので、かえって早く止まる。
+          if (offline && this.name === "音声のみ" && tr.retry === 12)
+            log("音声のみ: 通信の回復を待っています（手元のぶんで再生を続けます）");
           const limit = offline ? 1000 : 20;
           if (tr.retry <= limit)
             setTimeout(() => { if (!this.stopped && this.tracks.includes(tr)) this.pump(tr); },
@@ -4028,7 +4030,7 @@ async function enterAudioOnly(){
   // 先に見た目を切り替える。待ってから切り替えると反応が鈍く感じられる。
   audioOnly = true;
   audioLastT = -1; audioStuckAt = 0;
-  audioRetry = 0; clearTimeout(audioRetryTimer);
+  audioRetry = 0; audioWaitingNet = false; clearTimeout(audioRetryTimer);
   const sec = audioPrefetchSeconds();
   const c = connKind();
   log(`音声のみ再生: 回線 ${c.type}${c.saveData ? "（節約）" : ""} / ${Math.round(sec/60)} 分ぶん先読みします`);
@@ -4154,6 +4156,7 @@ function watchAudioOnly(){
 let audioRestartAt = 0;
 let audioRetry = 0;
 let lastNetError = "";
+let audioWaitingNet = false;
 let audioRetryTimer = null;
 
 // 先読みがどこまで進んだかを覚えておく（電波が切れても安心して画面を消せるように）
@@ -4186,7 +4189,39 @@ function startAudioBufferReport(){
 
 async function restartAudioOnly(why){
   if (!audioOnly || !currentFile) return;
+
+  // 通信が無いなら作り直せない。いま手元にあるぶんを守り、回復を待つ。
+  if (navigator.onLine === false){
+    if (!audioWaitingNet){
+      audioWaitingNet = true;
+      log("通信がありません。手元のぶんを再生しながら回復を待ちます。");
+      els.pNote.textContent = "通信の回復を待っています…";
+    }
+    clearTimeout(audioRetryTimer);
+    audioRetryTimer = setTimeout(() => restartAudioOnly("回復の確認"), 15000);
+    return;
+  }
+  audioWaitingNet = false;
+
   if (Date.now() - audioRestartAt < 20000) return;   // 立て続けにやらない
+  // まだ手元に十分あるなら、作り直す必要はない
+  const ahead = (() => {
+    try{
+      const b = els.pAudio.buffered;
+      if (!b.length) return 0;
+      const t0 = els.pAudio.currentTime;
+      for (let i = 0; i < b.length; i++)
+        if (b.start(i) <= t0 + 0.5 && t0 <= b.end(i) + 0.5) return b.end(i) - t0;
+    }catch(_){}
+    return 0;
+  })();
+  if (ahead > 60 && !/勝手に止まった|途中で終わって/.test(why)){
+    log(`まだ ${Math.round(ahead)} 秒ぶん手元にあります。作り直しは見送ります。`);
+    clearTimeout(audioRetryTimer);
+    audioRetryTimer = setTimeout(() => restartAudioOnly("先読みが減ったため"), 30000);
+    return;
+  }
+
   audioRestartAt = Date.now();
   const t = els.pAudio.currentTime || 0;
   log(`音声の流れを作り直します（${why}） ${fmtTC(t)} から`);
@@ -5930,10 +5965,15 @@ if ("serviceWorker" in navigator){
 }
 
 window.addEventListener("online", () => {
-  log("通信が戻りました");
   if (audioOnly){
     els.pNote.textContent = "音声のみ再生中（画面を消しても続きます）";
-    try{ dashAudio.pumpAll(); }catch(_){}
+    audioWaitingNet = false;
+    // 待たされていた区間の取得を、その場で再開する
+    try{
+      dashAudio.tracks.forEach(tr => { tr.retry = 0; });
+      dashAudio.pumpAll();
+      log("通信が戻りました。音声の取得を再開します。");
+    }catch(_){}
     if (els.pAudio.paused) els.pAudio.play().catch(() => {});
     // 作り直しを待っている最中なら、すぐ試す
     if (audioRetryTimer){
