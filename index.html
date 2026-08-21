@@ -145,15 +145,20 @@ b{font-weight:600}
   padding:2px 7px;background:rgba(0,0,0,.72);color:#fff;border-radius:4px}
 .rail{display:none}
 .frames{display:grid;grid-template-columns:repeat(5,1fr);gap:2px;background:var(--line-soft);
-  aspect-ratio:80/9;border-top:2px solid var(--surface)}
+  aspect-ratio:80/11;border-top:2px solid var(--surface)}
 .frames.solo{grid-template-columns:1fr;aspect-ratio:16/9}
 .frames .slot{background-repeat:no-repeat}
 .hero .heroimg{position:absolute;inset:0;background-repeat:no-repeat;background-color:#0B0E11}
+.hero.peeking{outline:2px solid var(--amber);outline-offset:-2px}
+.hero.peeking .tc{background:var(--amber);color:#171208}
 .frames .slot{position:relative;overflow:hidden;background:#0B0E11;cursor:pointer}
 .frames .slot::after{content:attr(data-tc);position:absolute;left:0;bottom:0;font-family:var(--mono);
   font-size:9px;padding:1px 3px;background:rgba(0,0,0,.65);color:var(--amber);opacity:0;transition:opacity .12s}
 .strip:hover .slot::after{opacity:1}
 .frames .slot.sel{outline:2px solid var(--amber);outline-offset:-2px}
+.frames .slot:hover{outline:2px solid var(--amber);outline-offset:-2px}
+.frames .slot:hover::before{content:"";position:absolute;inset:0;
+  background:linear-gradient(0deg,rgba(232,176,75,.18),transparent)}
 .strip .placeholder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--muted);pointer-events:none}
 .strip .fail{color:var(--red)}
@@ -410,7 +415,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v157</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v158</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2528,6 +2533,7 @@ async function paintThumbs(file, fromCache){
   const defaultIdx = Math.min(2, n - 1);
 
   const showFrame = i => {
+    ref.hero.classList.add("peeking");
     heroImg.style.backgroundImage = `url(${ref.sheetUrl})`;
     heroImg.style.backgroundSize = sizeCss;
     heroImg.style.backgroundPosition = posAt(i);
@@ -2536,6 +2542,7 @@ async function paintThumbs(file, fromCache){
     framesEl.querySelectorAll(".slot").forEach((sl,k) => sl.classList.toggle("sel", k === i));
   };
   const showDefault = () => {
+    ref.hero.classList.remove("peeking");
     if (ref.posterUrl){
       heroImg.style.backgroundImage = `url(${ref.posterUrl})`;
       heroImg.style.backgroundSize = "cover";
