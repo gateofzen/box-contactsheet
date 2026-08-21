@@ -1,223 +1,89 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html>
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="5">
-<title>Contact Sheet — テレビ受信アプリ</title>
+<meta name="cs-version" content="6">
+<title>Contact Sheet</title>
 <style>
-  /* 映像は Chromecast 内蔵の再生機構が描く。
-     ページ側で何も重ねないことが滑らかさの条件。 */
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
-  cast-media-player{--background-color:#000;--progress-color:#E8B04B;
-    --splash-image:none;--theme-hue:38}
-  #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
-    background:#000;color:#E8B04B;font-family:system-ui,sans-serif;
-    font-size:2vw;letter-spacing:.18em;text-transform:uppercase}
-  #boot.gone{display:none}
+  #msg{position:fixed;left:0;right:0;top:6vh;text-align:center;color:#E8B04B;
+    font-family:system-ui,sans-serif;font-size:2vw;letter-spacing:.1em}
 </style>
-<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"
-        onerror="document.getElementById('boot').textContent='Cast のライブラリを取得できません'"></script>
+<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 </head>
 <body>
 <cast-media-player></cast-media-player>
-<div id="boot">Contact&nbsp;Sheet</div>
+<div id="msg">Contact Sheet</div>
 
 <script>
-"use strict";
+// まず「起動できること」だけを確実にする。
+// 余計な指定を足すと、1 つでも合わないと起動そのものが失敗し、
+// 送信側には session_error としか届かない。
+var msg = document.getElementById("msg");
+var ctx = cast.framework.CastReceiverContext.getInstance();
+var pm  = ctx.getPlayerManager();
+var NS  = "urn:x-cast:com.contactsheet";
+var token = "";
 
-const boot = document.getElementById("boot");
-
-// ライブラリが読み込めていないまま触ると、その場で止まって
-// 送信側には session_error としか届かない。読み込みを待つ。
-if (!(window.cast && cast.framework && cast.framework.CastReceiverContext)){
-  boot.textContent = "Cast のライブラリを読み込めません";
-  throw new Error("cast framework unavailable");
-}
-
-const ctx = cast.framework.CastReceiverContext.getInstance();
-const pm  = ctx.getPlayerManager();
-
-let token = "";
-const NS_OURS = "urn:x-cast:com.contactsheet";
-// urn:x-cast:com.google.cast.* は Cast の予約名。
-// 登録しようとすると起動そのものが失敗する（launch timeout）。
-const NS_CANDIDATES = [NS_OURS];
+function reply(o){ try{ ctx.sendCustomMessage(NS, undefined, JSON.stringify(o)); }catch(e){} }
 
 function withToken(url){
   if (!token || !url) return url;
-  return url.includes("access_token=") ? url
-    : url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token);
+  return url.indexOf("access_token=") >= 0 ? url
+    : url + (url.indexOf("?") >= 0 ? "&" : "?") + "access_token=" + encodeURIComponent(token);
 }
 
-// 送信側（スマートフォン）へ返す
-function reply(obj){
-  const s = JSON.stringify(obj);
-  NS_CANDIDATES.forEach(ns => { try{ ctx.sendCustomMessage(ns, undefined, s); }catch(_){} });
-}
+// 認証つきで取りに行けるようにする
+try{
+  var pc = new cast.framework.PlaybackConfig();
+  pc.manifestRequestHandler = function(r){ r.url = withToken(r.url); };
+  pc.segmentRequestHandler  = function(r){ r.url = withToken(r.url); };
+  pm.setPlaybackConfig(pc);
+}catch(e){ msg.textContent = "Contact Sheet（認証の設定を省略）"; }
 
-/* ---- 認証つきの取得 ---- */
-const playbackConfig = new cast.framework.PlaybackConfig();
-playbackConfig.autoResumeDuration = 5;
-playbackConfig.manifestRequestHandler = r => { r.url = withToken(r.url); };
-playbackConfig.segmentRequestHandler  = r => { r.url = withToken(r.url); };
-playbackConfig.licenseRequestHandler  = r => { r.url = withToken(r.url); };
-
-/* ---- 送信側からの指示 ---- */
-async function handle(raw){
-  let m;
-  try{ m = (typeof raw === "string") ? JSON.parse(raw) : raw; }catch(_){ return; }
+ctx.addCustomMessageListener(NS, function(e){
+  var m;
+  try{ m = typeof e.data === "string" ? JSON.parse(e.data) : e.data; }catch(_){ return; }
   if (!m || !m.type) return;
 
-  switch (m.type){
-    case "load": {
-      token = m.token || token;
-      boot.classList.add("gone");
-      const req = new cast.framework.messages.LoadRequestData();
-      req.media = new cast.framework.messages.MediaInformation();
-      if (m.manifest){
-        req.media.contentUrl  = m.manifest;
-        req.media.contentType = "application/dash+xml";
-      }else{
-        req.media.contentUrl  = m.url;
-        req.media.contentType = "video/mp4";
-      }
-      req.media.streamType = cast.framework.messages.StreamType.BUFFERED;
-      req.media.metadata = new cast.framework.messages.GenericMediaMetadata();
-      req.media.metadata.title = m.title || "Contact Sheet";
-      req.currentTime = m.time || 0;
-      req.autoplay = true;
-      try{
-        await pm.load(req);
-        reply({type:"loaded", title:m.title || "", time:pm.getCurrentTimeSec()});
-      }catch(err){
-        reply({type:"error", message:String((err && err.message) || err)});
-      }
-      break;
-    }
-    case "play":   pm.play(); break;
-    case "pause":  pm.pause(); break;
-    case "seek":   if (isFinite(m.time)) pm.seek(m.time); break;
-    case "seekBy": if (isFinite(m.delta)) pm.seek(Math.max(0, pm.getCurrentTimeSec() + m.delta)); break;
-    case "stop":   pm.stop(); boot.classList.remove("gone"); break;
-    case "token":  token = m.token || token; reply({type:"token-ok"}); break;
-    case "quality": applyQuality(m.maxHeight, m.fixed); break;
-    case "ping":   reply({type:"pong", time:pm.getCurrentTimeSec()}); break;
+  if (m.type === "load"){
+    token = m.token || token;
+    msg.style.display = "none";
+    var req = new cast.framework.messages.LoadRequestData();
+    req.media = new cast.framework.messages.MediaInformation();
+    req.media.contentUrl  = m.manifest || m.url;
+    req.media.contentType = m.manifest ? "application/dash+xml" : "video/mp4";
+    req.currentTime = m.time || 0;
+    req.autoplay = true;
+    pm.load(req).then(function(){ reply({type:"loaded"}); },
+                      function(err){ reply({type:"error", message:String(err)}); });
   }
-}
+  else if (m.type === "play")   pm.play();
+  else if (m.type === "pause")  pm.pause();
+  else if (m.type === "seek")   pm.seek(m.time);
+  else if (m.type === "seekBy") pm.seek(Math.max(0, pm.getCurrentTimeSec() + m.delta));
+  else if (m.type === "token")  token = m.token || token;
+  else if (m.type === "stop"){  pm.stop(); msg.style.display = ""; }
+});
 
-/* ---- 画質の制限 ---- */
-function applyQuality(maxHeight, fixed){
+// 状況を返す（失敗しても再生は続ける）
+setInterval(function(){
   try{
-    const p = pm.getStats();
-    // CAF は内部で自動調整する。上限だけ伝える。
-    const cfg = pm.getPlaybackConfig() || playbackConfig;
-    cfg.maxBitrate = maxHeight ? (maxHeight >= 1080 ? 12000000
-                        : maxHeight >= 720 ? 5000000 : 2500000) : undefined;
-    pm.setPlaybackConfig(cfg);
-    reply({type:"quality-ok", maxHeight: maxHeight || 0});
-  }catch(err){ reply({type:"error", message:"画質の指定に失敗: " + err.message}); }
-}
-
-/* ---- 状況の報告 ---- */
-setInterval(() => {
-  try{
-    const st = pm.getStats() || {};
-    const t = pm.getCurrentTimeSec();
-    const d = pm.getDurationSec();
+    var st = (pm.getStats && pm.getStats()) || {};
+    var t = pm.getCurrentTimeSec();
     if (!isFinite(t)) return;
-    reply({type:"time", time:t, duration:isFinite(d) ? d : 0});
-    reply({type:"stats",
-      estimate: Math.round((st.estimatedBandwidth || 0) / 1000),
-      stream:   Math.round((st.streamBandwidth || 0) / 1000),
-      dropped:  st.droppedFrames || 0,
-      decoded:  st.decodedFrames || 0,
-      w: st.width || 0, h: st.height || 0,
-      ahead: 0, stalls: 0, buffering: 0, gaps: 0, mode: "専用アプリ"});
-  }catch(_){}
+    reply({type:"time", time:t, duration:pm.getDurationSec() || 0});
+    reply({type:"stats", mode:"専用アプリ",
+      estimate: Math.round((st.estimatedBandwidth||0)/1000),
+      stream:   Math.round((st.streamBandwidth||0)/1000),
+      dropped:  st.droppedFrames||0, decoded: st.decodedFrames||0,
+      w: st.width||0, h: st.height||0});
+  }catch(e){}
 }, 4000);
 
-pm.addEventListener(cast.framework.events.EventType.ERROR, e => {
-  reply({type:"error", message:"再生エラー " + (e.detailedErrorCode || e.error || "")});
-});
-pm.addEventListener(cast.framework.events.EventType.MEDIA_FINISHED, () => {
-  reply({type:"state", event:"ended"});
-});
-
-/* ---- 起動 ----
-   ここより上で例外が起きると、起動処理に到達できず session_error になる。
-   任意の処理はすべて個別に保護し、起動を最優先で行う。 */
-
-function safe(label, fn){
-  try{ fn(); }catch(err){
-    boot.textContent = "Contact Sheet（" + label + " を省略）";
-    reply({type:"warn", where:label, message:String(err && err.message || err)});
-  }
-}
-
-// 起動時の指定は最小限にする。指定が 1 つでも合わないと起動そのものが失敗し、
-// 送信側には session_error としか届かない。
-const options = new cast.framework.CastReceiverOptions();
-safe("待ち受けを続ける設定", () => { options.disableIdleTimeout = true; });
-safe("再生の設定", () => { options.playbackConfig = playbackConfig; });
-
-safe("受信の待ち受け", () => {
-  ctx.addCustomMessageListener(NS_OURS, e => {
-    reply({type:"ns", ns:NS_OURS});
-    handle(e.data);
-  });
-});
-
-safe("準備完了の通知", () => {
-  ctx.addEventListener(cast.framework.system.EventType.READY, () => reply({type:"ready"}));
-});
-
-safe("再生エラーの検出", () => {
-  pm.addEventListener(cast.framework.events.EventType.ERROR, e => {
-    reply({type:"error", message:"再生エラー " + (e.detailedErrorCode || e.error || "")});
-  });
-});
-
-safe("終了の検出", () => {
-  pm.addEventListener(cast.framework.events.EventType.MEDIA_FINISHED, () => {
-    reply({type:"state", event:"ended"});
-  });
-});
-
-// 状況の報告（失敗しても再生は続ける）
-setInterval(() => {
-  try{
-    const st = (pm.getStats && pm.getStats()) || {};
-    const t = pm.getCurrentTimeSec();
-    const d = pm.getDurationSec();
-    if (!isFinite(t)) return;
-    reply({type:"time", time:t, duration:isFinite(d) ? d : 0});
-    reply({type:"stats",
-      estimate: Math.round((st.estimatedBandwidth || 0) / 1000),
-      stream:   Math.round((st.streamBandwidth || 0) / 1000),
-      dropped:  st.droppedFrames || 0,
-      decoded:  st.decodedFrames || 0,
-      w: st.width || 0, h: st.height || 0,
-      ahead: 0, stalls: 0, buffering: 0, gaps: 0, mode: "専用アプリ"});
-  }catch(_){}
-}, 4000);
-
-try{
-  ctx.start(options);
-  boot.textContent = "Contact Sheet";
-  setTimeout(() => reply({type:"started", version:5}), 500);
-}catch(err){
-  // 指定が原因なら、最小限の構成で立ち上げ直す
-  try{
-    const basic = new cast.framework.CastReceiverOptions();
-    basic.disableIdleTimeout = true;
-    ctx.start(basic);
-    boot.textContent = "Contact Sheet（簡易起動）";
-    setTimeout(() => reply({type:"started", version:5, basic:true}), 500);
-  }catch(e2){
-    boot.textContent = "起動できません: " + (e2 && e2.message || e2);
-  }
-}
+ctx.start();
+setTimeout(function(){ reply({type:"started", version:6}); }, 800);
 </script>
 </body>
 </html>
