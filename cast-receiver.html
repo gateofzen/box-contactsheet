@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="7">
+<meta name="cs-version" content="9">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -82,29 +82,32 @@ setInterval(function(){
   }catch(e){}
 }, 4000);
 
-// 送り返すには、通信経路を起動時に宣言しておく必要がある。
-// ただし宣言が原因で起動できない環境もあるため、失敗したら宣言なしで起動する。
-var started = false;
+// <cast-media-player> を置くと、CAF が起動の設定を自前で用意する。
+// そこへ設定を渡すと「already provided」で拒否される。
+// 通信経路は、設定ではなく個別の指定で登録する。
 try{
-  var opt = new cast.framework.CastReceiverOptions();
-  opt.customNamespaces = {};
-  opt.customNamespaces[NS] = cast.framework.system.MessageType.STRING;
-  ctx.start(opt);
-  started = true;
-}catch(e1){
-  try{
-    ctx.start();
-    started = true;
-    msg.textContent = "Contact Sheet（簡易起動）";
-  }catch(e2){
-    msg.textContent = "起動できません: " + (e2 && e2.message || e2);
+  if (ctx.setCustomNamespace){
+    var mt = (cast.framework.system && cast.framework.system.MessageType
+              && cast.framework.system.MessageType.STRING) || "STRING";
+    ctx.setCustomNamespace(NS, mt);
   }
+}catch(e){ /* 使えなければ、受け取りの登録だけで進める */ }
+
+var startErr = null;
+try{
+  ctx.start();               // 設定は渡さない
+}catch(e1){
+  startErr = e1;
+  msg.textContent = "起動できません: " + (e1 && e1.message || e1);
+  msg.style.fontSize = "1.2vw";
+  msg.style.whiteSpace = "pre-wrap";
 }
 
-if (started){
-  setTimeout(function(){ reply({type:"started", version:7}); }, 800);
-  setTimeout(function(){ reply({type:"started", version:7}); }, 3000);
+if (!startErr){
+  setTimeout(function(){ reply({type:"started", version:9}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:9}); }, 3000);
 }
+
 </script>
 </body>
 </html>
