@@ -404,7 +404,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v147</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v148</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4708,6 +4708,18 @@ function resetLocalTune(){
   localRetryAt = 0; localFails = 0;
 }
 
+// いまどれだけ先まで受け取れているか
+function bufferAhead(){
+  try{
+    const b = els.pVideo.buffered;
+    if (!b.length) return 0;
+    const t = els.pVideo.currentTime;
+    for (let i = 0; i < b.length; i++)
+      if (b.start(i) <= t + 0.5 && t <= b.end(i) + 0.5) return b.end(i) - t;
+  }catch(_){}
+  return 0;
+}
+
 function localOrigKbps(){
   const f = currentFile;
   const dur = isFinite(els.pVideo.duration) ? els.pVideo.duration
@@ -4745,22 +4757,27 @@ function startLocalTune(){
     if (localState === "配信用"){
       if (videoKind !== "DASH") return;
       if (Date.now() < localRetryAt) return;      // 直後の上げ直しは避ける
-      // 実測は「必要なぶんしか取らない」値なので、目安にとどめる。
-      // 落ち着いて再生できているなら試しに上げる。
+      // 実測は「必要なぶんしか取らない」値なので、そのままでは判断に使えない。
+      // 先読みが十分に伸びていることを、余裕がある証拠として使う。
       const have = Math.round(dashMain.kbps || 0);
+      const ahead = bufferAhead();
+
       if (localStalls){
         localGoodFrom = 0;
         localStalls = 0;                          // 古い途切れは持ち越さない
         return;
       }
+      // 先読みが 30 秒以上たまっている＝配信用では手が余っている
+      if (ahead < 30){ localGoodFrom = 0; return; }
+
       if (!localGoodFrom) localGoodFrom = Date.now();
       if (Date.now() - localGoodFrom < 8000) return;   // 8 秒続いたら上げる
       localGoodFrom = 0;
-      switchLocalTo("原本", have, need);
+      switchLocalTo("原本", have, need, ahead);
     }else{
       // 原本で途切れるようなら配信用へ戻す。
       // ただし回線は移動中に変わるので、時間を置いてまた試す。
-      if (localStalls >= 2){
+      if (localStalls >= 2 || (bufferAhead() < 3 && localStalls >= 1)){
         localFails++;
         const wait = Math.min(5, localFails) * 60000;   // 1・2・3・4・5 分と延ばす
         localRetryAt = Date.now() + wait;
@@ -4771,13 +4788,14 @@ function startLocalTune(){
   }, 2000);
 }
 
-async function switchLocalTo(to, have, need){
+async function switchLocalTo(to, have, need, ahead){
   const t = els.pVideo.currentTime || lastGoodTime || 0;
   const playing = !els.pVideo.paused;
   localStalls = 0;
 
   if (to === "原本"){
-    log(`回線に余裕があります（実測 ${have} kbps / 原本 ${need} kbps）。原本へ上げます。`);
+    log(`余裕があります（先読み ${Math.round(ahead || 0)} 秒 / 実測 ${have} kbps`
+      + ` / 原本 ${need} kbps）。原本へ上げます。`);
     localState = "原本";
     dashMain.stop();
     videoKind = "原本";
