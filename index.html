@@ -404,7 +404,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v144</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v145</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4543,9 +4543,11 @@ function bindPresConn(conn){
       if (els.castQuality.value === "0") autoTune(m);
 
       // 元ファイルは重い。途切れるようなら配信用へ移す。
-      if (m.stalls >= 3 && els.castQuality.value === "orig" && !castDowngraded){
+      const dropRate0 = m.decoded > 200 ? (m.dropped || 0) / m.decoded : 0;
+      if ((m.stalls >= 3 || dropRate0 > 0.15) && els.castQuality.value === "orig" && !castDowngraded){
         castDowngraded = true;
-        log(`元ファイルでは途切れます（${m.stalls} 回 / ${m.buffering} 秒）。配信用に切り替えます。`);
+        log(`元ファイルでは追いつきません（途切れ ${m.stalls} 回 / コマ落ち ${m.dropped}/${m.decoded}）。`
+          + "配信用に切り替えます。");
         say("回線に対して重いため、配信用の画質に切り替えました。", true);
         els.castQuality.value = "0";
         els.castQ2.value = "0";
@@ -4554,11 +4556,15 @@ function bindPresConn(conn){
         castTrack = "";
         castLoadCurrent();
       }
-      // 画質の通知が来ない場合は、状況の報告から補う
-      if (m.w && m.h && !castTrack){
+      // いま流れている画質を、報告のたびに反映する
+      if (m.w && m.h){
         const label = m.h >= 1080 ? "フル HD" : m.h >= 720 ? "HD" : m.h >= 480 ? "標準画質" : "低画質";
-        castTrack = `${label} ${m.w}×${m.h}` + (m.stream ? ` / ${m.stream} kbps` : "");
-        els.castInfo.textContent = castTrack;
+        const now = `${label} ${m.w}×${m.h}` + (m.stream ? ` / ${m.stream} kbps` : "");
+        if (now !== castTrack){
+          castTrack = now;
+          els.castInfo.textContent = castTrack;
+          log("テレビ側の画質: " + castTrack);
+        }
       }
       if (!castModeLogged){ castModeLogged = true;
         log("再生しているのは: " + (m.mode === "専用アプリ" ? "専用アプリ ✓" : "受信ページ")); }
@@ -4591,7 +4597,8 @@ function bindPresConn(conn){
         + (m.stalls ? ` / 途切れ ${m.stalls} 回 ${m.buffering != null ? m.buffering + " 秒" : ""}` : "")
         + (m.aAhead != null && m.aAhead >= 0 ? ` / 音声の先読み ${m.aAhead} 秒` : "")
         + (m.gaps ? ` / 継ぎ目の飛び越し ${m.gaps} 回` : "")
-        + ` / コマ落ち ${m.dropped}（${m.decoded} 中）`);
+        + ` / コマ落ち ${m.dropped}（${m.decoded} 中`
+        + (m.decoded > 200 ? ` = ${Math.round(m.dropped / m.decoded * 100)}%` : "") + "）");
     }
     else if (m.type === "track"){
       const label = m.height >= 1080 ? "フル HD" : m.height >= 720 ? "HD"
@@ -4808,8 +4815,9 @@ function autoTune(m){
     log(`回線に余裕があります（実測 ${m.estimate} kbps / 元ファイル ${need} kbps）。最高画質へ上げます。`);
     castLoadCurrent("orig");
   }else{
-    // 元ファイルにしてから途切れが増えたら、配信用へ戻す
-    if ((m.stalls || 0) - autoStallBase >= 2){
+    // 元ファイルにしてから途切れが増えたか、コマ落ちが目立つなら戻す
+    const dropRate = m.decoded > 200 ? (m.dropped || 0) / m.decoded : 0;
+    if ((m.stalls || 0) - autoStallBase >= 2 || dropRate > 0.15){
       autoState = "配信用";
       autoFails++;
       const wait = Math.min(5, autoFails) * 60000;
@@ -4817,7 +4825,8 @@ function autoTune(m){
       autoStallBase = m.stalls || 0;
       castStartTime = castLastTime || castStartTime;
       castTrack = "";
-      log(`最高画質では途切れます。配信用へ戻します（${Math.round(wait/60000)} 分後にまた試します）`);
+      log(`最高画質では追いつきません（途切れ ${m.stalls} 回 / コマ落ち ${m.dropped}/${m.decoded}）。`
+        + `配信用へ戻します（${Math.round(wait/60000)} 分後にまた試します）`);
       castLoadCurrent();
     }
   }
