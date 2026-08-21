@@ -404,7 +404,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v148</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v149</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3619,9 +3619,10 @@ function createDashEngine(name){
       }
       if (!r.ok) throw new Error("区間 " + r.status);
       const buf = await r.arrayBuffer();
-      // 実測の速さを控える（直近を重めに見る）
+      // 実測の速さを控える（直近を重めに見る）。
+      // 音声の区間は小さすぎて待ち時間が支配的になるため、映像だけで測る。
       const sec = (performance.now() - t0) / 1000;
-      if (sec > 0.05 && buf.byteLength > 20000){
+      if (sec > 0.05 && buf.byteLength > 300000){
         const kbps = buf.byteLength * 8 / sec / 1000;
         this.kbps = this.kbps ? this.kbps * 0.7 + kbps * 0.3 : kbps;
       }
@@ -4767,8 +4768,9 @@ function startLocalTune(){
         localStalls = 0;                          // 古い途切れは持ち越さない
         return;
       }
-      // 先読みが 30 秒以上たまっている＝配信用では手が余っている
-      if (ahead < 30){ localGoodFrom = 0; return; }
+      // 先読みが伸びている＝配信用では手が余っている。
+      // 実測（映像の区間だけで測ったもの）にも余裕があることを確かめる。
+      if (ahead < 30 || (have && have < need * 1.2)){ localGoodFrom = 0; return; }
 
       if (!localGoodFrom) localGoodFrom = Date.now();
       if (Date.now() - localGoodFrom < 8000) return;   // 8 秒続いたら上げる
@@ -4825,10 +4827,10 @@ let autoTier = 0;             // 0=自動 / 1=高画質固定 / 2=元ファイ�
 let autoGoodFrom = 0;
 let autoRetryAt = 0;
 let autoFails = 0;
-let autoStallBase = 0;        // 切り替え時点の途切れ回数（差分で見る）
+let autoStallBase = null;     // 最初の報告で決める（開始時の途切れを除くため）
 
 function resetAutoTune(){
-  autoTier = 0; autoGoodFrom = 0; autoRetryAt = 0; autoFails = 0; autoStallBase = 0;
+  autoTier = 0; autoGoodFrom = 0; autoRetryAt = 0; autoFails = 0; autoStallBase = null;
 }
 
 /* テレビ側の画質を、実際の再生の様子から決める。
@@ -4840,6 +4842,12 @@ const CAST_TIERS = ["自動", "高画質固定", "元ファイル"];
 function tierLabel(){ return CAST_TIERS[autoTier] || "自動"; }
 
 function autoTune(m){
+  // 受信側は再生開始時に必ず一度「途切れ」を数える。
+  // それを基準にしないと、いつまでも条件を満たせない。
+  if (autoStallBase === null){
+    autoStallBase = m.stalls || 0;
+    return;
+  }
   const quiet = (m.stalls || 0) <= autoStallBase
     && (m.decoded > 200 ? (m.dropped || 0) / m.decoded < 0.05 : true);
 
