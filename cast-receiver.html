@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="12">
+<meta name="cs-version" content="13">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -30,15 +30,16 @@ var lastSender = null;   // 送り先。届いた指示から拾う。
 var sendFail = 0;
 
 function reply(o){
-  var text = JSON.stringify(o);
+  // 文字列にして渡すと、環境によってはさらに包まれて二重になる。
+  // そのまま渡し、駄目なときだけ文字列で試す。
   var ok = false;
-  // 相手を指定して送る
   if (lastSender){
-    try{ ctx.sendCustomMessage(NS, lastSender, text); ok = true; }catch(e){}
+    try{ ctx.sendCustomMessage(NS, lastSender, o); ok = true; }catch(e){}
+    if (!ok){ try{ ctx.sendCustomMessage(NS, lastSender, JSON.stringify(o)); ok = true; }catch(e){} }
   }
-  // 指定なしでも送ってみる（環境によってはこちらが通る）
   if (!ok){
-    try{ ctx.sendCustomMessage(NS, undefined, text); ok = true; }catch(e){}
+    try{ ctx.sendCustomMessage(NS, undefined, o); ok = true; }catch(e){}
+    if (!ok){ try{ ctx.sendCustomMessage(NS, undefined, JSON.stringify(o)); ok = true; }catch(e){} }
   }
   if (ok){
     if (sendOk < 2){
@@ -75,7 +76,7 @@ ctx.addCustomMessageListener(NS, function(e){
     lastSender = e.senderId;
     if (!announced){          // 送り先が分かった時点で名乗り直す
       announced = true;
-      reply({type:"started", version:12});
+      reply({type:"started", version:13});
     }
   }
   var m;
@@ -149,8 +150,8 @@ try{
 }
 
 if (!startErr){
-  setTimeout(function(){ reply({type:"started", version:12}); }, 800);
-  setTimeout(function(){ reply({type:"started", version:12}); }, 3000);
+  setTimeout(function(){ reply({type:"started", version:13}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:13}); }, 3000);
 }
 
 </script>
