@@ -311,11 +311,23 @@ details.sub[open]>summary{color:var(--text)}
   transform-origin:center center;will-change:transform}
 .castpanel[hidden]{display:none}
 .castpanel{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;
-  align-items:center;justify-content:center;gap:14px;background:rgba(11,14,17,.96);padding:24px}
-.castpanel .big{font-family:var(--display);font-size:18px;color:var(--amber)}
-.castpanel .ctime{font-family:var(--mono);font-size:13px;color:var(--muted)}
-.castpanel input[type=range]{width:min(460px,86%);accent-color:var(--amber)}
-.castpanel .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+  align-items:center;justify-content:center;gap:12px;background:var(--ink);
+  padding:18px 16px;overflow-y:auto;overscroll-behavior:contain}
+.castpanel .big{font-family:var(--display);font-size:15px;color:var(--amber);
+  letter-spacing:.06em;margin-bottom:2px}
+.castpanel .ctime{font-family:var(--mono);font-size:15px;color:var(--text)}
+.castpanel .ctime small{color:var(--muted);font-size:13px}
+.castpanel input[type=range]{width:min(460px,92%);accent-color:var(--amber)}
+.castpanel .row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center}
+/* キャスト中は枠に高さを持たせ、操作が見切れないようにする */
+.vzoom.castmode{min-height:330px;display:flex}
+.vzoom.castmode video{display:none}
+@media (max-width:860px){ .vzoom.castmode{min-height:340px} }
+@media (max-height:520px) and (orientation:landscape){
+  .vzoom.castmode{min-height:0;height:100%}
+  .castpanel{gap:7px;padding:10px}
+  .castpanel .big{display:none}
+}
 .castq{background:var(--ink);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font-family:var(--mono);font-size:12px}
 .castpanel .sub{font-family:var(--mono);font-size:10.5px;color:var(--line)}
 .castpanel .quality{font-family:var(--mono);font-size:12px;color:var(--muted);
@@ -392,7 +404,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v138</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v139</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -537,13 +549,15 @@ details.sub[open]>summary{color:var(--text)}
             </details>
             <div class="field"><label for="castQuality">テレビ側の画質</label>
               <select id="castQuality">
-                <option value="orig">元のまま（最高画質・シークは遅い）</option>
-                <option value="0" selected>自動（推奨）</option>
-                <option value="-1080">高画質で固定</option>
-                <option value="1080">1080p まで</option>
-                <option value="720">720p まで</option>
-                <option value="-480">低画質で固定（途切れにくい）</option>
+                <option value="0" selected>自動（回線に合わせる・推奨）</option>
+                <option value="-1080">高画質 1080p で固定</option>
+                <option value="-480">低画質 480p で固定（途切れにくい）</option>
+                <option value="orig">元ファイルのまま（最高画質・通信量 2 倍）</option>
               </select></div>
+            <p class="note" style="margin-top:6px">
+              <b>自動</b>は回線の速さに合わせて 1080p と 480p を切り替えます。<br>
+              <b>元ファイル</b>は Box に置いた動画そのものです。再圧縮を経ないぶん最も綺麗ですが、
+              通信量が約 2 倍になり、シークの反応も鈍くなります。</p>
             <div class="field"><label for="conc">同時取得</label>
               <input id="conc" class="w-num" type="number" value="8" min="1" max="16"></div>
             <div class="field"><label for="fw">コマ幅 px</label>
@@ -657,7 +671,7 @@ details.sub[open]>summary{color:var(--text)}
              controlsList="nodownload"></video>
       <div id="castPanel" class="castpanel" hidden>
         <div class="big">📺 テレビで再生中</div>
-        <div class="ctime"><span id="castNow">0:00</span> / <span id="castDur">0:00</span></div>
+        <div class="ctime"><span id="castNow">0:00</span> <small>/ <span id="castDur">0:00</span></small></div>
         <input id="castSeek" type="range" min="0" max="1000" value="0" aria-label="再生位置">
         <div class="row">
           <button id="castBack" class="btn">◀◀ 10秒</button>
@@ -4354,7 +4368,7 @@ async function castLoadCurrent(){
     // Box の配信用は元の半分ほどのビットレートに再圧縮されている。
     // 画質を優先する場合は原本をそのまま渡す。
     payload.url = originalUrl(currentFile);
-    log("テレビへ送りました: 原本（再圧縮なし）");
+    log("テレビへ送りました: 元ファイル（再圧縮なし）");
   }else{
     const mpd = await getMpd(currentFile).catch(() => null);
     if (mpd) payload.manifest = mpd.url;
@@ -4410,6 +4424,7 @@ function bindPresConn(conn){
   try{ els.pVideo.removeAttribute("src"); els.pVideo.load(); }catch(_){}
   videoKind = "テレビ";
   els.castPanel.hidden = false;
+  els.vzoom.classList.add("castmode");
   els.castQ2.value = els.castQuality.value;
   els.castInfo.textContent = "画質を確認しています…";
   updateMediaSession();          // 通知に動画の名前を出し続ける
@@ -4437,7 +4452,7 @@ function bindPresConn(conn){
         castLoadAcked = true;
         clearInterval(castLoadRetry); castLoadRetry = null;
         log("テレビが再生の指示を受け取りました" + (m.time ? `（${fmtTC(m.time)} から）` : ""));
-        els.pNote.textContent = "テレビで再生中";
+        els.pNote.textContent = "";
       }
     }
     else if (m.type === "pong"){
@@ -4454,7 +4469,7 @@ function bindPresConn(conn){
     else if (m.type === "ready") castLoadCurrent();
     else if (m.type === "loaded"){
       log("テレビで再生を開始しました");
-      els.pNote.textContent = "テレビで再生中";
+      els.pNote.textContent = "";
     }
     else if (m.type === "error"){
       log("テレビ側のエラー: " + (m.message || m.code));
@@ -4525,9 +4540,9 @@ function bindPresConn(conn){
         els.castSeek.value = String(Math.round(m.time / m.duration * 1000));
       }
     }
+    if (m.type === "time" && m.duration) els.pNote.textContent = "";
     if (m.type === "time" && m.duration) els.pMeta.textContent =
-      `テレビ再生中  ${fmtTC(m.time)} / ${fmtTC(m.duration)}`
-      + (castTrack ? `  ${castTrack}` : "");
+      castTrack ? `テレビ  ${castTrack}` : "テレビで再生中";
   });
   conn.addEventListener("close", endCast);
   conn.addEventListener("terminate", endCast);
@@ -4545,8 +4560,7 @@ function bindPresConn(conn){
     els.castNow.textContent = fmtTC(shown) + (castGotTime ? "" : "（推定）");
     if (castDuration && !castSeeking)
       els.castSeek.value = String(Math.round(shown / castDuration * 1000));
-    els.pMeta.textContent = `テレビ再生中  ${fmtTC(shown)} / ${fmtTC(castDuration)}`
-      + (castTrack ? `  ${castTrack}` : "");
+    els.pMeta.textContent = castTrack ? `テレビ  ${castTrack}` : "テレビで再生中";
   }, 1000);
 
   clearInterval(castTickTimer);
@@ -4606,6 +4620,7 @@ function endCast(){
   els.pCast.classList.remove("btn-go");
   els.pCast.classList.remove("ready");
   els.castPanel.hidden = true;
+  els.vzoom.classList.remove("castmode");
   log("キャストを終了しました");
 
   // 手元での再生を、テレビで観ていた位置から組み直す
@@ -4758,7 +4773,7 @@ function startStandardCast(){
   promptedAt = Date.now();
   els.pNote.textContent = "テレビを選んでください…";
   els.pVideo.remote.prompt()
-    .then(() => { log("標準方式で接続しました"); els.pNote.textContent = "テレビで再生中"; })
+    .then(() => { log("標準方式で接続しました"); els.pNote.textContent = ""; })
     .catch(err => {
       const msg = err.message || "";
       log("標準方式でキャストできません: " + msg);
@@ -5055,7 +5070,7 @@ function bindCast(){
   r.addEventListener("connect", () => {
     castMode = true;
     refreshCastButton();   // 点灯は「テレビで再生中」のときだけ
-    els.pNote.textContent = "テレビで再生中";
+    els.pNote.textContent = "";
     log("キャスト開始");
   });
   r.addEventListener("disconnect", () => {
