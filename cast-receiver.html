@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="17">
+<meta name="cs-version" content="19">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -27,6 +27,7 @@ var NS  = "urn:x-cast:com.contactsheet";
 var token = "";
 
 var lastSender = null;   // 送り先。届いた指示から拾う。
+var stallCount = 0, stallSince = 0, stallSec = 0;
 var sendFail = 0;
 
 function reply(o){
@@ -57,6 +58,8 @@ try{
   var pc = new cast.framework.PlaybackConfig();
   pc.manifestRequestHandler = function(r){ r.url = withToken(r.url); };
   pc.segmentRequestHandler  = function(r){ r.url = withToken(r.url); };
+  // 見積もりを低く始めると最低画質に張り付く。高めから始める。
+  pc.initialBandwidth = 12000000;
   pm.setPlaybackConfig(pc);
 }catch(e){ msg.textContent = "Contact Sheet（認証の設定を省略）"; }
 
@@ -79,7 +82,7 @@ ctx.addCustomMessageListener(NS, function(e){
     lastSender = e.senderId;
     if (!announced){          // 送り先が分かった時点で名乗り直す
       announced = true;
-      reply({type:"started", version:17});
+      reply({type:"started", version:19});
     }
   }
   var m;
@@ -95,7 +98,7 @@ ctx.addCustomMessageListener(NS, function(e){
     req.media.contentType = m.manifest ? "application/dash+xml" : "video/mp4";
     req.currentTime = m.time || 0;
     req.autoplay = true;
-    if (m.maxHeight || m.fixed) applyQuality(m.maxHeight, m.fixed);
+    if (m.maxHeight || m.fixed || m.quality) applyQuality(m.maxHeight, m.fixed);
     reply({type:"load-received", time:req.currentTime});   // 受け取った合図
     pm.load(req).then(function(){ reply({type:"loaded", time:req.currentTime}); },
                       function(err){ reply({type:"error", message:String(err)}); });
@@ -111,6 +114,14 @@ ctx.addCustomMessageListener(NS, function(e){
   else if (m.type === "token")  token = m.token || token;
   else if (m.type === "stop"){  pm.stop(); msg.style.display = ""; }
 });
+
+// 読み込み待ちを数える。回線に対して重すぎるかの判断に使う。
+try{
+  pm.addEventListener(cast.framework.events.EventType.BUFFERING, function(e){
+    if (e && e.isBuffering){ stallCount++; stallSince = Date.now(); }
+    else if (stallSince){ stallSec += (Date.now() - stallSince) / 1000; stallSince = 0; }
+  });
+}catch(e){}
 
 // 状況を返す（失敗しても再生は続ける）
 // 位置は 1 秒ごとに送る（手元のつまみを滑らかに動かすため）
@@ -132,7 +143,8 @@ setInterval(function(){
       estimate: Math.round((st.estimatedBandwidth||0)/1000),
       stream:   Math.round((st.streamBandwidth||0)/1000),
       dropped:  st.droppedFrames||0, decoded: st.decodedFrames||0,
-      w: st.width||0, h: st.height||0});
+      w: st.width||0, h: st.height||0,
+      stalls: stallCount, buffering: Math.round(stallSec)});
   }catch(e){}
 }, 4000);
 
@@ -153,7 +165,7 @@ try{
     ctx.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, function(e){
       if (e && e.senderId) lastSender = e.senderId;
       // 端末が変わってもすぐ会話できるよう、その場で名乗る
-      reply({type:"started", version:17});
+      reply({type:"started", version:19});
       var t = pm.getCurrentTimeSec();
       if (isFinite(t)) reply({type:"time", time:t, duration:pm.getDurationSec() || 0});
     });
@@ -171,8 +183,8 @@ try{
 }
 
 if (!startErr){
-  setTimeout(function(){ reply({type:"started", version:17}); }, 800);
-  setTimeout(function(){ reply({type:"started", version:17}); }, 3000);
+  setTimeout(function(){ reply({type:"started", version:19}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:19}); }, 3000);
 }
 
 </script>
