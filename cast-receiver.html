@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="6">
+<meta name="cs-version" content="7">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -82,8 +82,29 @@ setInterval(function(){
   }catch(e){}
 }, 4000);
 
-ctx.start();
-setTimeout(function(){ reply({type:"started", version:6}); }, 800);
+// 送り返すには、通信経路を起動時に宣言しておく必要がある。
+// ただし宣言が原因で起動できない環境もあるため、失敗したら宣言なしで起動する。
+var started = false;
+try{
+  var opt = new cast.framework.CastReceiverOptions();
+  opt.customNamespaces = {};
+  opt.customNamespaces[NS] = cast.framework.system.MessageType.STRING;
+  ctx.start(opt);
+  started = true;
+}catch(e1){
+  try{
+    ctx.start();
+    started = true;
+    msg.textContent = "Contact Sheet（簡易起動）";
+  }catch(e2){
+    msg.textContent = "起動できません: " + (e2 && e2.message || e2);
+  }
+}
+
+if (started){
+  setTimeout(function(){ reply({type:"started", version:7}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:7}); }, 3000);
+}
 </script>
 </body>
 </html>
