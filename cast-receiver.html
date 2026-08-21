@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="4">
+<meta name="cs-version" content="5">
 <title>Contact Sheet — テレビ受信アプリ</title>
 <style>
   /* 映像は Chromecast 内蔵の再生機構が描く。
@@ -155,14 +155,11 @@ function safe(label, fn){
   }
 }
 
+// 起動時の指定は最小限にする。指定が 1 つでも合わないと起動そのものが失敗し、
+// 送信側には session_error としか届かない。
 const options = new cast.framework.CastReceiverOptions();
-options.disableIdleTimeout = true;          // 操作待ちで勝手に終了しない
-options.playbackConfig = playbackConfig;
-
-safe("経路の登録", () => {
-  options.customNamespaces = {};
-  options.customNamespaces[NS_OURS] = cast.framework.system.MessageType.STRING;
-});
+safe("待ち受けを続ける設定", () => { options.disableIdleTimeout = true; });
+safe("再生の設定", () => { options.playbackConfig = playbackConfig; });
 
 safe("受信の待ち受け", () => {
   ctx.addCustomMessageListener(NS_OURS, e => {
@@ -208,6 +205,7 @@ setInterval(() => {
 try{
   ctx.start(options);
   boot.textContent = "Contact Sheet";
+  setTimeout(() => reply({type:"started", version:5}), 500);
 }catch(err){
   // 指定が原因なら、最小限の構成で立ち上げ直す
   try{
@@ -215,6 +213,7 @@ try{
     basic.disableIdleTimeout = true;
     ctx.start(basic);
     boot.textContent = "Contact Sheet（簡易起動）";
+    setTimeout(() => reply({type:"started", version:5, basic:true}), 500);
   }catch(e2){
     boot.textContent = "起動できません: " + (e2 && e2.message || e2);
   }
