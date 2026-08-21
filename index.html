@@ -415,7 +415,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v163</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v164</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -536,6 +536,8 @@ details.sub[open]>summary{color:var(--text)}
           <div class="rack">
             <label class="check"><input id="autohq" type="checkbox"> 常に高画質で作る（遅い）</label>
             <label class="check"><input id="bgAudio" type="checkbox" checked> 画面を消しても音声を続ける</label>
+            <label class="check"><input id="wholeAudio" type="checkbox" checked>
+              音声を丸ごと取得してから再生（画面を消しても途切れない）</label>
             <div class="field"><label for="audioPrefetch">音声の先読み</label>
               <select id="audioPrefetch">
                 <option value="auto" selected>自動（Wi-Fi は 30 分 / モバイルは 10 分）</option>
@@ -789,7 +791,7 @@ const els = {};
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castWhere","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio","audioPrefetch","localQuality","forgetTiers","pCast","castProbe"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -4041,6 +4043,41 @@ async function enterAudioOnly(){
   els.pVideo.pause();
 
   try{
+    // まず丸ごと取得を試みる。取り切ってしまえば、以後は通信に左右されない。
+    if (els.wholeAudio.checked && !wholeAudioBusy){
+      wholeAudioBusy = true;
+      const big = els.audioVeil.querySelector(".big");
+      try{
+        const got = await fetchWholeAudio(currentFile, (done, total) => {
+          const pct = Math.round(done / total * 100);
+          big.textContent = `🎧 音声を取得しています… ${pct}%`;
+          els.pNote.textContent = `音声を取得中 ${pct}%（あと少しで通信不要になります）`;
+        });
+        releaseWholeAudio();
+        wholeAudioUrl = URL.createObjectURL(got.blob);
+        dashAudio.stop();
+        els.pAudio.src = wholeAudioUrl;
+        await new Promise(res => {
+          const done = () => { els.pAudio.removeEventListener("loadedmetadata", done); res(); };
+          els.pAudio.addEventListener("loadedmetadata", done);
+          setTimeout(res, 15000);
+        });
+        els.pAudio.currentTime = t;
+        els.pAudio.muted = false;
+        els.pAudio.volume = userVolume;
+        await els.pAudio.play();
+        big.textContent = "🎧 音声のみ再生中";
+        els.pNote.textContent = "音声のみ再生中（取得済み・通信不要）";
+        log(`音声を丸ごと取得しました（${Math.round(got.blob.size/1048576)}MB）。以後は通信に左右されません。`);
+        wholeAudioBusy = false;
+        return;
+      }catch(err){
+        wholeAudioBusy = false;
+        log("丸ごと取得に失敗: " + err.message + " / 区間配信に切り替えます");
+        big.textContent = "🎧 音声を準備しています…";
+      }
+    }
+
     const ok = await dashAudio.start(currentFile, els.pAudio, ["audio"], t);
     if (!ok) throw new Error("音声トラックを取り出せません");
     els.pAudio.muted = false;
@@ -4069,6 +4106,7 @@ function exitAudioOnly(){
   els.pAudio.pause();
   dashAudio.stop();
   els.pAudio.removeAttribute("src");
+  releaseWholeAudio();
   audioOnly = false;
   clearInterval(audioBufTimer); audioBufTimer = null;
   els.audioVeil.hidden = true;
@@ -4189,6 +4227,7 @@ function startAudioBufferReport(){
 
 async function restartAudioOnly(why){
   if (!audioOnly || !currentFile) return;
+  if (wholeAudioUrl) return;      // 丸ごと取得済みなら、立て直す必要がない
 
   // 通信が無いなら作り直せない。いま手元にあるぶんを守り、回復を待つ。
   if (navigator.onLine === false){
@@ -4256,6 +4295,63 @@ async function restartAudioOnly(why){
       els.pNote.textContent = offline ? "通信の回復を待っています…" : "音声を立て直しています…";
     }else{
       say("音声が止まりました。🎧 を押し直してください。", true);
+    }
+  }
+}
+
+/* ---- 音声を丸ごと取得してから再生する ----
+   区間ごとに取りに行く方式は、画面を消した端末では必ずどこかで止まる。
+   通信が眠り、手元の蓄えを使い切るためである。
+   音声は 1 時間でも 60MB 程度なので、先に全部取ってしまえば
+   以後は通信が切れても最後まで再生できる。 */
+let wholeAudioUrl = null;
+let wholeAudioBusy = false;
+
+function releaseWholeAudio(){
+  if (wholeAudioUrl){ URL.revokeObjectURL(wholeAudioUrl); wholeAudioUrl = null; }
+}
+
+async function fetchWholeAudio(file, onProgress){
+  const mpd = await getMpd(file);
+  if (!mpd) throw new Error("配信情報を取得できません");
+  const tr = parseTrack(mpd.xml, mpd.url, "audio");
+  if (!tr) throw new Error("音声が見つかりません");
+
+  const dur = mpdDuration(mpd.xml);
+  const count = Math.ceil(dur / tr.segDur);
+  if (!count) throw new Error("長さが分かりません");
+  log(`音声を丸ごと取得します: ${count} 区間 / ${fmtTC(dur)}`);
+
+  const parts = new Array(count + 1);
+  parts[0] = await fetchOne(tr.init);
+
+  // 6 本ずつ同時に取りに行く（1 本ずつでは時間がかかりすぎる）
+  let done = 0, next = 1;
+  const workers = Array.from({length: 6}, async () => {
+    for (;;){
+      const i = next++;
+      if (i > count) return;
+      parts[i] = await fetchOne(tr.template(i));
+      done++;
+      if (onProgress) onProgress(done, count);
+    }
+  });
+  await Promise.all(workers);
+
+  return {blob: new Blob(parts, {type:"audio/mp4"}), duration: dur};
+
+  async function fetchOne(url){
+    for (let attempt = 1; ; attempt++){
+      try{
+        await ensureFresh();
+        const u = url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
+        const r = await fetch(u);
+        if (!r.ok) throw new Error("区間 " + r.status);
+        return await r.arrayBuffer();
+      }catch(err){
+        if (attempt >= 30) throw err;
+        await new Promise(res => setTimeout(res, Math.min(15000, 1000 * attempt)));
+      }
     }
   }
 }
