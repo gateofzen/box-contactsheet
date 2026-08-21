@@ -385,7 +385,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v132</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v134</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -508,8 +508,8 @@ details.sub[open]>summary{color:var(--text)}
             <label class="check"><input id="bgAudio" type="checkbox" checked> 画面を消しても音声を続ける</label>
             <div class="field"><label for="audioPrefetch">音声の先読み</label>
               <select id="audioPrefetch">
-                <option value="auto" selected>自動（Wi-Fi は全部 / モバイルは 10 分）</option>
-                <option value="all">最後まで（電波が悪くても切れない）</option>
+                <option value="auto" selected>自動（Wi-Fi は 30 分 / モバイルは 10 分）</option>
+                <option value="all">30 分ぶん（電波が悪くても切れにくい）</option>
                 <option value="10">10 分ぶん</option>
                 <option value="5">5 分ぶん（通信量を抑える）</option>
               </select></div>
@@ -3234,12 +3234,8 @@ els.audioPrefetch.addEventListener("change", () => {
 
 els.castAppOnly.addEventListener("change", () => {
   localStorage.setItem("bcs_castapponly", els.castAppOnly.checked ? "1" : "0");
-  // 方式を切り替えると、前の要求がブラウザ側に残って次が拒否される。
-  // 読み込み直すのが最も確実。
-  say(els.castAppOnly.checked
-    ? "専用アプリを使う設定にしました。読み込み直します…"
-    : "受信ページ方式に戻しました。読み込み直します…");
-  setTimeout(() => location.reload(), 700);
+  if (els.castAppOnly.checked) loadCastSdk();
+  log("テレビへの送り方: " + (els.castAppOnly.checked ? "専用アプリ" : "受信ページ"));
 });
 
 els.castAppId.addEventListener("change", () => {
@@ -3441,13 +3437,14 @@ function connKind(){
 
 function audioPrefetchSeconds(){
   const mode = els.audioPrefetch ? els.audioPrefetch.value : "auto";
-  if (mode === "all") return 100000;
+  // 保存領域に収まる範囲で最大にする。際限なく貯めると満杯になって失敗する。
+  if (mode === "all") return 1800;          // 30 分ぶん（約 28MB）
   if (mode === "10") return 600;
   if (mode === "5")  return 300;
   // 自動: Wi-Fi なら全部、モバイル回線なら 10 分ぶん
   const c = connKind();
   if (c.saveData) return 300;
-  return c.type === "Wi-Fi" ? 100000 : 600;
+  return c.type === "Wi-Fi" ? 1800 : 600;
 }
 
 function createDashEngine(name){
@@ -3577,6 +3574,7 @@ function createDashEngine(name){
 
     targetOf(tr){
       if (tr.justSeeked) return tr.kind === "video" ? 8 : 12;
+      if (tr.capped) return tr.capped;      // 保存領域に収まる範囲まで
       if (tr.kind === "video") return 45;
       // 音声のみ再生では、電波が途切れても止まらないよう厚く貯める。
       // ただしモバイル回線では通信量が問題になるので、回線に応じて加減する。
@@ -3604,7 +3602,8 @@ function createDashEngine(name){
           const bufs = await Promise.all(nums.map(n => this.fetchSeg(tr.template(n))));
           if (this.stopped || tr.gen !== gen) break;
           for (const buf of bufs){
-            await this.append(tr, buf);
+            const ok = await this.appendWithSpace(tr, buf);
+            if (!ok) break;
             if (this.stopped || tr.gen !== gen) break;
             tr.next++;
           }
@@ -3619,6 +3618,7 @@ function createDashEngine(name){
           tr.retry++;
           // 通信断のときは静かに待つ。毎回記録すると溢れてしまう。
           const offline = /圏外|Failed to fetch|NetworkError/i.test(err.message);
+          if (/quota|full|QuotaExceeded/i.test(err.message)) tr.retry = 0;   // 満杯は失敗に数えない
           if (!offline || tr.retry <= 2 || tr.retry % 10 === 0)
             log(`${this.name}: ${tr.kind} 区間の取得に失敗 ` + err.message
                 + (offline ? `（通信断とみなして待機。${tr.retry} 回目）` : ""));
@@ -3637,6 +3637,38 @@ function createDashEngine(name){
       }finally{
         tr.busy = false;
         if (tr.again && !this.stopped){ tr.again = false; this.pump(tr); }
+      }
+    },
+
+    // 保存領域には限りがある。満杯になったら古い部分を捨て、
+    // 以後は貯める量を抑える（際限なく貯めようとすると失敗を繰り返す）。
+    async evict(tr){
+      try{
+        if (!tr.sb || tr.sb.updating || !tr.sb.buffered.length) return;
+        const t = this.el.currentTime;
+        const start = tr.sb.buffered.start(0);
+        const until = Math.max(start, t - 20);
+        if (until > start){
+          await new Promise(res => {
+            const done = () => { tr.sb.removeEventListener("updateend", done); res(); };
+            tr.sb.addEventListener("updateend", done);
+            try{ tr.sb.remove(start, until); }catch(_){ done(); }
+          });
+        }
+      }catch(_){}
+    },
+
+    async appendWithSpace(tr, buf){
+      try{ await this.append(tr, buf); return true; }
+      catch(err){
+        const msg = String(err && err.message || err);
+        if (!/quota|full|QuotaExceeded/i.test(msg)) throw err;
+        await this.evict(tr);
+        const ahead = this.aheadOf(tr);
+        tr.capped = Math.max(180, Math.floor(ahead * 0.8));
+        log(`${this.name}: 保存領域がいっぱいのため、先読みを ${Math.round(tr.capped/60)} 分に抑えます`);
+        try{ await this.append(tr, buf); return true; }
+        catch(_){ return false; }
       }
     },
 
@@ -3753,8 +3785,7 @@ async function enterAudioOnly(){
   audioLastT = -1; audioStuckAt = 0;
   const sec = audioPrefetchSeconds();
   const c = connKind();
-  log(`音声のみ再生: 回線 ${c.type}${c.saveData ? "（通信量節約）" : ""} / `
-    + (sec >= 100000 ? "最後まで先読みします" : `${Math.round(sec/60)} 分ぶん先読みします`));
+  log(`音声のみ再生: 回線 ${c.type}${c.saveData ? "（節約）" : ""} / ${Math.round(sec/60)} 分ぶん先読みします`);
   els.audioVeil.hidden = false;
   els.audioVeil.querySelector(".big").textContent = "🎧 音声を準備しています…";
   els.pAudioBtn.classList.add("btn-go");
@@ -4243,11 +4274,11 @@ async function checkCastReceiver(){
 }
 
 function castUrls(){
-  const id = (els.castAppId.value || "").trim();
-  // 候補を並べると、すべてを実行できる機器しか一覧に出ない。
-  // 専用アプリがまだ有効でない間は、それを混ぜるだけで機器が消えてしまう。
-  // どちらか一方だけを指定する。
-  return (els.castAppOnly.checked && id) ? ["cast:" + id] : [RECEIVER_URL];
+  // 機器の一覧は常に受信ページで求める。
+  // cast: を指定すると、それを扱える機器しか一覧に出ない
+  // （Android では専用アプリを起動できないため、機器が消えてしまう）。
+  // 専用アプリは Cast SDK 経由で起動するので、ここに混ぜる必要はない。
+  return [RECEIVER_URL];
 }
 
 function ensurePresRequest(){
@@ -4835,12 +4866,6 @@ function startCast(){
     return;
   }
 
-  if (castAvailable !== true && els.castAppOnly.checked && (els.castAppId.value || "").trim()
-      && !(typeof chrome !== "undefined" && chrome.cast && castSdkReady)){
-    log("専用アプリを使える機器が見つかりません");
-    log("専用アプリのみの設定で機器が見つかりません");
-    return;
-  }
   if (castAvailable !== true){
     // この状態で要求しても、ブラウザは選択画面を出さずに即座に閉じてしまう
     startCastSearch();
@@ -4908,13 +4933,7 @@ function setCastAvail(source, v){
     + (v ? "あり" : "なし"));
   refreshCastButton();
   const sdkUsable = typeof chrome !== "undefined" && chrome.cast && castSdkReady;
-  if (!any && !sdkUsable && els.castAppOnly.checked
-      && (els.castAppId.value || "").trim() && !castNoDeviceHinted){
-    // 専用アプリを実行できる端末しか一覧に出ない。見つからない＝まだ登録が効いていない。
-    castNoDeviceHinted = true;
-    log("専用アプリを実行できる機器が見つかりません（Chromecast の登録が未反映の可能性）");
-    els.pNote.textContent = "テレビが見つかりません";
-  }
+
   if (any){
     castNoDeviceHinted = false;
     stopCastSearch();
