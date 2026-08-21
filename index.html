@@ -318,6 +318,9 @@ details.sub[open]>summary{color:var(--text)}
 .castpanel .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
 .castq{background:var(--ink);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font-family:var(--mono);font-size:12px}
 .castpanel .sub{font-family:var(--mono);font-size:10.5px;color:var(--line)}
+.castpanel .quality{font-family:var(--mono);font-size:12px;color:var(--muted);
+  background:rgba(232,176,75,.10);border:1px solid rgba(232,176,75,.25);
+  border-radius:6px;padding:5px 10px;min-height:12px}
 .audioveil[hidden]{display:none}
 .audioveil{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;
   background:rgba(11,14,17,.94);text-align:center;cursor:pointer;padding:20px}
@@ -385,7 +388,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v134</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v135</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -666,7 +669,7 @@ details.sub[open]>summary{color:var(--text)}
           </select>
         </div>
         <div class="row"><button id="castStop" class="btn btn-stop">キャストを終える</button></div>
-        <div class="sub" id="castInfo"></div>
+        <div class="quality" id="castInfo"></div>
       </div>
       <div id="audioVeil" class="audioveil" hidden>
         <div>
@@ -977,12 +980,20 @@ function refreshTokens(){
 }
 async function ensureFresh(force){
   if (!auth.access || !auth.refresh) return;
+  // 期限まで 30 分以上あるなら、求められても更新しない。
+  // 短い間に何度も更新すると、Box 側で認証が無効になることがある。
+  if (force && Date.now() < auth.exp - 30*60*1000) return;
   if (!force && Date.now() < auth.exp - 10*60*1000) return;
   try{ await refreshTokens(); }
   catch(err){
-    log("更新に失敗:", err.message);
+    log("トークンの更新に失敗: " + err.message);
+    // まだ期限内なら、いまの資格で続けられる
+    if (Date.now() < auth.exp - 60*1000){
+      log("期限内のため、そのまま続けます");
+      return;
+    }
     setAuth(false, "再ログインが必要です");
-    say("セッションが切れました。もう一度ログインしてください。", true);
+    say("接続が切れました。もう一度ログインしてください。", true);
   }
 }
 setInterval(ensureFresh, 60000);   // 長いスキャン中でも切れないように
@@ -3945,7 +3956,7 @@ async function restartAudioOnly(why){
     dashAudio.stop();
     // 配信元の場所は時間が経つと通らなくなる。取り直す。
     mpdCache = {id:null, xml:null, url:null};
-    await ensureFresh(true).catch(() => {});
+    await ensureFresh().catch(() => {});
     const ok = await dashAudio.start(currentFile, els.pAudio, ["audio"], t);
     if (!ok) throw new Error("作り直せません");
     els.pAudio.muted = false;
@@ -4466,9 +4477,11 @@ function bindPresConn(conn){
         + ` / コマ落ち ${m.dropped}（${m.decoded} 中）`);
     }
     else if (m.type === "track"){
+      const label = m.height >= 1080 ? "フル HD" : m.height >= 720 ? "HD"
+                  : m.height >= 480 ? "標準画質" : "低画質";
       castTrack = m.bandwidth
-        ? `${m.width}x${m.height} ${Math.round(m.bandwidth/1000)} kbps`
-        : `${m.width}x${m.height}（原本）`;
+        ? `${label} ${m.width}×${m.height} / ${Math.round(m.bandwidth/1000)} kbps`
+        : `${label} ${m.width}×${m.height}（元のまま）`;
       els.castInfo.textContent = castTrack;
       log("テレビ側の画質: " + castTrack);
     }
