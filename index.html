@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v128</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v129</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3187,6 +3187,7 @@ function nudgeCast(delta){
   castSend({type:"seekBy", delta});
   castLastTime = Math.max(0, castLastTime + delta);
   castSeekedAt = Date.now();
+  castTimeAt = Date.now();
   els.castNow.textContent = fmtTC(castLastTime) + (castGotTime ? "" : "（推定）");
   if (castDuration) els.castSeek.value = String(Math.round(castLastTime / castDuration * 1000));
 }
@@ -3209,6 +3210,7 @@ els.castSeek.addEventListener("change", () => {
   // 推定表示の基準も動かす。動かさないと、次の推定で元の位置へ戻ってしまう。
   castLastTime = t;
   castSeekedAt = Date.now();
+  castTimeAt = Date.now();
   els.castNow.textContent = fmtTC(t) + (castGotTime ? "" : "（推定）");
   setTimeout(() => { castSeeking = false; }, 800);
 });
@@ -4126,7 +4128,7 @@ function startSdkCast(){
 // 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
 // テレビ側でもシークが速く、スマートフォンの負担も小さい。
 const RECEIVER_URL = new URL("receiver.html", location.href).href;
-const CAST_RECEIVER_VERSION = 14;   // cast-receiver.html に期待する版
+const CAST_RECEIVER_VERSION = 15;   // cast-receiver.html に期待する版
 
 let presReq = null;
 let presConn = null;
@@ -4147,6 +4149,8 @@ let castLastTime = 0;
 let castTickTimer = null;
 let castGotTime = false;
 let castSeekedAt = 0;
+let castSmoothTimer = null;
+let castTimeAt = 0;
 let castLoadRetry = null;
 let castLoadAcked = false;
 const castSawTypes = new Set();
@@ -4415,6 +4419,7 @@ function bindPresConn(conn){
     }
     else if (m.type === "time" && m.duration){
       castGotTime = true;
+      castTimeAt = Date.now();
       castDuration = m.duration || castDuration;
       castLastTime = m.time;
       if (!castSeeking){
@@ -4431,6 +4436,22 @@ function bindPresConn(conn){
   conn.addEventListener("terminate", endCast);
 
   // 位置の報告が届かない場合に気づけるようにする
+  // 報告の合間も 1 秒ごとに進めて、つまみを滑らかに動かす
+  clearInterval(castSmoothTimer);
+  castSmoothTimer = setInterval(() => {
+    if (!presConn) return clearInterval(castSmoothTimer);
+    if (!castPlaying || castSeeking) return;
+    if (Date.now() - castSeekedAt < 1200) return;
+    // 直近の報告からの経過ぶんを足して表示する
+    const elapsed = (Date.now() - castTimeAt) / 1000;
+    const shown = castLastTime + (castGotTime ? Math.min(elapsed, 4) : 0);
+    els.castNow.textContent = fmtTC(shown) + (castGotTime ? "" : "（推定）");
+    if (castDuration && !castSeeking)
+      els.castSeek.value = String(Math.round(shown / castDuration * 1000));
+    els.pMeta.textContent = `テレビ再生中  ${fmtTC(shown)} / ${fmtTC(castDuration)}`
+      + (castTrack ? `  ${castTrack}` : "");
+  }, 1000);
+
   clearInterval(castTickTimer);
   let ticks = 0;
   let startedSeen = false;
@@ -4467,6 +4488,7 @@ let castEnding = false;
 function endCast(){
   if (castEnding) return;
   clearInterval(castTickTimer); castTickTimer = null;
+  clearInterval(castSmoothTimer); castSmoothTimer = null;
   clearInterval(castLoadRetry); castLoadRetry = null;          // close と terminate の両方が来ることがある
   castEnding = true;
   clearInterval(castTimeTimer); castTimeTimer = null;
