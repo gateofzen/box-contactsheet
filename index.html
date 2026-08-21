@@ -404,7 +404,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v149</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v150</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4702,11 +4702,12 @@ let localGoodFrom = 0;
 let localStalls = 0;
 let localTuneTimer = null;
 let localRetryAt = 0;      // この時刻を過ぎたら、また上げてよい
+let localGrace = 0;        // 切り替え直後の猶予
 let localFails = 0;        // 失敗した回数（多いほど間を置く）
 
 function resetLocalTune(){
   localState = "配信用"; localGoodFrom = 0; localStalls = 0;
-  localRetryAt = 0; localFails = 0;
+  localRetryAt = 0; localFails = 0; localGrace = 0;
 }
 
 // いまどれだけ先まで受け取れているか
@@ -4751,6 +4752,7 @@ function startLocalTune(){
     const mode = els.localQuality.value;
     showLocalQuality();
     if (mode !== "auto") return;
+    if (Date.now() < localGrace){ localStalls = 0; localGoodFrom = 0; return; }
 
     const need = localOrigKbps();
     if (!need) return;
@@ -4794,6 +4796,7 @@ async function switchLocalTo(to, have, need, ahead){
   const t = els.pVideo.currentTime || lastGoodTime || 0;
   const playing = !els.pVideo.paused;
   localStalls = 0;
+  localGrace = Date.now() + 12000;      // 切り替え直後の止まりは数えない
 
   if (to === "原本"){
     log(`余裕があります（先読み ${Math.round(ahead || 0)} 秒 / 実測 ${have} kbps`
@@ -4828,9 +4831,11 @@ let autoGoodFrom = 0;
 let autoRetryAt = 0;
 let autoFails = 0;
 let autoStallBase = null;     // 最初の報告で決める（開始時の途切れを除くため）
+let autoGraceUntil = 0;       // 切り替え直後の落ち着くまでの猶予
 
 function resetAutoTune(){
-  autoTier = 0; autoGoodFrom = 0; autoRetryAt = 0; autoFails = 0; autoStallBase = null;
+  autoTier = 0; autoGoodFrom = 0; autoRetryAt = 0; autoFails = 0;
+  autoStallBase = null; autoGraceUntil = 0;
 }
 
 /* テレビ側の画質を、実際の再生の様子から決める。
@@ -4842,12 +4847,22 @@ const CAST_TIERS = ["自動", "高画質固定", "元ファイル"];
 function tierLabel(){ return CAST_TIERS[autoTier] || "自動"; }
 
 function autoTune(m){
-  // 受信側は再生開始時に必ず一度「途切れ」を数える。
-  // それを基準にしないと、いつまでも条件を満たせない。
-  if (autoStallBase === null){
+  // 画質を切り替えると読み込み直しになり、必ず一度は止まる。
+  // それを回線のせいと誤解しないよう、切り替え直後は数えない。
+  const badly = m.decoded > 200 && (m.dropped || 0) / m.decoded > 0.15;
+  if (Date.now() < autoGraceUntil && !badly){
+    // 切り替え直後の止まりは数えない。ただし映像が明らかに破綻していれば別。
+    autoStallBase = m.stalls || 0;
+    autoGoodFrom = 0;
+    return;
+  }
+  // 受信側は再生開始時にも一度「途切れ」を数える。
+  // ただし映像が破綻しているなら、基準決めより先に手を打つ。
+  if (autoStallBase === null && !badly){
     autoStallBase = m.stalls || 0;
     return;
   }
+  if (autoStallBase === null) autoStallBase = m.stalls || 0;
   const quiet = (m.stalls || 0) <= autoStallBase
     && (m.decoded > 200 ? (m.dropped || 0) / m.decoded < 0.05 : true);
 
@@ -4884,6 +4899,9 @@ function autoTune(m){
 function applyTier(){
   castStartTime = castLastTime || castStartTime;
   castTrack = "";
+  autoStallBase = null;
+  autoGoodFrom = 0;
+  autoGraceUntil = Date.now() + 15000;   // 落ち着くまで 15 秒は判断しない
   if (autoTier === 2) castLoadCurrent("orig");
   else if (autoTier === 1) castLoadCurrent("-1080");
   else castLoadCurrent("0");
