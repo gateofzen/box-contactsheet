@@ -126,6 +126,12 @@ b{font-weight:600}
 .chip.fav.active{color:#171208}
 
 /* ---------- grid ---------- */
+.loading{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:12px;padding:60px 20px;color:var(--muted)}
+.loading .spin{width:26px;height:26px;border:2px solid var(--line);
+  border-top-color:var(--amber);border-radius:50%;animation:spin .9s linear infinite}
+.loading .lt{font-family:var(--mono);font-size:12px;letter-spacing:.05em}
+@keyframes spin{to{transform:rotate(360deg)}}
 .sheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--col),1fr));gap:18px}
 .card{background:var(--surface);border:1px solid var(--line-soft);border-radius:10px;
   overflow:hidden;display:flex;flex-direction:column;transition:border-color .15s}
@@ -404,7 +410,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v154</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v155</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1346,6 +1352,7 @@ function folderRow(id, depth){
   name.textContent = node.name;
   name.title = "ID " + id;
   name.addEventListener("click", () => {
+    clearSheet(node.name);         // 前のフォルダの内容をすぐ片づける
     selectFolder(id);
     if (!fopen.has(id)) toggleFolder(id);
     closeDrawer();
@@ -1604,6 +1611,26 @@ function absorbMetadata(entry){
   idbPut("marks", {id:entry.id, fav:m.fav, rate:m.rate, tags:m.tags, plays:m.plays, last:m.last, dirty:false});
 }
 
+// フォルダを切り替えたら、前の内容をすぐ消す。
+// 読み込みが終わるまで古い一覧が残ると、切り替わったのか分からない。
+function currentFolderName(){
+  const on = els.tree.querySelector(".node.on .nname");
+  return on ? on.textContent : "";
+}
+
+function clearSheet(name){
+  files = []; cardById.clear(); picked.clear(); viewById.clear();
+  rendered = 0;
+  els.sheet.innerHTML = "";
+  const box = document.createElement("div");
+  box.className = "loading";
+  box.innerHTML = `<div class="spin"></div><div class="lt">`
+    + (name ? escapeHtml(name) : "フォルダ") + ` を開いています…</div>`;
+  els.sheet.appendChild(box);
+  refreshCounts();
+  syncStatusLine();
+}
+
 async function scan(scanTarget, deep){
   const rootId = String(scanTarget || els.folder.value.trim() || "0");
   // 既定は直下のみ。deep のときだけ設定された階層まで潜る。
@@ -1616,7 +1643,8 @@ async function scan(scanTarget, deep){
   scanAbort = ctl;
   els.scan.disabled = true; els.cancel.hidden = false; setBusy(true); syncStatusLine();
   els.authDot.className = "dot busy"; say("");
-  files = []; cardById.clear(); picked.clear(); els.sheet.innerHTML = ""; rendered = 0;
+  if (!els.sheet.querySelector(".loading")) clearSheet(currentFolderName());
+  files = []; cardById.clear(); picked.clear(); rendered = 0;
 
   const queue = [{id:rootId, depth:0, path:""}];
   let folders = 0;
