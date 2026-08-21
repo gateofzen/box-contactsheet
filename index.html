@@ -263,6 +263,9 @@ b{font-weight:600}
   border-radius:6px;font-family:var(--mono);font-size:11px;line-height:1.7;color:var(--muted);
   white-space:pre-wrap;max-height:300px;overflow:auto}
 .report b{color:var(--amber);font-weight:500}
+details.sub{margin:8px 0 4px;border-left:2px solid var(--line-soft);padding-left:10px}
+details.sub>summary{cursor:pointer;font-size:11.5px;color:var(--muted);padding:4px 0}
+details.sub[open]>summary{color:var(--text)}
 .debug{margin-top:12px;font-family:var(--mono);font-size:11px}
 .debug summary{cursor:pointer;color:var(--muted);padding:6px 0}
 .debug pre{margin:0;padding:8px 0;white-space:pre-wrap;color:var(--muted);max-height:260px;overflow:auto}
@@ -382,7 +385,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v131</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v132</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -510,23 +513,26 @@ b{font-weight:600}
                 <option value="10">10 分ぶん</option>
                 <option value="5">5 分ぶん（通信量を抑える）</option>
               </select></div>
-            <label class="check"><input id="dashVideoOpt" type="checkbox" checked> 映像も区間配信で受け取る（シークが速い）</label>
-            <div class="field"><label for="castAppId">Cast アプリ ID</label>
-              <input id="castAppId" class="w-token" type="text" placeholder="空にすると既定に戻ります"
-                autocomplete="off" spellcheck="false" data-lpignore="true"></div>
-            <label class="check"><input id="castAppOnly" type="checkbox"> 専用アプリを使う（公開・登録が済んでから有効にしてください）</label>
-            <div class="field"><label for="castMethod">キャストの方式</label>
-              <select id="castMethod">
-                <option value="auto" selected>自動（受信ページ方式）</option>
-                <option value="receiver">受信ページ（手元で操作できる）</option>
-                <option value="standard">標準方式（多くの環境で一覧が出ません）</option>
-              </select></div>
-            <label class="check"><input id="castFirst" type="checkbox"> テレビで観る（区間配信を使わず、押してすぐキャストできる）</label>
+            <label class="check"><input id="castAppOnly" type="checkbox" checked> テレビへは専用アプリで送る（推奨）</label>
+
+            <details class="sub"><summary>詳しい設定</summary>
+              <label class="check"><input id="dashVideoOpt" type="checkbox" checked> 映像を区間ごとに受け取る（シークが速い）</label>
+              <label class="check"><input id="castFirst" type="checkbox"> テレビ用の再生で始める</label>
+              <div class="field"><label for="castMethod">キャストの方式</label>
+                <select id="castMethod">
+                  <option value="auto" selected>自動</option>
+                  <option value="receiver">受信ページ</option>
+                  <option value="standard">端末まかせ</option>
+                </select></div>
+              <div class="field"><label for="castAppId">Cast アプリ ID</label>
+                <input id="castAppId" class="w-token" type="text" placeholder="空にすると既定に戻ります"
+                  autocomplete="off" spellcheck="false" data-lpignore="true"></div>
+            </details>
             <div class="field"><label for="castQuality">テレビ側の画質</label>
               <select id="castQuality">
-                <option value="orig">原本のまま（最高画質・シークは遅い）</option>
-                <option value="0" selected>自動（回線に合わせる・推奨）</option>
-                <option value="-1080">最高画質で固定（回線に余裕があるとき）</option>
+                <option value="orig">元のまま（最高画質・シークは遅い）</option>
+                <option value="0" selected>自動（推奨）</option>
+                <option value="-1080">高画質で固定</option>
                 <option value="1080">1080p まで</option>
                 <option value="720">720p まで</option>
                 <option value="-480">低画質で固定（途切れにくい）</option>
@@ -548,8 +554,8 @@ b{font-weight:600}
             <label class="check"><input id="sync" type="checkbox" checked> タグを Box に保存して端末間で共有</label>
             <label class="check"><input id="personalTags" type="checkbox" checked> タグ・お気に入り・再生回数を自分専用にする</label>
             <label class="check"><input id="shareThumbs" type="checkbox" checked> サムネイルも Box に置いて共有</label>
-            <button id="shareCheck" class="btn btn-sm">共有サムネイルの状態を確認</button>
-            <button id="statsBtn" class="btn btn-sm">全員の再生状況を集計</button>
+            <button id="statsBtn" class="btn btn-sm">みんなの再生状況</button>
+            <button id="shareCheck" class="btn btn-sm">サムネイルの共有状態</button>
             <button id="exportBtn" class="btn btn-sm">書き出し</button>
             <button id="importBtn" class="btn btn-sm">読み込み</button>
             <input id="importFile" type="file" accept="application/json" hidden>
@@ -655,7 +661,7 @@ b{font-weight:600}
           <select id="castQ2" class="castq">
             <option value="orig">原本のまま（最高画質）</option>
             <option value="-1080">配信用・最高画質で固定</option>
-            <option value="0" selected>自動（回線に合わせる・推奨）</option>
+            <option value="0" selected>自動（推奨）</option>
             <option value="-480">低画質で固定</option>
           </select>
         </div>
@@ -1371,7 +1377,6 @@ async function prefetchThumbs(list){
     eta.tick();
     els.progress.textContent =
       `サムネイル ${done}/${list.length}`
-      + `　端末内 ${srcStats.local} / 共有から ${srcStats.shared} / 新規 ${srcStats.made}`
       + (pend ? ` / Box生成待ち ${pend}` : "")
       + (done < list.length ? `　${eta.remain(list.length - done)}` : "");
     syncStatusLine();
@@ -1382,10 +1387,10 @@ async function prefetchThumbs(list){
   els.prefetch.hidden = true; setBusy(false);
   els.progress.textContent = batchStop
     ? `中止しました（${done}/${list.length}）`
-    : `${files.length} 本の動画　端末内 ${srcStats.local} / 共有から ${srcStats.shared} / 新規 ${srcStats.made}`
+    : `${files.length} 本の動画`
       + (pend ? ` / Box生成待ち ${pend}` : "");
-  log(`内訳: 端末内から ${srcStats.local} / 共有から ${srcStats.shared} / `
-    + `新規作成 ${srcStats.made} / 共有の失敗 ${srcStats.failed}`);
+  log(`内訳: 端末内 ${srcStats.local} / 共有 ${srcStats.shared} / `
+    + `新規 ${srcStats.made} / 失敗 ${srcStats.failed}`);
   if (srcStats.local === done && done > 0)
     log("すべて端末内にあったため、共有キャッシュは参照していません。"
       + "共有の動作を確かめるには「サムネイルを捨てて作り直す」を押してください。");
@@ -2560,7 +2565,7 @@ async function openPlayer(file, startAt){
         castReadyUrl = url;
         videoKind = "キャスト用";
         els.pVideo.src = url;
-        els.pNote.textContent = "キャスト用に再生中（📺 でテレビの一覧が出ます）";
+        els.pNote.textContent = "";
         log("キャスト前提の再生で始めます");
         usedDash = true;   // 区間配信の処理を飛ばす
       }
@@ -2570,7 +2575,7 @@ async function openPlayer(file, startAt){
         if (await dashMain.start(file, els.pVideo, ["video","audio"])){
           if (await waitFor(() => els.pVideo.readyState >= 2, 5000)){
             usedDash = true; videoKind = "DASH";
-            els.pNote.textContent = "再生中（区間配信）";
+            els.pNote.textContent = "";
             log("区間配信で再生します");
           }else throw new Error("再生可能になりません");
         }else throw new Error("開始できません");
@@ -2582,7 +2587,7 @@ async function openPlayer(file, startAt){
     if (!usedDash && videoKind !== "キャスト用"){
       videoKind = "原本";
       els.pVideo.src = originalUrl(file);
-      els.pNote.textContent = "原本を再生中";
+      els.pNote.textContent = "";
     }
     if (pendingStart != null){
       if (isFinite(els.pVideo.duration)) applyPendingStart();
@@ -3224,7 +3229,7 @@ els.castQ2.addEventListener("change", () => {
 els.audioPrefetch.addEventListener("change", () => {
   localStorage.setItem("bcs_prefetch", els.audioPrefetch.value);
   const sec = audioPrefetchSeconds();
-  say(sec >= 100000 ? "音声を最後まで先読みします" : `音声を ${Math.round(sec/60)} 分ぶん先読みします`);
+  log(sec >= 100000 ? "音声を最後まで先読みします" : `音声を ${Math.round(sec/60)} 分ぶん先読みします`);
 });
 
 els.castAppOnly.addEventListener("change", () => {
@@ -3260,7 +3265,7 @@ els.castQuality.addEventListener("change", () => {
     // 原本と区間配信の切り替えは読み込み直しが要る
     castStartTime = castLastTime || castStartTime;
     castLoadCurrent();
-    say("テレビ側の画質を変更しました");
+    
   }
 });
 
@@ -3275,7 +3280,7 @@ els.sortMenu.addEventListener("click", e => {
   localStorage.setItem("bcs_sort", els.sort.value);
   openSortMenu(false);
   applyView();
-  say("並び順: " + item.textContent);
+  
 });
 document.addEventListener("click", () => { if (!els.sortMenu.hidden) openSortMenu(false); });
 document.addEventListener("keydown", e => { if (e.key === "Escape" && !els.sortMenu.hidden) openSortMenu(false); });
@@ -3893,8 +3898,8 @@ function startAudioBufferReport(){
       }
       els.castInfo && (els.castInfo.textContent = "");
       els.pNote.textContent = ahead > 60
-        ? `音声のみ再生中（${min} 分先まで手元にあります）`
-        : "音声のみ再生中（先読み中…）";
+        ? `音声のみ再生中（${min} 分先まで取得済み）`
+        : "音声のみ再生中";
     }
   }, 3000);
 }
@@ -3918,7 +3923,7 @@ async function restartAudioOnly(why){
     log("音声の流れを作り直しました");
   }catch(err){
     log("作り直しに失敗: " + err.message);
-    say("音声が止まりました。🎧 を押し直すか、動画を開き直してください。", true);
+    say("音声が止まりました。🎧 を押し直してください。", true);
   }
 }
 
@@ -4129,11 +4134,11 @@ function startSdkCast(){
       if (code === "cancel"){
         els.pNote.textContent = "キャストを取り消しました";
       }else if (code === "session_error"){
-        els.pNote.textContent = "テレビ側で専用アプリを開始できませんでした";
+        els.pNote.textContent = "テレビ側で開始できませんでした";
         say("テレビ側で専用アプリを開始できませんでした。診断ログの「専用アプリの置き場」の行で、"
           + "版が " + CAST_RECEIVER_VERSION + " になっているか確認してください。", true);
       }else if (code === "receiver_unavailable"){
-        els.pNote.textContent = "この機器では専用アプリを使えません";
+        els.pNote.textContent = "この機器へはキャストできません";
         say("この機器では専用アプリを使えません。「専用アプリを使う」を外してお使いください。", true);
       }else{
         els.pNote.textContent = "専用アプリを起動できません（" + code + "）";
@@ -4320,7 +4325,7 @@ function bindPresConn(conn){
   log("テレビ側で起動したもの: " + (used || "(不明)")
     + (castViaApp ? "  → 専用アプリ" : "  → 受信ページ"));
   if (els.castAppOnly.checked && !castViaApp)
-    say("専用アプリを起動できず、受信ページで再生しています。", true);
+    log("専用アプリを起動できず、受信ページで再生しています");
   castMode = true;
   refreshCastButton();   // 点灯は「テレビで再生中」のときだけ
   els.pNote.textContent = "テレビへ送っています…";
@@ -4367,7 +4372,7 @@ function bindPresConn(conn){
         castLoadAcked = true;
         clearInterval(castLoadRetry); castLoadRetry = null;
         log("テレビが再生の指示を受け取りました" + (m.time ? `（${fmtTC(m.time)} から）` : ""));
-        els.pNote.textContent = "テレビで再生中（この画面から操作できます）";
+        els.pNote.textContent = "テレビで再生中";
       }
     }
     else if (m.type === "pong"){
@@ -4384,7 +4389,7 @@ function bindPresConn(conn){
     else if (m.type === "ready") castLoadCurrent();
     else if (m.type === "loaded"){
       log("テレビで再生を開始しました");
-      els.pNote.textContent = "テレビで再生中（この画面から操作できます）";
+      els.pNote.textContent = "テレビで再生中";
     }
     else if (m.type === "error"){
       log("テレビ側のエラー: " + (m.message || m.code));
@@ -4405,7 +4410,7 @@ function bindPresConn(conn){
         castAdvised = true;
         log(`テレビ側の描画が追いついていません（コマ落ち ${m.dropped}/${m.decoded}、`
           + `帯域は ${m.estimate} kbps で十分）`);
-        say("回線は足りていますが、テレビ側の処理が追いついていません。低画質で固定すると改善することがあります。", true);
+        log("帯域は足りていますが、テレビ側の処理が追いついていません");
       }
       // 回線に余裕がないと、いくら固定しても途切れる。
       // ただし再生開始直後の値は「まだ測っていない初期値」なので判断に使わない。
@@ -4530,7 +4535,7 @@ function endCast(){
         els.pVideo.currentTime = Math.min(resumeAt, els.pVideo.duration - 0.5);
       if (wantPlay) els.pVideo.play().catch(() => {});
     }, {once:true});
-    els.pNote.textContent = `手元で再生中（テレビの続き ${fmtTC(resumeAt)} から）`;
+    els.pNote.textContent = `テレビの続き ${fmtTC(resumeAt)} から再生中`;
     log("手元での再生を再開します: " + fmtTC(resumeAt));
 
     // 区間配信に戻せるなら戻す（シークが軽いので）
@@ -4542,7 +4547,7 @@ function endCast(){
           if (await dashMain.start(f, els.pVideo, ["video","audio"], keep)){
             if (await waitFor(() => els.pVideo.readyState >= 2, 5000)){
               videoKind = "DASH";
-              els.pNote.textContent = "再生中（区間配信）";
+              els.pNote.textContent = "";
               if (wantPlay) els.pVideo.play().catch(() => {});
               log("区間配信に戻しました: " + fmtTC(keep));
             }else throw new Error("再生可能になりません");
@@ -4567,7 +4572,7 @@ async function startPresentationCast(){
   // 選択画面は同時に 1 つしか出せない。前の要求が残っていると拒否される。
   if (presStarting){
     log("選択画面を出している最中です");
-    els.pNote.textContent = "テレビの選択画面が開いています。そちらで選ぶか閉じてください。";
+    els.pNote.textContent = "テレビの選択画面が開いています";
     return false;
   }
   const req = ensurePresRequest();
@@ -4582,7 +4587,7 @@ async function startPresentationCast(){
     const msg = err.message || "";
     log("キャストできません: " + msg);
     if (/unsettled Promise/i.test(msg)){
-      els.pNote.textContent = "キャストの状態が固まっています。読み込み直してください。";
+      els.pNote.textContent = "キャストをやり直してください";
       say("キャストの要求が残ったままです。「やり直す」を押すか、画面を読み込み直してください。", true);
       showCastReset();
     }else{
@@ -4612,7 +4617,7 @@ async function restoreLocalPlayback(reason){
       if (await dashMain.start(currentFile, els.pVideo, ["video","audio"], t)){
         if (await waitFor(() => els.pVideo.readyState >= 2, 5000)){
           videoKind = "DASH";
-          els.pNote.textContent = "再生中（区間配信）";
+          els.pNote.textContent = "";
           if (wantPlay) els.pVideo.play().catch(()=>{});
           return;
         }
@@ -4626,7 +4631,7 @@ async function restoreLocalPlayback(reason){
     els.pVideo.currentTime = t;
     if (wantPlay) els.pVideo.play().catch(()=>{});
   }, {once:true});
-  els.pNote.textContent = "原本を再生中";
+  els.pNote.textContent = "";
 }
 
 // 標準方式：単一ファイルを読み込ませてから、端末標準の一覧を出す
@@ -4638,7 +4643,7 @@ function startStandardCast(){
   const ready = videoKind === "キャスト用" && els.pVideo.readyState >= 1;
   if (!ready){
     if (!castReadyUrl){
-      els.pNote.textContent = "準備をしています。数秒後にもう一度押してください。";
+      els.pNote.textContent = "準備中です。少し待ってからお試しください";
       prepareCast(currentFile);
       return;
     }
@@ -4650,12 +4655,12 @@ function startStandardCast(){
     els.pVideo.addEventListener("loadedmetadata", () => {
       els.pVideo.currentTime = t;
       if (playing) els.pVideo.play().catch(()=>{});
-      els.pNote.textContent = "準備できました。もう一度 📺 を押すとテレビの一覧が出ます。";
+      els.pNote.textContent = "もう一度 📺 を押してください";
       refreshCastButton();
       playerToast("📺 もう一度押してください");
       log("キャスト用の読み込みが完了しました");
     }, {once:true});
-    els.pNote.textContent = "キャスト用に切り替えています…（1〜2 秒）";
+    els.pNote.textContent = "テレビの準備をしています…";
     log("キャスト用に切り替えます: " + (els.pVideo.src || "").slice(0, 60));
     // 読み込めないまま黒画面で取り残されないようにする
     waitFor(() => els.pVideo.readyState >= 1, 8000).then(ok => {
@@ -4669,7 +4674,7 @@ function startStandardCast(){
   promptedAt = Date.now();
   els.pNote.textContent = "テレビを選んでください…";
   els.pVideo.remote.prompt()
-    .then(() => { log("標準方式で接続しました"); els.pNote.textContent = "テレビで再生中（標準方式）"; })
+    .then(() => { log("標準方式で接続しました"); els.pNote.textContent = "テレビで再生中"; })
     .catch(err => {
       const msg = err.message || "";
       log("標準方式でキャストできません: " + msg);
@@ -4679,8 +4684,8 @@ function startStandardCast(){
         if (Date.now() - promptedAt < 1500 && presSupported()){
           els.castMethod.value = "auto";
           localStorage.setItem("bcs_castmethod", "auto");
-          els.pNote.textContent = "この環境では標準方式の一覧が出ません。受信ページ方式に戻しました。";
-          say("標準方式では一覧が出ないため、受信ページ方式に戻しました。もう一度 📺 を押してください。", true);
+          els.pNote.textContent = "";
+          log("標準方式では一覧が出ないため、受信ページ方式へ戻しました");
           log("標準方式は一覧が出ないため、受信ページ方式へ戻しました");
         }else{
           els.pNote.textContent = "キャストを取り消しました";
@@ -4693,7 +4698,7 @@ function startStandardCast(){
         els.castMethod.value = "receiver";
         localStorage.setItem("bcs_castmethod", "receiver");
         els.pNote.textContent = "この端末では標準方式を使えないため、受信ページ方式に切り替えました。もう一度 📺 を押してください。";
-        say("この端末では標準方式を使えません。受信ページ方式に切り替えました。", true);
+        log("この端末では標準方式を使えないため、受信ページ方式へ切り替えました");
         log("受信ページ方式へ自動的に切り替えました");
       }else{
         els.pNote.textContent = /dismiss|closed/i.test(msg)
@@ -4802,7 +4807,7 @@ function startCast(){
 
   if (!ready){
     if (!castReadyUrl){
-      els.pNote.textContent = "キャストの準備をしています。数秒後にもう一度押してください。";
+      els.pNote.textContent = "準備中です。少し待ってからお試しください";
       prepareCast(currentFile);
       return;
     }
@@ -4815,14 +4820,14 @@ function startCast(){
       els.pVideo.addEventListener("loadedmetadata", () => {
         els.pVideo.currentTime = t;
         if (playing) els.pVideo.play().catch(()=>{});
-        els.pNote.textContent = "準備できました。もう一度 📺 を押すとテレビの一覧が出ます。";
+        els.pNote.textContent = "もう一度 📺 を押してください";
         els.pCast.disabled = false;
         refreshCastButton();   // 点灯は「テレビで再生中」のときだけ
         els.pCast.style.opacity = "";
         playerToast("📺 もう一度押してください");
         log("キャスト用の読み込みが完了しました");
       }, {once:true});
-      els.pNote.textContent = "キャスト用に切り替えています…（1〜2 秒）";
+      els.pNote.textContent = "テレビの準備をしています…";
       els.pCast.disabled = true;
       els.pCast.style.opacity = ".45";
       log("キャスト用の再生に切り替えます");
@@ -4832,8 +4837,7 @@ function startCast(){
 
   if (castAvailable !== true && els.castAppOnly.checked && (els.castAppId.value || "").trim()
       && !(typeof chrome !== "undefined" && chrome.cast && castSdkReady)){
-    say("専用アプリを使える機器が見つかりません。Chromecast の登録が反映されるまで待つか、"
-      + "「専用アプリだけを使う」を外すと従来の方式で使えます。", true);
+    log("専用アプリを使える機器が見つかりません");
     log("専用アプリのみの設定で機器が見つかりません");
     return;
   }
@@ -4876,8 +4880,8 @@ function startCastSearch(){
   castSearchTimer = setInterval(() => {
     if (castAvailable === true || videoKind !== "キャスト用") return stopCastSearch();
     const sec = Math.round((Date.now() - castSearchFrom) / 1000);
-    els.pNote.textContent = `テレビを探しています… ${sec} 秒`
-      + (sec > 40 ? "（見つからない場合は同じ Wi-Fi か確認してください）" : "（30〜60 秒かかることがあります）");
+    els.pNote.textContent = "テレビを探しています…"
+      + (sec > 40 ? "（同じ Wi-Fi か確認してください）" : "");
   }, 1000);
 }
 function stopCastSearch(){ clearInterval(castSearchTimer); castSearchTimer = null; }
@@ -4909,7 +4913,7 @@ function setCastAvail(source, v){
     // 専用アプリを実行できる端末しか一覧に出ない。見つからない＝まだ登録が効いていない。
     castNoDeviceHinted = true;
     log("専用アプリを実行できる機器が見つかりません（Chromecast の登録が未反映の可能性）");
-    els.pNote.textContent = "専用アプリを使える機器が見つかりません";
+    els.pNote.textContent = "テレビが見つかりません";
   }
   if (any){
     castNoDeviceHinted = false;
@@ -4973,7 +4977,7 @@ function bindCast(){
   r.addEventListener("connect", () => {
     castMode = true;
     refreshCastButton();   // 点灯は「テレビで再生中」のときだけ
-    els.pNote.textContent = "テレビで再生中（この画面から操作できます）";
+    els.pNote.textContent = "テレビで再生中";
     log("キャスト開始");
   });
   r.addEventListener("disconnect", () => {
@@ -5265,7 +5269,7 @@ els.installBtn.addEventListener("click", async () => {
 });
 window.addEventListener("appinstalled", () => {
   els.installBtn.hidden = true;
-  say("ホーム画面に追加しました");
+  
 });
 if ("serviceWorker" in navigator){
   window.addEventListener("load", () => {
@@ -5314,7 +5318,7 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   els.castQuality.value = localStorage.getItem("bcs_castq") || "0";
   els.castMethod.value = localStorage.getItem("bcs_castmethod") || "auto";
   els.castAppId.value = (localStorage.getItem("bcs_castappid") || "").trim() || DEFAULTS.castAppId;
-  els.castAppOnly.checked = localStorage.getItem("bcs_castapponly") === "1";
+  els.castAppOnly.checked = localStorage.getItem("bcs_castapponly") !== "0";
   els.audioPrefetch.value = localStorage.getItem("bcs_prefetch") || "auto";
   els.personalTags.checked = localStorage.getItem("bcs_personal") !== "0";   // 既定は自分専用
   document.documentElement.style.setProperty("--col", els.col.value + "px");
@@ -5323,7 +5327,7 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   loadAuth();
   saveAuth();
   renderTree();
-  log("ready");
+  log("起動しました v" + (els.ver ? els.ver.textContent : ""));
 
   // 起動時に一度だけ空にする。ブラウザが値を復元することがあるため。
   els.q.value = "";
