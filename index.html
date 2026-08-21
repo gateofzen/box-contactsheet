@@ -415,7 +415,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v161</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v162</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -596,7 +596,7 @@ details.sub[open]>summary{color:var(--text)}
             <label class="check"><input id="sync" type="checkbox" checked> タグを Box に保存して端末間で共有</label>
             <label class="check"><input id="personalTags" type="checkbox" checked> タグ・評価・再生回数を自分専用にする</label>
             <label class="check"><input id="shareThumbs" type="checkbox" checked> サムネイルも Box に置いて共有</label>
-            <button id="hqAll" class="btn btn-sm">表示中をすべて高画質に</button>
+            <button id="hqAll" class="btn btn-sm">サムネイルを高画質に…</button>
             <button id="statsBtn" class="btn btn-sm">みんなの再生状況</button>
             <button id="shareCheck" class="btn btn-sm">サムネイルの共有状態</button>
             <button id="exportBtn" class="btn btn-sm">書き出し</button>
@@ -2942,18 +2942,46 @@ let hqRunning = false;
 els.hqAll.addEventListener("click", async () => {
   if (hqRunning){ hqRunning = false; return; }         // 押し直しで中止
 
+  const folderName = els.selName.textContent || "選択中のフォルダ";
+  let targets = deepScan ? files.slice() : view.slice();
+
+  // 直下だけを読んでいる場合は、配下すべてに広げられる
+  if (!deepScan){
+    const ans = confirm(`高画質にする範囲を選んでください。\n\n`
+      + `［OK］ ${folderName} の配下すべて（サブフォルダを含む）\n`
+      + `［キャンセル］ いま表示している ${view.length} 本だけ`);
+    if (ans){
+      els.progress.textContent = "配下の動画を数えています…";
+      els.hqAll.textContent = "数えています…";
+      try{
+        await openSelectedFolder(true);        // 配下すべてを読み込む
+        // 表示は直下だけだが、files には配下すべてが入る
+        targets = files.slice();
+      }catch(err){
+        els.hqAll.textContent = "サムネイルを高画質に…";
+        say("配下を読み込めません: " + err.message, true);
+        return;
+      }
+    }
+  }
+
   // まだ高画質になっていないものだけを対象にする
   const todo = [];
-  for (const f of view){
+  for (const f of targets){
     const rec = await idbGet("thumbs", f.id).catch(() => null);
     if (!rec || !rec.hq) todo.push(f);
   }
-  if (!todo.length){ say("表示中の動画はすべて高画質です"); return; }
+  els.hqAll.textContent = "サムネイルを高画質に…";
+  if (!todo.length){
+    syncStatusLine();
+    say(`${targets.length} 本すべてが高画質です`);
+    return;
+  }
 
   const mins = Math.ceil(todo.length * 20 / 60);
-  if (!confirm(`${todo.length} 本を高画質にします。\n`
+  if (!confirm(`${targets.length} 本のうち ${todo.length} 本を高画質にします。\n`
     + `1 本あたり 10〜30 秒かかるため、目安は ${mins} 分ほどです。\n`
-    + `この画面を開いたまま進めてください。始めますか？`)) return;
+    + `この画面を開いたまま進めてください。始めますか？`)) { syncStatusLine(); return; }
 
   hqRunning = true;
   let done = 0, failed = 0;
@@ -2977,7 +3005,7 @@ els.hqAll.addEventListener("click", async () => {
 
   const stopped = !hqRunning;
   hqRunning = false;
-  els.hqAll.textContent = "表示中をすべて高画質に";
+  els.hqAll.textContent = "サムネイルを高画質に…";
   syncStatusLine();
   say(stopped ? `中止しました（${done} 本を高画質にしました）`
     : failed ? `${done} 本を高画質にしました（${failed} 本は失敗）`
