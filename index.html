@@ -404,7 +404,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v152</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v153</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -978,6 +978,18 @@ function absorbTokens(d){
   auth.exp = Date.now() + ((d.expires_in || 3600) * 1000);
   saveAuth();
   log("トークンを取得しました。次の更新は " + new Date(auth.exp - 5*60*1000).toLocaleTimeString("ja-JP"));
+
+  // テレビは古いトークンでは取りに行けない。更新した瞬間に伝える。
+  if (presConn){
+    castSend({type:"token", token: auth.access});
+    log("新しいトークンをテレビへ伝えました");
+    // 元ファイルは場所そのものにトークンが埋まっているので、送り直しが要る
+    if (autoTier === 2 || els.castQuality.value === "orig"){
+      castStartTime = castLastTime || castStartTime;
+      castLoadCurrent(autoTier === 2 ? "orig" : undefined);
+      log("元ファイルの場所を送り直しました");
+    }
+  }
 }
 
 function startLogin(){
@@ -4317,6 +4329,8 @@ const castSawTypes = new Set();
 let castStartedLogged = false;
 let castDowngraded = false;
 let castDeviceName = "";
+let castDeadFrom = 0;
+let castReviving = false;
 let lastGoodTime = 0;   // 読み込み直しの最中は位置が 0 に戻るため、直前の値を控える
 let lastGoodDuration = 0;
 
@@ -4502,6 +4516,7 @@ function bindPresConn(conn){
   castSawTypes.clear();
   castStartedLogged = false;
   castDowngraded = false;
+  castDeadFrom = 0; castReviving = false;
   resetAutoTune();
   els.pVideo.pause();
   dashMain.stop();
@@ -4567,6 +4582,19 @@ function bindPresConn(conn){
         log(`  ${t.w}x${t.h}  ${t.bw} kbps${t.active ? "  ← 使用中" : ""}`));
     }
     else if (m.type === "stats"){
+      // 映像の大きさが 0 のまま続く＝テレビ側で再生が止まっている
+      if (!m.w && !m.h && !m.decoded){
+        if (!castDeadFrom) castDeadFrom = Date.now();
+        else if (Date.now() - castDeadFrom > 15000 && !castReviving){
+          castReviving = true;
+          log("テレビ側の再生が止まっています。送り直します。");
+          els.pNote.textContent = "テレビの再生を立て直しています…";
+          castStartTime = castLastTime || castStartTime;
+          castSend({type:"token", token: token()});
+          castLoadCurrent();
+          setTimeout(() => { castReviving = false; castDeadFrom = 0; }, 12000);
+        }
+      }else castDeadFrom = 0;
       // 【自動】余裕があれば元ファイルへ、足りなければ配信用へ。
       if (els.castQuality.value === "0") autoTune(m);
 
