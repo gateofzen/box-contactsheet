@@ -415,7 +415,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v158</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v159</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2562,16 +2562,13 @@ async function paintThumbs(file, fromCache){
     slot.style.backgroundSize = sizeCss;
     slot.style.backgroundPosition = posAt(i);
     slot.dataset.tc = tcOf(i);
-    if (!slot.dataset.bound){
-      slot.dataset.bound = "1";
-      slot.addEventListener("mouseenter", () => showFrame(i));
-      slot.addEventListener("click", e => { e.stopPropagation(); openPlayer(file, SAMPLE_POINTS[i]); });
-    }
+    // サムネイルは共有キャッシュ→高画質と二度描かれることがある。
+    // 一度きりの登録だと、古い画像を指したままになる。毎回差し替える。
+    slot.onmouseenter = () => showFrame(i);
+    slot.onclick = e => { e.stopPropagation(); openPlayer(file, SAMPLE_POINTS[i]); };
   });
-  if (!framesEl.dataset.bound){
-    framesEl.dataset.bound = "1";
-    framesEl.addEventListener("mouseleave", showDefault);
-  }
+  framesEl.onmouseleave = showDefault;
+  ref.hero.onmouseleave = showDefault;
   showDefault();
 
   if (rec.duration) ref.dur.textContent = "≈ " + fmtTC(rec.duration);
