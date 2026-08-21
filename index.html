@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v124</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v125</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4114,7 +4114,7 @@ function startSdkCast(){
 // 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
 // テレビ側でもシークが速く、スマートフォンの負担も小さい。
 const RECEIVER_URL = new URL("receiver.html", location.href).href;
-const CAST_RECEIVER_VERSION = 11;   // cast-receiver.html に期待する版
+const CAST_RECEIVER_VERSION = 12;   // cast-receiver.html に期待する版
 
 let presReq = null;
 let presConn = null;
@@ -4135,6 +4135,8 @@ let castLastTime = 0;
 let castTickTimer = null;
 let castGotTime = false;
 let castSeekedAt = 0;
+let castLoadRetry = null;
+let castLoadAcked = false;
 let lastGoodTime = 0;   // 読み込み直しの最中は位置が 0 に戻るため、直前の値を控える
 let lastGoodDuration = 0;
 
@@ -4245,6 +4247,22 @@ async function castLoadCurrent(){
     log("テレビへ送りました: " + (payload.manifest ? "区間配信" : "単一ファイル"));
   }
   castSend(payload);
+
+  // テレビが眠っていると、準備が整う前の指示は失われる。
+  // 受け取った合図が来るまで送り直す。
+  clearInterval(castLoadRetry);
+  let tries = 0;
+  castLoadRetry = setInterval(() => {
+    if (!presConn || castLoadAcked){ clearInterval(castLoadRetry); castLoadRetry = null; return; }
+    if (++tries > 8){
+      clearInterval(castLoadRetry); castLoadRetry = null;
+      log("テレビが応答しません。テレビの電源や入力をご確認ください。");
+      els.pNote.textContent = "テレビが応答しません（電源・入力をご確認ください）";
+      return;
+    }
+    log(`テレビへ再生の指示を送り直します（${tries} 回目）`);
+    castSend(payload);
+  }, 2500);
 }
 
 function bindPresConn(conn){
@@ -4269,6 +4287,7 @@ function bindPresConn(conn){
   castNsSeen = false;
   castModeLogged = false;
   castGotTime = false;
+  castLoadAcked = false;
   els.pVideo.pause();
   dashMain.stop();
   try{ els.pVideo.removeAttribute("src"); els.pVideo.load(); }catch(_){}
@@ -4288,7 +4307,15 @@ function bindPresConn(conn){
 
   conn.addEventListener("message", e => {
     let m; try{ m = JSON.parse(e.data); }catch(_){ return; }
-    if (m.type === "pong"){
+    if (m.type === "load-received" || m.type === "loaded"){
+      if (!castLoadAcked){
+        castLoadAcked = true;
+        clearInterval(castLoadRetry); castLoadRetry = null;
+        log("テレビが再生の指示を受け取りました" + (m.time ? `（${fmtTC(m.time)} から）` : ""));
+        els.pNote.textContent = "テレビで再生中（この画面から操作できます）";
+      }
+    }
+    else if (m.type === "pong"){
       log("テレビから応答がありました（位置 " + fmtTC(m.time || 0) + "）");
       castGotTime = true; castLastTime = m.time || castLastTime;
     }
@@ -4406,7 +4433,8 @@ function bindPresConn(conn){
 let castEnding = false;
 function endCast(){
   if (castEnding) return;
-  clearInterval(castTickTimer); castTickTimer = null;          // close と terminate の両方が来ることがある
+  clearInterval(castTickTimer); castTickTimer = null;
+  clearInterval(castLoadRetry); castLoadRetry = null;          // close と terminate の両方が来ることがある
   castEnding = true;
   clearInterval(castTimeTimer); castTimeTimer = null;
   presConn = null;
