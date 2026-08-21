@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v122</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v123</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3183,8 +3183,15 @@ els.personalTags.addEventListener("change", async () => {
   if (fsel) openSelectedFolder(false);
 });
 
-els.castBack.addEventListener("click", () => castSend({type:"seekBy", delta:-10}));
-els.castFwd.addEventListener("click",  () => castSend({type:"seekBy", delta:30}));
+function nudgeCast(delta){
+  castSend({type:"seekBy", delta});
+  castLastTime = Math.max(0, castLastTime + delta);
+  castSeekedAt = Date.now();
+  els.castNow.textContent = fmtTC(castLastTime) + (castGotTime ? "" : "（推定）");
+  if (castDuration) els.castSeek.value = String(Math.round(castLastTime / castDuration * 1000));
+}
+els.castBack.addEventListener("click", () => nudgeCast(-10));
+els.castFwd.addEventListener("click",  () => nudgeCast(30));
 els.castPlay.addEventListener("click", () => {
   castPlaying = !castPlaying;
   castSend({type: castPlaying ? "play" : "pause"});
@@ -3199,7 +3206,10 @@ els.castSeek.addEventListener("input", () => { castSeeking = true; });
 els.castSeek.addEventListener("change", () => {
   const t = castDuration * (Number(els.castSeek.value) / 1000);
   castSend({type:"seek", time:t});
-  els.castNow.textContent = fmtTC(t);
+  // 推定表示の基準も動かす。動かさないと、次の推定で元の位置へ戻ってしまう。
+  castLastTime = t;
+  castSeekedAt = Date.now();
+  els.castNow.textContent = fmtTC(t) + (castGotTime ? "" : "（推定）");
   setTimeout(() => { castSeeking = false; }, 800);
 });
 
@@ -4084,7 +4094,7 @@ function startSdkCast(){
 // 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
 // テレビ側でもシークが速く、スマートフォンの負担も小さい。
 const RECEIVER_URL = new URL("receiver.html", location.href).href;
-const CAST_RECEIVER_VERSION = 9;   // cast-receiver.html に期待する版
+const CAST_RECEIVER_VERSION = 10;   // cast-receiver.html に期待する版
 
 let presReq = null;
 let presConn = null;
@@ -4104,6 +4114,7 @@ let castSeeking = false;
 let castLastTime = 0;
 let castTickTimer = null;
 let castGotTime = false;
+let castSeekedAt = 0;
 let lastGoodTime = 0;   // 読み込み直しの最中は位置が 0 に戻るため、直前の値を控える
 let lastGoodDuration = 0;
 
@@ -4351,7 +4362,7 @@ function bindPresConn(conn){
         + (startedSeen ? "（起動の通知は届いています）" : "（起動の通知も届いていません）"));
       els.castNow.textContent = fmtTC(castLastTime) + "（推定）";
     }
-    if (!castGotTime && castPlaying){
+    if (!castGotTime && castPlaying && !castSeeking && Date.now() - castSeekedAt > 6000){
       // 届かない間は、こちらで時間を進めて目安を出す
       castLastTime += 5;
       els.castNow.textContent = fmtTC(castLastTime) + "（推定）";
