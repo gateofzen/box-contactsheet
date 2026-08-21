@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v129</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v131</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3699,10 +3699,22 @@ function seekTo(t){
   return t;
 }
 function seekBy(sec){
+  // キャスト中は手元の映像が空なので、テレビ側の位置を基準にする
+  if (presConn){ nudgeCast(sec); playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + sec + "秒"); return; }
   const t = seekTo(activeMedia().currentTime + sec);
   playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + sec + "秒　" + fmtTC(t));
 }
 function seekToFraction(p){
+  if (presConn){
+    if (!castDuration) return;
+    const t = castDuration * p;
+    castSend({type:"seek", time:t});
+    castLastTime = t; castSeekedAt = Date.now(); castTimeAt = Date.now();
+    els.castNow.textContent = fmtTC(t);
+    els.castSeek.value = String(Math.round(p * 1000));
+    playerToast(Math.round(p * 100) + "%　" + fmtTC(t));
+    return;
+  }
   const m = activeMedia();
   if (!isFinite(m.duration)) return;
   const t = seekTo(m.duration * p);
@@ -3716,6 +3728,13 @@ function setVolume(v){
   sn.volume = userVolume;
 }
 function nudgeVolume(d){
+  if (presConn){
+    userVolume = Math.max(0, Math.min(1, (userVolume || 1) + d));
+    localStorage.setItem("bcs_volume", String(userVolume));
+    castSend({type:"volume", value:userVolume});
+    playerToast("テレビの音量 " + Math.round(userVolume * 100) + "%");
+    return;
+  }
   setVolume((soundEl().volume || 0) + d);
   playerToast("音量 " + Math.round(userVolume * 100) + "%");
 }
@@ -4128,7 +4147,7 @@ function startSdkCast(){
 // 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
 // テレビ側でもシークが速く、スマートフォンの負担も小さい。
 const RECEIVER_URL = new URL("receiver.html", location.href).href;
-const CAST_RECEIVER_VERSION = 15;   // cast-receiver.html に期待する版
+const CAST_RECEIVER_VERSION = 16;   // cast-receiver.html に期待する版
 
 let presReq = null;
 let presConn = null;
@@ -5167,20 +5186,6 @@ function playerToast(text){
   els.pToast.classList.add("on");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => els.pToast.classList.remove("on"), 700);
-}
-function seekBy(sec){
-  const t = seekTo(activeMedia().currentTime + sec);
-  playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + sec + "秒　" + fmtTC(t));
-}
-function seekToFraction(p){
-  const ref = activeMedia();
-  if (!isFinite(ref.duration)) return;
-  const t = seekTo(ref.duration * p);
-  playerToast(Math.round(p * 100) + "%　" + fmtTC(t));
-}
-function nudgeVolume(d){
-  setVolume((soundEl().volume || 0) + d);
-  playerToast("音量 " + Math.round(userVolume * 100) + "%");
 }
 
 document.addEventListener("keydown", e => {
