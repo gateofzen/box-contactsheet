@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="11">
+<meta name="cs-version" content="12">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -69,8 +69,15 @@ try{
   pm.setPlaybackConfig(pc);
 }catch(e){ msg.textContent = "Contact Sheet（認証の設定を省略）"; }
 
+var announced = false;
 ctx.addCustomMessageListener(NS, function(e){
-  if (e && e.senderId) lastSender = e.senderId;
+  if (e && e.senderId){
+    lastSender = e.senderId;
+    if (!announced){          // 送り先が分かった時点で名乗り直す
+      announced = true;
+      reply({type:"started", version:12});
+    }
+  }
   var m;
   try{ m = typeof e.data === "string" ? JSON.parse(e.data) : e.data; }catch(_){ return; }
   if (!m || !m.type) return;
@@ -84,7 +91,8 @@ ctx.addCustomMessageListener(NS, function(e){
     req.media.contentType = m.manifest ? "application/dash+xml" : "video/mp4";
     req.currentTime = m.time || 0;
     req.autoplay = true;
-    pm.load(req).then(function(){ reply({type:"loaded"}); },
+    reply({type:"load-received", time:req.currentTime});   // 受け取った合図
+    pm.load(req).then(function(){ reply({type:"loaded", time:req.currentTime}); },
                       function(err){ reply({type:"error", message:String(err)}); });
   }
   else if (m.type === "play")   pm.play();
@@ -141,8 +149,8 @@ try{
 }
 
 if (!startErr){
-  setTimeout(function(){ reply({type:"started", version:11}); }, 800);
-  setTimeout(function(){ reply({type:"started", version:11}); }, 3000);
+  setTimeout(function(){ reply({type:"started", version:12}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:12}); }, 3000);
 }
 
 </script>
