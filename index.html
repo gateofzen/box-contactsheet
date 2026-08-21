@@ -415,7 +415,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v160</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v161</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -596,6 +596,7 @@ details.sub[open]>summary{color:var(--text)}
             <label class="check"><input id="sync" type="checkbox" checked> タグを Box に保存して端末間で共有</label>
             <label class="check"><input id="personalTags" type="checkbox" checked> タグ・評価・再生回数を自分専用にする</label>
             <label class="check"><input id="shareThumbs" type="checkbox" checked> サムネイルも Box に置いて共有</label>
+            <button id="hqAll" class="btn btn-sm">表示中をすべて高画質に</button>
             <button id="statsBtn" class="btn btn-sm">みんなの再生状況</button>
             <button id="shareCheck" class="btn btn-sm">サムネイルの共有状態</button>
             <button id="exportBtn" class="btn btn-sm">書き出し</button>
@@ -782,7 +783,7 @@ const els = {};
 ["token","folder","depth","sync","personalTags","scan","cancel","clear","refresh","q","sort","fw","conc","col","autohq","dashVideoOpt","castFirst","castQuality","castMethod","castAppId","castAppOnly",
  "login","logout","clientId","worker","setupBox","redirUri","tree","treePane","layout","treeReload","selName",
  "loadFolder","deepBtn","prefetch","cacheFolder","shareThumbs","ver","autothumb","drawerBtn","drawerClose","backdrop",
- "advBox","advBtn","installBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","statsBtn","statsReport",
+ "advBox","advBtn","installBtn","sortBtn","sortMenu","chiprow","searchScope","statusline","pbar","exportBtn","importBtn","importFile","shareCheck","shareReport","hqAll","statsBtn","statsReport",
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logShare","logCopy","logFull","logPrev","logClear","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
@@ -2932,6 +2933,56 @@ async function metaFor(file){
     return d || {};
   }catch(_){ rawMetaById.set(file.id, {}); return {}; }
 }
+
+/* ---- 表示中の動画をまとめて高画質にする ----
+   1 本ずつ原本を開いて 5 か所を取り込むので、1 本 10〜30 秒かかる。
+   途中で止められるようにし、済んだものは飛ばす。 */
+let hqRunning = false;
+
+els.hqAll.addEventListener("click", async () => {
+  if (hqRunning){ hqRunning = false; return; }         // 押し直しで中止
+
+  // まだ高画質になっていないものだけを対象にする
+  const todo = [];
+  for (const f of view){
+    const rec = await idbGet("thumbs", f.id).catch(() => null);
+    if (!rec || !rec.hq) todo.push(f);
+  }
+  if (!todo.length){ say("表示中の動画はすべて高画質です"); return; }
+
+  const mins = Math.ceil(todo.length * 20 / 60);
+  if (!confirm(`${todo.length} 本を高画質にします。\n`
+    + `1 本あたり 10〜30 秒かかるため、目安は ${mins} 分ほどです。\n`
+    + `この画面を開いたまま進めてください。始めますか？`)) return;
+
+  hqRunning = true;
+  let done = 0, failed = 0;
+  const t0 = Date.now();
+
+  for (const f of todo){
+    if (!hqRunning) break;
+    const per = done ? (Date.now() - t0) / done : 20000;
+    const left = Math.ceil((todo.length - done) * per / 60000);
+    els.hqAll.textContent = `高画質 ${done + 1}/${todo.length}（残り ${left} 分）− 押すと中止`;
+    els.progress.textContent = `高画質にしています: ${f.name}`;
+    try{
+      await buildHiRes(f);
+      await paintThumbs(f, true);
+      done++;
+    }catch(err){
+      failed++;
+      log("高画質にできません: " + f.name + " / " + err.message);
+    }
+  }
+
+  const stopped = !hqRunning;
+  hqRunning = false;
+  els.hqAll.textContent = "表示中をすべて高画質に";
+  syncStatusLine();
+  say(stopped ? `中止しました（${done} 本を高画質にしました）`
+    : failed ? `${done} 本を高画質にしました（${failed} 本は失敗）`
+    : `${done} 本すべてを高画質にしました`);
+});
 
 els.statsBtn.addEventListener("click", async () => {
   els.statsReport.hidden = false;
