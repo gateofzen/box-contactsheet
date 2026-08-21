@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
+<meta name="cs-version" content="4">
 <title>Contact Sheet — テレビ受信アプリ</title>
 <style>
   /* 映像は Chromecast 内蔵の再生機構が描く。
@@ -15,7 +16,8 @@
     font-size:2vw;letter-spacing:.18em;text-transform:uppercase}
   #boot.gone{display:none}
 </style>
-<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"
+        onerror="document.getElementById('boot').textContent='Cast のライブラリを取得できません'"></script>
 </head>
 <body>
 <cast-media-player></cast-media-player>
@@ -25,6 +27,14 @@
 "use strict";
 
 const boot = document.getElementById("boot");
+
+// ライブラリが読み込めていないまま触ると、その場で止まって
+// 送信側には session_error としか届かない。読み込みを待つ。
+if (!(window.cast && cast.framework && cast.framework.CastReceiverContext)){
+  boot.textContent = "Cast のライブラリを読み込めません";
+  throw new Error("cast framework unavailable");
+}
+
 const ctx = cast.framework.CastReceiverContext.getInstance();
 const pm  = ctx.getPlayerManager();
 
