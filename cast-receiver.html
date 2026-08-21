@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="15">
+<meta name="cs-version" content="16">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -75,17 +75,10 @@ var announced = false;
 function applyQuality(maxHeight, fixed){
   try{
     var cfg = (pm.getPlaybackConfig && pm.getPlaybackConfig()) || new cast.framework.PlaybackConfig();
-    if (!maxHeight){
-      cfg.maxBitrate = undefined;
-    }else if (maxHeight >= 1080){
-      cfg.maxBitrate = 12000000;
-      if (fixed) cfg.initialBandwidth = 12000000;   // 高い方から始める
-    }else if (maxHeight >= 720){
-      cfg.maxBitrate = 5000000;
-      if (fixed) cfg.initialBandwidth = 5000000;
-    }else{
-      cfg.maxBitrate = 2500000;
-    }
+    // 見積もりの初期値。低く見積もると最低画質から始まり、戻るのに時間がかかる。
+    cfg.initialBandwidth = (!maxHeight || maxHeight >= 1080) ? 12000000
+                         : (maxHeight >= 720 ? 5000000 : 2500000);
+    cfg.autoResumeDuration = 5;
     pm.setPlaybackConfig(cfg);
     reply({type:"quality-ok", maxHeight: maxHeight || 0, fixed: !!fixed});
   }catch(err){ reply({type:"warn", where:"画質の指定", message:String(err && err.message || err)}); }
@@ -96,7 +89,7 @@ ctx.addCustomMessageListener(NS, function(e){
     lastSender = e.senderId;
     if (!announced){          // 送り先が分かった時点で名乗り直す
       announced = true;
-      reply({type:"started", version:15});
+      reply({type:"started", version:16});
     }
   }
   var m;
@@ -118,6 +111,9 @@ ctx.addCustomMessageListener(NS, function(e){
                       function(err){ reply({type:"error", message:String(err)}); });
   }
   else if (m.type === "quality") applyQuality(m.maxHeight, m.fixed);
+  else if (m.type === "volume"){
+    try{ ctx.setSystemVolumeLevel(Math.max(0, Math.min(1, m.value))); }catch(e){}
+  }
   else if (m.type === "play")   pm.play();
   else if (m.type === "pause")  pm.pause();
   else if (m.type === "seek")   pm.seek(m.time);
@@ -181,8 +177,8 @@ try{
 }
 
 if (!startErr){
-  setTimeout(function(){ reply({type:"started", version:15}); }, 800);
-  setTimeout(function(){ reply({type:"started", version:15}); }, 3000);
+  setTimeout(function(){ reply({type:"started", version:16}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:16}); }, 3000);
 }
 
 </script>
