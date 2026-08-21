@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="16">
+<meta name="cs-version" content="17">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -32,29 +32,19 @@ var sendFail = 0;
 function reply(o){
   // 文字列にして渡すと、環境によってはさらに包まれて二重になる。
   // そのまま渡し、駄目なときだけ文字列で試す。
+  // 全員に向けて送る。送り先を固定すると、別の端末に持ち替えたときに届かない。
   var ok = false;
-  if (lastSender){
+  try{ ctx.sendCustomMessage(NS, undefined, o); ok = true; }catch(e){}
+  if (!ok){ try{ ctx.sendCustomMessage(NS, undefined, JSON.stringify(o)); ok = true; }catch(e){} }
+  if (!ok && lastSender){
     try{ ctx.sendCustomMessage(NS, lastSender, o); ok = true; }catch(e){}
-    if (!ok){ try{ ctx.sendCustomMessage(NS, lastSender, JSON.stringify(o)); ok = true; }catch(e){} }
   }
-  if (!ok){
-    try{ ctx.sendCustomMessage(NS, undefined, o); ok = true; }catch(e){}
-    if (!ok){ try{ ctx.sendCustomMessage(NS, undefined, JSON.stringify(o)); ok = true; }catch(e){} }
-  }
-  if (ok){
-    if (sendOk < 2){
-      sendOk++;
-      msg.style.display = "";
-      msg.textContent = "Contact Sheet（手元へ通知しました）";
-      setTimeout(function(){ msg.style.display = "none"; }, 2500);
-    }
-  }else if (sendFail < 3){
+  if (!ok && sendFail < 1){
     sendFail++;
     msg.style.display = "";
-    msg.textContent = "Contact Sheet（手元への通知を送れません）";
+    msg.textContent = "Contact Sheet（手元と通信できません）";
   }
 }
-var sendOk = 0;
 
 function withToken(url){
   if (!token || !url) return url;
@@ -89,7 +79,7 @@ ctx.addCustomMessageListener(NS, function(e){
     lastSender = e.senderId;
     if (!announced){          // 送り先が分かった時点で名乗り直す
       announced = true;
-      reply({type:"started", version:16});
+      reply({type:"started", version:17});
     }
   }
   var m;
@@ -162,6 +152,10 @@ try{
       && cast.framework.system.EventType.SENDER_CONNECTED){
     ctx.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, function(e){
       if (e && e.senderId) lastSender = e.senderId;
+      // 端末が変わってもすぐ会話できるよう、その場で名乗る
+      reply({type:"started", version:17});
+      var t = pm.getCurrentTimeSec();
+      if (isFinite(t)) reply({type:"time", time:t, duration:pm.getDurationSec() || 0});
     });
   }
 }catch(e){}
@@ -177,8 +171,8 @@ try{
 }
 
 if (!startErr){
-  setTimeout(function(){ reply({type:"started", version:16}); }, 800);
-  setTimeout(function(){ reply({type:"started", version:16}); }, 3000);
+  setTimeout(function(){ reply({type:"started", version:17}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:17}); }, 3000);
 }
 
 </script>
