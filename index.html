@@ -404,7 +404,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v145</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v146</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3408,7 +3408,12 @@ function paintPlayerRate(){
   [...els.pRate.children].forEach((b, i) => b.classList.toggle("on", i < r));
   els.pRate.title = r ? `${r} つ星` : "未評価";
 }
-els.scrim.addEventListener("click", e => { if (e.target === els.scrim) closePlayer(); });
+els.scrim.addEventListener("click", e => {
+  if (e.target !== els.scrim) return;
+  // キャスト中に誤って触れても止めない。「閉じる」で明示的に終える。
+  if (presConn){ playerToast("テレビで再生中です（閉じるボタンで終了）"); return; }
+  closePlayer();
+});
 /* ============ DASH の区間配信 ============ */
 // 方針: 通常は「映像要素ひとつ」で音声も映像も再生する（同期処理が要らない）。
 //       背景再生したいときだけ、別の音声要素に音声トラックだけを流す。
@@ -4562,9 +4567,10 @@ function bindPresConn(conn){
         const now = `${label} ${m.w}×${m.h}` + (m.stream ? ` / ${m.stream} kbps` : "");
         if (now !== castTrack){
           castTrack = now;
-          els.castInfo.textContent = castTrack;
           log("テレビ側の画質: " + castTrack);
         }
+        els.castInfo.textContent = castTrack
+          + (m.estimate ? `　回線 ${m.estimate} kbps` : "");
       }
       if (!castModeLogged){ castModeLogged = true;
         log("再生しているのは: " + (m.mode === "専用アプリ" ? "専用アプリ ✓" : "受信ページ")); }
@@ -4710,11 +4716,27 @@ function localOrigKbps(){
   return Math.round(f.size * 8 / dur / 1000);
 }
 
+// 手元の再生の画質を表示する
+function showLocalQuality(){
+  if (presConn || audioOnly || !currentFile) return;
+  const v = els.pVideo;
+  const w = v.videoWidth || 0, h = v.videoHeight || 0;
+  if (!w || !h) return;
+  const label = h >= 1080 ? "フル HD" : h >= 720 ? "HD" : h >= 480 ? "標準画質" : "低画質";
+  const kbps = videoKind === "原本" ? localOrigKbps() : 8128;
+  const speed = Math.round(dashMain.kbps || 0);
+  els.pMeta.textContent = `${label} ${w}×${h}`
+    + (kbps ? ` / ${kbps} kbps` : "")
+    + (videoKind === "原本" ? "（原本）" : "")
+    + (speed ? `　回線 ${speed} kbps` : "");
+}
+
 function startLocalTune(){
   clearInterval(localTuneTimer);
   localTuneTimer = setInterval(() => {
     if (!currentFile || !els.scrim.classList.contains("open") || presConn || audioOnly) return;
     const mode = els.localQuality.value;
+    showLocalQuality();
     if (mode !== "auto") return;
 
     const need = localOrigKbps();
