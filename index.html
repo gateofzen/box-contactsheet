@@ -404,7 +404,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v146</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v147</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4745,9 +4745,10 @@ function startLocalTune(){
     if (localState === "配信用"){
       if (videoKind !== "DASH") return;
       if (Date.now() < localRetryAt) return;      // 直後の上げ直しは避ける
+      // 実測は「必要なぶんしか取らない」値なので、目安にとどめる。
+      // 落ち着いて再生できているなら試しに上げる。
       const have = Math.round(dashMain.kbps || 0);
-      // 途切れておらず、原本に十分な余裕があるか
-      if (!have || have < need * 1.5 || localStalls){
+      if (localStalls){
         localGoodFrom = 0;
         localStalls = 0;                          // 古い途切れは持ち越さない
         return;
@@ -4802,56 +4803,64 @@ async function switchLocalTo(to, have, need){
 /* ---- 自動での画質調整 ----
    Box が用意する配信用（1080p / 480p）はテレビ側が切り替える。
    その上に「元ファイル」があるので、余裕があるときだけこちらで引き上げる。 */
-let autoState = "配信用";     // 配信用 / 元ファイル
+let autoTier = 0;             // 0=自動 / 1=高画質固定 / 2=元ファイル
 let autoGoodFrom = 0;
 let autoRetryAt = 0;
 let autoFails = 0;
 let autoStallBase = 0;        // 切り替え時点の途切れ回数（差分で見る）
 
 function resetAutoTune(){
-  autoState = "配信用"; autoGoodFrom = 0; autoRetryAt = 0; autoFails = 0; autoStallBase = 0;
+  autoTier = 0; autoGoodFrom = 0; autoRetryAt = 0; autoFails = 0; autoStallBase = 0;
 }
 
+/* テレビ側の画質を、実際の再生の様子から決める。
+   「実測」は必要なぶんしか取りに行かない値なので、回線の速さではない。
+   低い画質だと低く出るため、それを見て判断すると上がらなくなる。
+   そこで「落ち着いて再生できているなら一段上げてみる」方式にする。 */
+const CAST_TIERS = ["自動", "高画質固定", "元ファイル"];
+
+function tierLabel(){ return CAST_TIERS[autoTier] || "自動"; }
+
 function autoTune(m){
-  const need = origKbps();
-  if (!need) return;
+  const quiet = (m.stalls || 0) <= autoStallBase
+    && (m.decoded > 200 ? (m.dropped || 0) / m.decoded < 0.05 : true);
 
-  if (autoState === "配信用"){
-    if (Date.now() < autoRetryAt) return;
-    // 途切れておらず、元ファイルに十分な余裕があるか
-    // 実測が分かればそれで判断する。分からない環境では、
-    // 「上限の画質で途切れていない」ことを目安にする。
-    const quiet = (m.stalls || 0) <= autoStallBase;
-    const roomy = m.estimate
-      ? (quiet && m.estimate >= need * 1.4 && (m.h || 0) >= 1080)
-      : (quiet && (m.h || 0) >= 1080 && !m.dropped);
-    if (!roomy){ autoGoodFrom = 0; return; }
-    if (!autoGoodFrom) autoGoodFrom = Date.now();
-    if (Date.now() - autoGoodFrom < 10000) return;   // 10 秒続いたら上げる
+  // 追いつかなくなったら一段下げる
+  const struggling = (m.stalls || 0) - autoStallBase >= 2
+    || (m.decoded > 200 && (m.dropped || 0) / m.decoded > 0.15);
 
-    autoState = "元ファイル";
-    autoGoodFrom = 0;
+  if (struggling && autoTier > 0){
+    autoTier--;
+    autoFails++;
     autoStallBase = m.stalls || 0;
-    castStartTime = castLastTime || castStartTime;
-    castTrack = "";
-    log(`回線に余裕があります（実測 ${m.estimate} kbps / 元ファイル ${need} kbps）。最高画質へ上げます。`);
-    castLoadCurrent("orig");
-  }else{
-    // 元ファイルにしてから途切れが増えたか、コマ落ちが目立つなら戻す
-    const dropRate = m.decoded > 200 ? (m.dropped || 0) / m.decoded : 0;
-    if ((m.stalls || 0) - autoStallBase >= 2 || dropRate > 0.15){
-      autoState = "配信用";
-      autoFails++;
-      const wait = Math.min(5, autoFails) * 60000;
-      autoRetryAt = Date.now() + wait;
-      autoStallBase = m.stalls || 0;
-      castStartTime = castLastTime || castStartTime;
-      castTrack = "";
-      log(`最高画質では追いつきません（途切れ ${m.stalls} 回 / コマ落ち ${m.dropped}/${m.decoded}）。`
-        + `配信用へ戻します（${Math.round(wait/60000)} 分後にまた試します）`);
-      castLoadCurrent();
-    }
+    autoGoodFrom = 0;
+    autoRetryAt = Date.now() + Math.min(5, autoFails) * 60000;
+    log(`テレビが追いつきません（途切れ ${m.stalls} 回 / コマ落ち ${m.dropped}/${m.decoded}）。`
+      + `${tierLabel()}へ下げます`);
+    applyTier();
+    return;
   }
+
+  if (!quiet){ autoGoodFrom = 0; return; }
+  if (autoTier >= CAST_TIERS.length - 1) return;      // これ以上は上がない
+  if (Date.now() < autoRetryAt) return;
+
+  if (!autoGoodFrom) autoGoodFrom = Date.now();
+  if (Date.now() - autoGoodFrom < 10000) return;      // 10 秒落ち着いていたら上げる
+
+  autoTier++;
+  autoGoodFrom = 0;
+  autoStallBase = m.stalls || 0;
+  log(`落ち着いて再生できています。${tierLabel()}へ上げます`);
+  applyTier();
+}
+
+function applyTier(){
+  castStartTime = castLastTime || castStartTime;
+  castTrack = "";
+  if (autoTier === 2) castLoadCurrent("orig");
+  else if (autoTier === 1) castLoadCurrent("-1080");
+  else castLoadCurrent("0");
 }
 
 function endCast(){
