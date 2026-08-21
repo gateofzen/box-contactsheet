@@ -404,7 +404,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v143</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v144</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -677,7 +677,7 @@ details.sub[open]>summary{color:var(--text)}
       <video id="pVideo" controls playsinline preload="metadata"
              controlsList="nodownload"></video>
       <div id="castPanel" class="castpanel" hidden>
-        <div class="big">📺 テレビで再生中</div>
+        <div class="big" id="castWhere">📺 テレビで再生中</div>
         <div class="ctime"><span id="castNow">0:00</span> <small>/ <span id="castDur">0:00</span></small></div>
         <input id="castSeek" type="range" min="0" max="1000" value="0" aria-label="再生位置">
         <div class="row">
@@ -772,7 +772,7 @@ const els = {};
  "loginTop","loginBig","emptyTitle","emptyText","emptyHint",
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logShare","logCopy","logFull","logPrev","logClear","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
- "castPanel","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
+ "castPanel","castWhere","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
  "pAudio","pAudioBtn","audioVeil","bgAudio","audioPrefetch","localQuality","pCast","castProbe"].forEach(k => els[k] = $(k));
 
@@ -4168,6 +4168,10 @@ function initCastSdk(){
 // Cast SDK の接続を、受信ページ方式と同じ形で扱えるようにする
 function attachCastSdkSession(session){
   castSdkSession = session;
+  try{
+    const nm = session.receiver && session.receiver.friendlyName;
+    if (nm){ castDeviceName = nm; log("キャスト先: " + nm); }
+  }catch(_){}
   const handlers = [];
   const pending = [];        // 受け取る準備が整う前に届いた通知を溜めておく
   const conn = {
@@ -4266,7 +4270,7 @@ function startSdkCast(){
 // 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
 // テレビ側でもシークが速く、スマートフォンの負担も小さい。
 const RECEIVER_URL = new URL("receiver.html", location.href).href;
-const CAST_RECEIVER_VERSION = 18;   // cast-receiver.html に期待する版
+const CAST_RECEIVER_VERSION = 19;   // cast-receiver.html に期待する版
 
 let presReq = null;
 let presConn = null;
@@ -4294,6 +4298,7 @@ let castLoadAcked = false;
 const castSawTypes = new Set();
 let castStartedLogged = false;
 let castDowngraded = false;
+let castDeviceName = "";
 let lastGoodTime = 0;   // 読み込み直しの最中は位置が 0 に戻るため、直前の値を控える
 let lastGoodDuration = 0;
 
@@ -4382,8 +4387,11 @@ function ensurePresRequest(){
 // 元ファイルの重さを見積もる。大きさと長さから求める。
 function origKbps(){
   const f = currentFile;
-  if (!f || !f.size || !castDuration) return 0;
-  return Math.round(f.size * 8 / castDuration / 1000);
+  // テレビからの長さが届く前でも、手元で分かっている長さで見積もる
+  const dur = castDuration || lastGoodDuration
+    || (isFinite(els.pVideo.duration) ? els.pVideo.duration : 0);
+  if (!f || !f.size || !dur) return 0;
+  return Math.round(f.size * 8 / dur / 1000);
 }
 
 // テレビからの通知は、環境によって形が変わる。
@@ -4407,7 +4415,8 @@ async function castLoadCurrent(forceQuality){
   const payload = {type:"load", token: token(), title: currentFile.name,
                    time: castStartTime || 0,
                    maxHeight: q === "orig" ? 0 : (Math.abs(Number(q)) || 0),
-                   fixed: q !== "orig" && Number(q) < 0};
+                   fixed: q !== "orig" && Number(q) < 0,
+                   quality: true};   // 自動でも画質の指示を必ず送る
 
   if (q === "orig"){
     // Box の配信用は元の半分ほどのビットレートに再圧縮されている。
@@ -4474,6 +4483,7 @@ function bindPresConn(conn){
   els.vzoom.classList.add("castmode");
   els.castQ2.value = els.castQuality.value;
   els.castInfo.textContent = "画質を確認しています…";
+  els.castWhere.textContent = "📺 " + (castDeviceName || "テレビ") + " で再生中";
   updateMediaSession();          // 通知に動画の名前を出し続ける
   els.castPlay.textContent = "一時停止";
   castPlaying = true;
@@ -4571,7 +4581,8 @@ function bindPresConn(conn){
           ? "回線に余裕がありません。画質を「自動」か「低画質で固定」にすると途切れにくくなります。"
           : "回線に余裕がありません。自動で画質を落として調整します。", true);
       }
-      log(`テレビ側の状況: ${m.mode === "専用アプリ" ? "専用アプリ" : (m.mode === "原本" ? "原本再生" : "実測 " + m.estimate + " kbps")}`
+      log(`テレビ側の状況: ${m.mode === "専用アプリ" ? "専用アプリ" : (m.mode === "原本" ? "原本再生" : "")}`
+        + (m.estimate ? ` 実測 ${m.estimate} kbps` : "")
         + ` / ${m.w}x${m.h}${m.stream ? " " + m.stream + " kbps" : ""}`
         + (m.fps ? ` / ${m.fps} コマ毎秒` : "")
         + (m.rate && m.rate !== 1 ? ` / 速度 ${m.rate}` : "")
@@ -4604,7 +4615,7 @@ function bindPresConn(conn){
     }
     if (m.type === "time" && m.duration) els.pNote.textContent = "";
     if (m.type === "time" && m.duration) els.pMeta.textContent =
-      castTrack ? `テレビ  ${castTrack}` : "テレビで再生中";
+      (castDeviceName || "テレビ") + (castTrack ? `  ${castTrack}` : "");
   });
   conn.addEventListener("close", endCast);
   conn.addEventListener("terminate", endCast);
@@ -4622,7 +4633,7 @@ function bindPresConn(conn){
     els.castNow.textContent = fmtTC(shown) + (castGotTime ? "" : "（推定）");
     if (castDuration && !castSeeking)
       els.castSeek.value = String(Math.round(shown / castDuration * 1000));
-    els.pMeta.textContent = castTrack ? `テレビ  ${castTrack}` : "テレビで再生中";
+    els.pMeta.textContent = (castDeviceName || "テレビ") + (castTrack ? `  ${castTrack}` : "");
   }, 1000);
 
   clearInterval(castTickTimer);
@@ -4779,7 +4790,12 @@ function autoTune(m){
   if (autoState === "配信用"){
     if (Date.now() < autoRetryAt) return;
     // 途切れておらず、元ファイルに十分な余裕があるか
-    const roomy = (m.stalls || 0) <= autoStallBase && m.estimate >= need * 1.4 && (m.h || 0) >= 1080;
+    // 実測が分かればそれで判断する。分からない環境では、
+    // 「上限の画質で途切れていない」ことを目安にする。
+    const quiet = (m.stalls || 0) <= autoStallBase;
+    const roomy = m.estimate
+      ? (quiet && m.estimate >= need * 1.4 && (m.h || 0) >= 1080)
+      : (quiet && (m.h || 0) >= 1080 && !m.dropped);
     if (!roomy){ autoGoodFrom = 0; return; }
     if (!autoGoodFrom) autoGoodFrom = Date.now();
     if (Date.now() - autoGoodFrom < 10000) return;   // 10 秒続いたら上げる
