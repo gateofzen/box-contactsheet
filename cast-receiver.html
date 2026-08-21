@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="14">
+<meta name="cs-version" content="15">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -96,7 +96,7 @@ ctx.addCustomMessageListener(NS, function(e){
     lastSender = e.senderId;
     if (!announced){          // 送り先が分かった時点で名乗り直す
       announced = true;
-      reply({type:"started", version:14});
+      reply({type:"started", version:15});
     }
   }
   var m;
@@ -127,12 +127,21 @@ ctx.addCustomMessageListener(NS, function(e){
 });
 
 // 状況を返す（失敗しても再生は続ける）
+// 位置は 1 秒ごとに送る（手元のつまみを滑らかに動かすため）
+setInterval(function(){
+  try{
+    var t = pm.getCurrentTimeSec();
+    if (!isFinite(t)) return;
+    reply({type:"time", time:t, duration:pm.getDurationSec() || 0});
+  }catch(e){}
+}, 1000);
+
+// 通信量や画質などの重い情報は 4 秒ごとで十分
 setInterval(function(){
   try{
     var st = (pm.getStats && pm.getStats()) || {};
     var t = pm.getCurrentTimeSec();
     if (!isFinite(t)) return;
-    reply({type:"time", time:t, duration:pm.getDurationSec() || 0});
     reply({type:"stats", mode:"専用アプリ",
       estimate: Math.round((st.estimatedBandwidth||0)/1000),
       stream:   Math.round((st.streamBandwidth||0)/1000),
@@ -172,8 +181,8 @@ try{
 }
 
 if (!startErr){
-  setTimeout(function(){ reply({type:"started", version:14}); }, 800);
-  setTimeout(function(){ reply({type:"started", version:14}); }, 3000);
+  setTimeout(function(){ reply({type:"started", version:15}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:15}); }, 3000);
 }
 
 </script>
