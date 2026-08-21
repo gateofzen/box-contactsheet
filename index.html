@@ -404,7 +404,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v150</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v151</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4565,7 +4565,9 @@ function bindPresConn(conn){
       // いま流れている画質を、報告のたびに反映する
       if (m.w && m.h){
         const label = m.h >= 1080 ? "フル HD" : m.h >= 720 ? "HD" : m.h >= 480 ? "標準画質" : "低画質";
-        const now = `${label} ${m.w}×${m.h}` + (m.stream ? ` / ${m.stream} kbps` : "");
+        // ビットレートが分かるのは配信用のみ。無い＝元ファイル。
+        const now = `${label} ${m.w}×${m.h}`
+          + (m.stream ? ` / ${m.stream} kbps` : "（元ファイル・最高画質）");
         if (now !== castTrack){
           castTrack = now;
           log("テレビ側の画質: " + castTrack);
@@ -4585,7 +4587,7 @@ function bindPresConn(conn){
       }
       // 回線に余裕がないと、いくら固定しても途切れる。
       // ただし再生開始直後の値は「まだ測っていない初期値」なので判断に使わない。
-      else if (m.decoded > 300 && m.estimate && m.stream
+      else if (m.decoded > 300 && m.estimate && m.stream && autoTier === 0
                && m.estimate < m.stream * 1.6 && !castAdvised){
         castAdvised = true;
         const fixed = Number(els.castQuality.value) < 0;
