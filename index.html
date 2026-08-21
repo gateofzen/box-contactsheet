@@ -415,7 +415,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v159</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v160</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3828,8 +3828,11 @@ function createDashEngine(name){
         const ahead = this.aheadOf(tr);
         // 抑えすぎると、通信が乱れたときに持ちこたえられない。
         // 古い部分を捨てた直後なので、いま持っている量より少し多めを目標にする。
-        tr.capped = Math.max(600, Math.floor(ahead * 0.9) + 120);
-        log(`${this.name}: 保存領域がいっぱいのため、先読みを ${Math.round(tr.capped/60)} 分に抑えます`);
+        const capped = Math.max(600, Math.floor(ahead * 0.9) + 120);
+        // 同じ内容を繰り返し記録しない（前回は 570 回も出ていた）
+        if (!tr.capped || Math.abs(tr.capped - capped) > 60)
+          log(`${this.name}: 保存領域がいっぱいのため、先読みを ${Math.round(capped/60)} 分に抑えます`);
+        tr.capped = capped;
         try{ await this.append(tr, buf); return true; }
         catch(_){ return false; }
       }
@@ -4071,6 +4074,7 @@ function watchAudioOnly(){
 // 長時間の再生では、区間の取得が続けて失敗して諦めていることがある。
 let audioRestartAt = 0;
 let audioRetry = 0;
+let lastNetError = "";
 let audioRetryTimer = null;
 
 // 先読みがどこまで進んだかを覚えておく（電波が切れても安心して画面を消せるように）
@@ -4123,14 +4127,19 @@ async function restartAudioOnly(why){
     log("作り直しに失敗: " + err.message);
     // 一時的な乱れのことが多い。間を置いて何度か試す。
     audioRetry++;
-    if (audioRetry <= 5){
-      const wait = Math.min(30000, 3000 * Math.pow(2, audioRetry - 1));
-      log(`${Math.round(wait/1000)} 秒後にもう一度試します（${audioRetry} 回目）`);
+    const offline = navigator.onLine === false
+      || /Failed to fetch|NetworkError|圏外/i.test(err.message + " " + (lastNetError || ""));
+    // 通信が戻れば直る。回数で打ち切らず、間隔を空けて待ち続ける。
+    if (offline || audioRetry <= 8){
+      const wait = Math.min(30000, 3000 * Math.pow(2, Math.min(audioRetry, 4) - 1));
+      if (audioRetry <= 3 || audioRetry % 10 === 0)
+        log(`${Math.round(wait/1000)} 秒ごとに試し続けます（${audioRetry} 回目）`);
       clearTimeout(audioRetryTimer);
       audioRetryTimer = setTimeout(() => {
         audioRestartAt = 0;                 // すぐ試せるようにする
         restartAudioOnly("作り直しの再挑戦");
       }, wait);
+      els.pNote.textContent = offline ? "通信の回復を待っています…" : "音声を立て直しています…";
     }else{
       say("音声が止まりました。🎧 を押し直してください。", true);
     }
@@ -5847,6 +5856,12 @@ window.addEventListener("online", () => {
     els.pNote.textContent = "音声のみ再生中（画面を消しても続きます）";
     try{ dashAudio.pumpAll(); }catch(_){}
     if (els.pAudio.paused) els.pAudio.play().catch(() => {});
+    // 作り直しを待っている最中なら、すぐ試す
+    if (audioRetryTimer){
+      clearTimeout(audioRetryTimer); audioRetryTimer = null;
+      audioRestartAt = 0;
+      restartAudioOnly("通信が戻った");
+    }
   }
   try{ dashMain.pumpAll(); }catch(_){}
 });
