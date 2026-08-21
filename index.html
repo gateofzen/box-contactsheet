@@ -367,7 +367,11 @@ details.sub[open]>summary{color:var(--text)}
   .player-bar{padding:9px 10px}
   .player-bar .t{flex:1 0 100%;order:-1;font-size:13px;white-space:normal;
     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-  .player-bar .btn{padding:6px 9px}
+  .prate{display:inline-flex;gap:1px;align-items:center}
+.prate button{background:transparent;border:none;padding:2px;font-size:17px;line-height:1;
+  color:rgba(255,255,255,.32);cursor:pointer}
+.prate button.on{color:var(--amber)}
+.player-bar .btn{padding:6px 9px}
   .volbox{flex:1 1 120px}
   .volbox input[type=range]{width:100%}
   .player video{max-height:52vh}
@@ -388,7 +392,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v135</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v138</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -500,7 +504,7 @@ details.sub[open]>summary{color:var(--text)}
           </div>
           <p class="note">
             <b>一覧を取り直す</b>は、Box に動画やフォルダを追加したとき。サムネイルは残ります。<br>
-            <b>サムネイルを捨てる</b>は、絵が乱れているときや、コマ幅を変えたとき。タグとお気に入りは消えません。
+            <b>サムネイルを捨てる</b>は、絵が乱れているときや、コマ幅を変えたとき。タグと評価は消えません。
           </p>
         </div>
 
@@ -552,10 +556,10 @@ details.sub[open]>summary{color:var(--text)}
         </div>
 
         <div class="group">
-          <h4>タグとお気に入り</h4>
+          <h4>タグと評価</h4>
           <div class="rack">
             <label class="check"><input id="sync" type="checkbox" checked> タグを Box に保存して端末間で共有</label>
-            <label class="check"><input id="personalTags" type="checkbox" checked> タグ・お気に入り・再生回数を自分専用にする</label>
+            <label class="check"><input id="personalTags" type="checkbox" checked> タグ・評価・再生回数を自分専用にする</label>
             <label class="check"><input id="shareThumbs" type="checkbox" checked> サムネイルも Box に置いて共有</label>
             <button id="statsBtn" class="btn btn-sm">みんなの再生状況</button>
             <button id="shareCheck" class="btn btn-sm">サムネイルの共有状態</button>
@@ -644,7 +648,7 @@ details.sub[open]>summary{color:var(--text)}
       <span class="t" id="pTitle"></span>
       <button id="pCast" class="btn btn-sm" title="テレビにキャスト" hidden>📺</button>
       <button id="pAudioBtn" class="btn btn-sm" title="音声のみで再生">🎧</button>
-      <button id="pFav" class="btn btn-ghost">★</button>
+      <span id="pRate" class="prate" title="評価"></span>
       <a id="pBox" class="btn btn-ghost" target="_blank" rel="noopener">Box で開く</a>
       <button id="pClose" class="btn btn-ghost">閉じる</button>
     </div>
@@ -683,7 +687,7 @@ details.sub[open]>summary{color:var(--text)}
     <video id="castProbe" class="probe" preload="metadata" muted playsinline></video>
     <div class="player-foot">
       <span id="pMeta"></span><span id="pNote"></span>
-      <span class="keys">← → 10秒 ／ Shift 併用で60秒 ／ Space 再生 ／ ↑ ↓ 音量 ／ 1–9 位置 ／ + − 拡大縮小 ／ F ★</span>
+      <span class="keys">← → 10秒 ／ Shift 併用で60秒 ／ Space 再生 ／ ↑ ↓ 音量 ／ 1–9 位置 ／ + − 拡大縮小 ／ F 評価</span>
     </div>
     <div id="pToast" class="ptoast"></div>
   </div>
@@ -748,7 +752,7 @@ const els = {};
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logShare","logCopy","logFull","logPrev","logClear","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
- "scrim","pTitle","pVideo","pBox","pClose","pFav","pMeta","pNote","pToast","vzoom",
+ "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
  "pAudio","pAudioBtn","audioVeil","bgAudio","audioPrefetch","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
@@ -1069,7 +1073,7 @@ async function checkAuth(){
   }catch(e){ setAuth(false,"未接続"); say(String(e.message||e), true); return false; }
 }
 
-/* ============ タグ・お気に入り ============ */
+/* ============ タグと評価 ============ */
 function getMark(id){
   let m = marks.get(id);
   if (!m){ m = {id, fav:false, rate:0, tags:[], plays:0, last:0, dirty:false}; marks.set(id, m); }
@@ -2124,7 +2128,7 @@ function buildRail(){
 
   const favChip = document.createElement("button");
   favChip.className = "chip fav" + (/(^|\s)fav(\s|$)/i.test(q) ? " active" : "");
-  favChip.innerHTML = `★ お気に入り <span class="n">${favN}</span>`;
+  favChip.innerHTML = `★★★★ 以上 <span class="n">${favN}</span>`;
   favChip.addEventListener("click", () => toggleToken("fav"));
   els.railTags.appendChild(favChip);
 
@@ -2393,7 +2397,7 @@ function refreshCard(id){
   if (pl) pl.textContent = m.plays ? `▶ ${m.plays} 回　${fmtDate(new Date(m.last).toISOString())}` : "";
   paintTagList(id);
   if (currentFile && currentFile.id === id)
-    els.pFav.style.color = m.rate ? "var(--amber)" : "";
+    paintPlayerRate();
 }
 
 const thumbObserver = new IntersectionObserver(entries => {
@@ -2546,7 +2550,7 @@ async function openPlayer(file, startAt){
   });
   els.pBox.href = "https://app.box.com/file/" + file.id;
   els.pMeta.textContent = [fmtSize(file.size), fmtDate(file.modified), file.path].filter(Boolean).join("  ·  ");
-  els.pFav.style.color = getMark(file.id).fav ? "var(--amber)" : "";
+  paintPlayerRate();
 
   pushLayer("player", () => closePlayerNow());
 
@@ -2647,7 +2651,7 @@ function closePlayerNow(){
   playerClosing = true;
   wantPlay = false;
 
-  if (presConn){ castSend({type:"stop"}); try{ presConn.terminate(); }catch(_){} endCast(); }
+  if (presConn){ stopCastPlayback(); endCast(); }
   stopCastSearch();
   castAvailBy.main = null;   // 探索用はそのまま生かしておく
   if (fsElement()){ try{ (document.exitFullscreen||document.webkitExitFullscreen).call(document); }catch(_){} }
@@ -3189,8 +3193,8 @@ function openSortMenu(open){
 els.personalTags.addEventListener("change", async () => {
   localStorage.setItem("bcs_personal", els.personalTags.checked ? "1" : "0");
   say(els.personalTags.checked
-    ? "タグとお気に入りを自分専用にしました。他の人の記録とは分かれます。"
-    : "タグとお気に入りを共有に戻しました。全員で同じ記録を使います。");
+    ? "タグと評価を自分専用にしました"
+    : "タグと評価を全員で共有します");
   // 読み直すため、フォルダ一覧の控えを捨てて取り直す
   await idbClearStore("folders");
   cacheIndexByParent.clear(); cacheIndexLoading.clear();
@@ -3200,8 +3204,11 @@ els.personalTags.addEventListener("change", async () => {
 });
 
 function nudgeCast(delta){
-  castSend({type:"seekBy", delta});
+  // 相対で伝えると、テレビ側が動く前に次の指示が来て重なってしまう。
+  // こちらで積み上げた位置を、そのまま伝える。
   castLastTime = Math.max(0, castLastTime + delta);
+  if (castDuration) castLastTime = Math.min(castLastTime, castDuration - 1);
+  castSend({type:"seek", time: castLastTime});
   castSeekedAt = Date.now();
   castTimeAt = Date.now();
   els.castNow.textContent = fmtTC(castLastTime) + (castGotTime ? "" : "（推定）");
@@ -3214,11 +3221,7 @@ els.castPlay.addEventListener("click", () => {
   castSend({type: castPlaying ? "play" : "pause"});
   els.castPlay.textContent = castPlaying ? "一時停止" : "再生";
 });
-els.castStop.addEventListener("click", () => {
-  castSend({type:"stop"});
-  try{ presConn && presConn.terminate(); }catch(_){}
-  endCast();
-});
+els.castStop.addEventListener("click", () => { stopCastPlayback(); endCast(); });
 els.castSeek.addEventListener("input", () => { castSeeking = true; });
 els.castSeek.addEventListener("change", () => {
   const t = castDuration * (Number(els.castSeek.value) / 1000);
@@ -3348,7 +3351,23 @@ els.col.addEventListener("input", () => {
   localStorage.setItem("bcs_col", v);
 });
 els.pClose.addEventListener("click", closePlayer);
-els.pFav.addEventListener("click", () => { if (currentFile) setFav(currentFile.id, !getMark(currentFile.id).fav); });
+// プレーヤーの評価（カードと同じ 5 段階）
+for (let i = 1; i <= 5; i++){
+  const b = document.createElement("button");
+  b.textContent = "★"; b.title = i + " つ星";
+  b.addEventListener("click", () => {
+    if (!currentFile) return;
+    const cur = getMark(currentFile.id).rate;
+    setRate(currentFile.id, cur === i ? 0 : i);
+    paintPlayerRate();
+  });
+  els.pRate.appendChild(b);
+}
+function paintPlayerRate(){
+  const r = currentFile ? getMark(currentFile.id).rate : 0;
+  [...els.pRate.children].forEach((b, i) => b.classList.toggle("on", i < r));
+  els.pRate.title = r ? `${r} つ星` : "未評価";
+}
 els.scrim.addEventListener("click", e => { if (e.target === els.scrim) closePlayer(); });
 /* ============ DASH の区間配信 ============ */
 // 方針: 通常は「映像要素ひとつ」で音声も映像も再生する（同期処理が要らない）。
@@ -3989,7 +4008,7 @@ function updateMediaSession(){
     navigator.mediaSession.metadata = new MediaMetadata({
       title: currentFile.name.replace(/\.[^.]+$/, ""),
       artist: (currentFile.path || "").split("/").filter(Boolean).slice(-1)[0] || "Contact Sheet",
-      album: "Box",
+      album: presConn ? "テレビで再生中" : "Box",
       artwork: art
     });
     const M = navigator.mediaSession;
@@ -4057,6 +4076,7 @@ function showCastReset(){
    専用アプリを扱えない。Cast SDK が使える場合はそちらを優先する。 */
 let castSdkReady = false;
 let castSdkSession = null;
+let castSdkLast = null;
 const CAST_NS = "urn:x-cast:com.contactsheet";
 
 function loadCastSdk(){
@@ -4083,7 +4103,8 @@ function initCastSdk(){
         const has = avail === chrome.cast.ReceiverAvailability.AVAILABLE;
         castSdkReady = true;
         setCastAvail("sdk", has);
-        log("Cast SDK: 専用アプリを使える機器が " + (has ? "あります" : "ありません"));
+        if (castSdkLast !== has){ castSdkLast = has;
+          log("Cast SDK: 専用アプリを使える機器が " + (has ? "あります" : "ありません")); }
       },
       chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED
     );
@@ -4194,7 +4215,7 @@ function startSdkCast(){
 // 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
 // テレビ側でもシークが速く、スマートフォンの負担も小さい。
 const RECEIVER_URL = new URL("receiver.html", location.href).href;
-const CAST_RECEIVER_VERSION = 16;   // cast-receiver.html に期待する版
+const CAST_RECEIVER_VERSION = 17;   // cast-receiver.html に期待する版
 
 let presReq = null;
 let presConn = null;
@@ -4390,6 +4411,8 @@ function bindPresConn(conn){
   videoKind = "テレビ";
   els.castPanel.hidden = false;
   els.castQ2.value = els.castQuality.value;
+  els.castInfo.textContent = "画質を確認しています…";
+  updateMediaSession();          // 通知に動画の名前を出し続ける
   els.castPlay.textContent = "一時停止";
   castPlaying = true;
   // テレビからの報告が届くまでの間、送った位置を表示しておく
@@ -4444,6 +4467,12 @@ function bindPresConn(conn){
         log(`  ${t.w}x${t.h}  ${t.bw} kbps${t.active ? "  ← 使用中" : ""}`));
     }
     else if (m.type === "stats"){
+      // 画質の通知が来ない場合は、状況の報告から補う
+      if (m.w && m.h && !castTrack){
+        const label = m.h >= 1080 ? "フル HD" : m.h >= 720 ? "HD" : m.h >= 480 ? "標準画質" : "低画質";
+        castTrack = `${label} ${m.w}×${m.h}` + (m.stream ? ` / ${m.stream} kbps` : "");
+        els.castInfo.textContent = castTrack;
+      }
       if (!castModeLogged){ castModeLogged = true;
         log("再生しているのは: " + (m.mode === "専用アプリ" ? "専用アプリ ✓" : "受信ページ")); }
       // 帯域は足りているのにコマを落としている＝テレビ側の描画が追いついていない
@@ -4553,6 +4582,17 @@ function bindPresConn(conn){
 }
 
 let castEnding = false;
+// テレビ側の再生を確実に止める
+function stopCastPlayback(){
+  try{ castSend({type:"stop"}); }catch(_){}
+  // 少し待ってから接続を切る（切ってからでは指示が届かない）
+  setTimeout(() => {
+    try{ if (castSdkSession && castSdkSession.stop) castSdkSession.stop(() => {}, () => {}); }catch(_){}
+    try{ if (presConn && presConn.terminate) presConn.terminate(); }catch(_){}
+    castSdkSession = null;
+  }, 250);
+}
+
 function endCast(){
   if (castEnding) return;
   clearInterval(castTickTimer); castTickTimer = null;
@@ -4908,6 +4948,7 @@ let castWatchId = null;
 // 機器の探索は「キャストできる再生元を持つ要素」があって初めて始まる。
 // 本編は区間配信なので対象外。隠し要素に単一 URL を持たせて先に探させる。
 const castAvailBy = {probe:null, main:null, sdk:null};
+let castAvailLast = "";
 
 let castSearchTimer = null;
 let castSearchFrom = 0;
@@ -4942,8 +4983,13 @@ function setCastAvail(source, v){
   castAvailable = known ? any : null;
   els.pCast.title = any ? "テレビにキャスト" : "キャストできる機器を探しています";
   els.pCast.style.opacity = any ? "" : ".45";
-  log(`キャストできる機器（${source === "probe" ? "探索用" : source === "sdk" ? "専用アプリ" : "本編"}）: `
-    + (v ? "あり" : "なし"));
+  // 同じ内容を繰り返し記録しない
+  const key = source + ":" + (v ? 1 : 0);
+  if (castAvailLast !== key){
+    castAvailLast = key;
+    log(`キャストできる機器（${source === "probe" ? "探索用" : source === "sdk" ? "専用アプリ" : "本編"}）: `
+      + (v ? "あり" : "なし"));
+  }
   refreshCastButton();
   const sdkUsable = typeof chrome !== "undefined" && chrome.cast && castSdkReady;
 
@@ -4951,9 +4997,9 @@ function setCastAvail(source, v){
     castNoDeviceHinted = false;
     stopCastSearch();
     if (els.scrim.classList.contains("open") && !castPrompting){
-      els.pNote.textContent = "テレビが見つかりました。📺 を押すと選べます。";
+      els.pNote.textContent = "";
       refreshCastButton();   // 点灯は「テレビで再生中」のときだけ
-      playerToast("📺 テレビが見つかりました");
+
     }
   }
 }
@@ -5270,8 +5316,12 @@ document.addEventListener("keydown", e => {
     case "End":  seekToFraction(0.99); break;
     case "f": case "F":
       if (currentFile){
-        setFav(currentFile.id, !getMark(currentFile.id).fav);
-        playerToast(getMark(currentFile.id).fav ? "★ お気に入りに追加" : "★ 解除");
+        // F キーで評価を 1 つ上げる（5 の次は未評価に戻る）
+        const cur = getMark(currentFile.id).rate;
+        const next = cur >= 5 ? 0 : cur + 1;
+        setRate(currentFile.id, next);
+        paintPlayerRate();
+        playerToast(next ? "★".repeat(next) : "評価なし");
       }
       break;
     default:
