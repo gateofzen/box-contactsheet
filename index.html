@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v125</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v126</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4029,13 +4029,25 @@ function initCastSdk(){
 function attachCastSdkSession(session){
   castSdkSession = session;
   const handlers = [];
+  const pending = [];        // 受け取る準備が整う前に届いた通知を溜めておく
   const conn = {
     url: "cast:" + ((els.castAppId.value || "").trim() || DEFAULTS.castAppId),
     send(text){ try{ session.sendMessage(CAST_NS, text); }catch(err){ log("送信に失敗: " + err.message); } },
     terminate(){ try{ session.stop(() => {}, () => {}); }catch(_){} },
-    addEventListener(type, fn){ handlers.push([type, fn]); },
+    addEventListener(type, fn){
+      handlers.push([type, fn]);
+      // 溜めておいた通知を、登録された処理へ流す
+      if (type === "message" && pending.length){
+        const q = pending.splice(0);
+        setTimeout(() => q.forEach(ev => fn(ev)), 0);
+      }
+    },
   };
-  const fire = (type, ev) => handlers.filter(h => h[0] === type).forEach(h => h[1](ev));
+  const fire = (type, ev) => {
+    const hit = handlers.filter(h => h[0] === type);
+    if (!hit.length && type === "message"){ pending.push(ev); return; }
+    hit.forEach(h => h[1](ev));
+  };
 
   // 届いたものは何であれ記録する。形式や経路の違いで取りこぼさないため。
   let gotAny = false;
@@ -4137,6 +4149,7 @@ let castGotTime = false;
 let castSeekedAt = 0;
 let castLoadRetry = null;
 let castLoadAcked = false;
+const castSawTypes = new Set();
 let lastGoodTime = 0;   // 読み込み直しの最中は位置が 0 に戻るため、直前の値を控える
 let lastGoodDuration = 0;
 
@@ -4254,9 +4267,9 @@ async function castLoadCurrent(){
   let tries = 0;
   castLoadRetry = setInterval(() => {
     if (!presConn || castLoadAcked){ clearInterval(castLoadRetry); castLoadRetry = null; return; }
-    if (++tries > 8){
+    if (++tries > 20){
       clearInterval(castLoadRetry); castLoadRetry = null;
-      log("テレビが応答しません。テレビの電源や入力をご確認ください。");
+      log("テレビが応答しません（50 秒）。電源・入力・HDMI 連動の設定をご確認ください。");
       els.pNote.textContent = "テレビが応答しません（電源・入力をご確認ください）";
       return;
     }
@@ -4288,6 +4301,7 @@ function bindPresConn(conn){
   castModeLogged = false;
   castGotTime = false;
   castLoadAcked = false;
+  castSawTypes.clear();
   els.pVideo.pause();
   dashMain.stop();
   try{ els.pVideo.removeAttribute("src"); els.pVideo.load(); }catch(_){}
@@ -4307,6 +4321,7 @@ function bindPresConn(conn){
 
   conn.addEventListener("message", e => {
     let m; try{ m = JSON.parse(e.data); }catch(_){ return; }
+    if (!castSawTypes.has(m.type)){ castSawTypes.add(m.type); log("テレビからの通知: " + m.type); }
     if (m.type === "load-received" || m.type === "loaded"){
       if (!castLoadAcked){
         castLoadAcked = true;
