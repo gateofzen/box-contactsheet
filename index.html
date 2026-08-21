@@ -382,7 +382,7 @@ b{font-weight:600}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v123</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v124</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4037,8 +4037,28 @@ function attachCastSdkSession(session){
   };
   const fire = (type, ev) => handlers.filter(h => h[0] === type).forEach(h => h[1](ev));
 
-  session.addMessageListener(CAST_NS, (ns, message) => fire("message", {data: message}));
+  // 届いたものは何であれ記録する。形式や経路の違いで取りこぼさないため。
+  let gotAny = false;
+  const onAny = (ns, message) => {
+    if (!gotAny){ gotAny = true; log("テレビからの通知が届き始めました（経路 " + ns + "）"); }
+    fire("message", {data: message});
+  };
+  try{ session.addMessageListener(CAST_NS, onAny); }
+  catch(err){ log("通知の受け取りを登録できません: " + err.message); }
+
+  // 別の経路名で送られてくる場合にも備える
+  ["urn:x-cast:com.google.cast.media", "urn:x-cast:com.google.cast.tp.connection"]
+    .forEach(ns => { try{ session.addMessageListener(ns, () => {}); }catch(_){} });
+
   session.addUpdateListener(alive => { if (!alive) fire("close", {}); });
+
+  // 一定時間届かなければ、こちらから呼びかけてみる
+  setTimeout(() => {
+    if (!gotAny && presConn){
+      log("テレビからの通知がないため、状態を問い合わせます");
+      castSend({type:"ping"});
+    }
+  }, 6000);
 
   log("専用アプリに接続しました");
   bindPresConn(conn);
@@ -4094,7 +4114,7 @@ function startSdkCast(){
 // 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
 // テレビ側でもシークが速く、スマートフォンの負担も小さい。
 const RECEIVER_URL = new URL("receiver.html", location.href).href;
-const CAST_RECEIVER_VERSION = 10;   // cast-receiver.html に期待する版
+const CAST_RECEIVER_VERSION = 11;   // cast-receiver.html に期待する版
 
 let presReq = null;
 let presConn = null;
@@ -4268,7 +4288,11 @@ function bindPresConn(conn){
 
   conn.addEventListener("message", e => {
     let m; try{ m = JSON.parse(e.data); }catch(_){ return; }
-    if (m.type === "started"){
+    if (m.type === "pong"){
+      log("テレビから応答がありました（位置 " + fmtTC(m.time || 0) + "）");
+      castGotTime = true; castLastTime = m.time || castLastTime;
+    }
+    else if (m.type === "started"){
       log(`テレビ側の受信アプリが起動しました（版 ${m.version}${m.basic ? " / 簡易起動" : ""}）`);
     }
     else if (m.type === "warn"){
