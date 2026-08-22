@@ -3086,7 +3086,8 @@ function logDigest(limit){
   const dev = /Android/i.test(ua) ? "Android" : /iPhone|iPad/i.test(ua) ? "iOS"
             : /Windows/i.test(ua) ? "Windows" : /Mac/i.test(ua) ? "Mac" : "その他";
   const head = [
-    `【CS ${els.ver ? els.ver.textContent : ""}】${dev} / ${c.type}`
+    `【CS ${els.ver ? els.ver.textContent : ""}${castRecvVer ? " / 受信 v" + castRecvVer : ""}】`
+      + `${dev} / ${c.type}`
       + ` / 画質=${els.castQuality.value} 手元=${els.localQuality.value}`,
   ];
 
@@ -4642,6 +4643,7 @@ const castSawTypes = new Set();
 let castStartedLogged = false;
 let castDowngraded = false;
 let castDeviceName = "";
+let castRecvVer = 0;
 let castAudioOnlyDevice = false;
 let castDeadFrom = 0;
 let castReviving = false;
@@ -4703,6 +4705,7 @@ async function checkCastReceiver(){
       log(`専用アプリが古い版です（置いてあるもの: ${ver || "版なし"} / 必要: ${CAST_RECEIVER_VERSION}）: ${url}`);
       say(`テレビ用の cast-receiver.html が古い版です（${ver || "版なし"}）。最新のものに置き換えてください。`, true);
     }else{
+      castRecvVer = ver;
       log(`専用アプリの置き場を確認しました（版 ${ver}）: ${url}`);
     }
   }catch(err){ log("専用アプリの置き場を確認できません: " + err.message); }
@@ -5144,18 +5147,32 @@ function stopCastPlayback(){
   const sess = castSdkSession;
   const conn = presConn;
   castSdkSession = null;
+  let ended = false;
 
-  // 2) 少し待ってから接続を断つ
-  setTimeout(() => {
-    try{ if (sess && sess.stop) sess.stop(() => log("テレビ側のアプリを終了しました"),
-                                          err => log("終了できません: " + (err && err.code || err))); }catch(_){}
-    try{ if (conn && conn.terminate) conn.terminate(); }catch(_){}
-  }, 300);
+  const endOnce = (n) => {
+    if (ended) return;
+    try{
+      if (sess && sess.stop){
+        sess.stop(() => { ended = true; log("テレビ側のアプリを終了しました"); },
+                  err => log(`終了できません（${n} 回目）: ` + ((err && (err.code || err.description)) || err)));
+        return;
+      }
+    }catch(err){ log(`終了に失敗（${n} 回目）: ` + err.message); }
+    try{ if (conn && conn.terminate){ conn.terminate(); ended = true; } }catch(_){}
+  };
 
-  // 3) それでも止まらない場合に備え、もう一度終了を試みる
+  // 2) 少し待ってから、間を空けて何度か試す
+  setTimeout(() => endOnce(1), 300);
+  setTimeout(() => endOnce(2), 1500);
+  setTimeout(() => endOnce(3), 4000);
+
+  // 3) それでも止まらなければ、止め方を案内する
   setTimeout(() => {
-    try{ if (sess && sess.stop) sess.stop(() => {}, () => {}); }catch(_){}
-  }, 2000);
+    if (ended) return;
+    log("テレビ側を止められませんでした");
+    say("テレビ（スピーカー）を止められませんでした。"
+      + "Google Home アプリか、機器のボタンで停止してください。", true);
+  }, 7000);
 }
 
 /* ---- 手元の再生の画質調整 ----
