@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="22">
+<meta name="cs-version" content="23">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -83,7 +83,7 @@ ctx.addCustomMessageListener(NS, function(e){
     lastSender = e.senderId;
     if (!announced){          // 送り先が分かった時点で名乗り直す
       announced = true;
-      reply({type:"started", version:22});
+      reply({type:"started", version:23});
     }
   }
   var m;
@@ -187,7 +187,7 @@ try{
     ctx.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, function(e){
       if (e && e.senderId) lastSender = e.senderId;
       // 端末が変わってもすぐ会話できるよう、その場で名乗る
-      reply({type:"started", version:22});
+      reply({type:"started", version:23});
       var t = pm.getCurrentTimeSec();
       if (isFinite(t)) reply({type:"time", time:t, duration:pm.getDurationSec() || 0});
     });
@@ -196,7 +196,28 @@ try{
 
 var startErr = null;
 try{
-  // 再生できないときの理由を、読める形で手元へ返す
+  // 手元との接続が切れたら再生を止める。
+// 「操作待ちで終了しない」設定のため、放っておくと鳴り続けてしまう。
+try{
+  var senders = 0;
+  ctx.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, function(){
+    senders++;
+  });
+  ctx.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, function(){
+    senders = Math.max(0, senders - 1);
+    if (senders > 0) return;
+    // 少し待って、誰も戻ってこなければ止める（持ち替えの一瞬で切らない）
+    setTimeout(function(){
+      if (senders > 0) return;
+      try{ pm.stop(); }catch(e){}
+      msg.style.display = "";
+      msg.textContent = "Contact Sheet";
+      try{ ctx.stop(); }catch(e){}
+    }, 3000);
+  });
+}catch(e){}
+
+// 再生できないときの理由を、読める形で手元へ返す
 try{
   pm.addEventListener(cast.framework.events.EventType.ERROR, function(e){
     var d = [];
@@ -230,8 +251,8 @@ ctx.start();               // 設定は渡さない
 }
 
 if (!startErr){
-  setTimeout(function(){ reply({type:"started", version:22}); }, 800);
-  setTimeout(function(){ reply({type:"started", version:22}); }, 3000);
+  setTimeout(function(){ reply({type:"started", version:23}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:23}); }, 3000);
 }
 
 </script>
