@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="20">
+<meta name="cs-version" content="21">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -83,7 +83,7 @@ ctx.addCustomMessageListener(NS, function(e){
     lastSender = e.senderId;
     if (!announced){          // 送り先が分かった時点で名乗り直す
       announced = true;
-      reply({type:"started", version:20});
+      reply({type:"started", version:21});
     }
   }
   var m;
@@ -113,7 +113,14 @@ ctx.addCustomMessageListener(NS, function(e){
     if (m.maxHeight || m.fixed || m.quality) applyQuality(m.maxHeight, m.fixed);
     reply({type:"load-received", time:req.currentTime});   // 受け取った合図
     pm.load(req).then(function(){ reply({type:"loaded", time:req.currentTime}); },
-                      function(err){ reply({type:"error", message:String(err)}); });
+      function(err){
+        var t = "";
+        try{
+          t = (err && (err.detailedErrorCode || err.code || err.message)) || "";
+          if (err && err.data) t += " data=" + JSON.stringify(err.data).slice(0, 160);
+        }catch(_){}
+        reply({type:"error", where:"load", message:String(t || err)});
+      });
   }
   else if (m.type === "quality") applyQuality(m.maxHeight, m.fixed);
   else if (m.type === "volume"){
@@ -177,7 +184,7 @@ try{
     ctx.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, function(e){
       if (e && e.senderId) lastSender = e.senderId;
       // 端末が変わってもすぐ会話できるよう、その場で名乗る
-      reply({type:"started", version:20});
+      reply({type:"started", version:21});
       var t = pm.getCurrentTimeSec();
       if (isFinite(t)) reply({type:"time", time:t, duration:pm.getDurationSec() || 0});
     });
@@ -186,7 +193,32 @@ try{
 
 var startErr = null;
 try{
-  ctx.start();               // 設定は渡さない
+  // 再生できないときの理由を、読める形で手元へ返す
+try{
+  pm.addEventListener(cast.framework.events.EventType.ERROR, function(e){
+    var d = [];
+    try{
+      if (e.detailedErrorCode != null) d.push("code=" + e.detailedErrorCode);
+      if (e.reason) d.push("reason=" + e.reason);
+      var er = e.error;
+      if (er){
+        if (typeof er === "string") d.push(er);
+        else{
+          if (er.code != null) d.push("shaka=" + er.code);
+          if (er.category != null) d.push("cat=" + er.category);
+          if (er.data) d.push("data=" + JSON.stringify(er.data).slice(0, 160));
+        }
+      }
+    }catch(_){}
+    var text = d.join(" / ") || "不明";
+    reply({type:"error", message:text});
+    msg.style.display = "";
+    msg.style.fontSize = "1.2vw";
+    msg.textContent = "再生できません: " + text;
+  });
+}catch(e){}
+
+ctx.start();               // 設定は渡さない
 }catch(e1){
   startErr = e1;
   msg.textContent = "起動できません: " + (e1 && e1.message || e1);
@@ -195,8 +227,8 @@ try{
 }
 
 if (!startErr){
-  setTimeout(function(){ reply({type:"started", version:20}); }, 800);
-  setTimeout(function(){ reply({type:"started", version:20}); }, 3000);
+  setTimeout(function(){ reply({type:"started", version:21}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:21}); }, 3000);
 }
 
 </script>
