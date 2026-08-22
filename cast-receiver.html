@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="cs-role" content="cast-receiver">
-<meta name="cs-version" content="21">
+<meta name="cs-version" content="22">
 <title>Contact Sheet</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -83,7 +83,7 @@ ctx.addCustomMessageListener(NS, function(e){
     lastSender = e.senderId;
     if (!announced){          // 送り先が分かった時点で名乗り直す
       announced = true;
-      reply({type:"started", version:21});
+      reply({type:"started", version:22});
     }
   }
   var m;
@@ -106,7 +106,10 @@ ctx.addCustomMessageListener(NS, function(e){
       msg.style.display = "";
     }else{
       req.media.contentUrl  = m.manifest || m.url;
-      req.media.contentType = m.manifest ? "application/dash+xml" : "video/mp4";
+      req.media.contentType = m.contentType
+        || (m.manifest ? "application/dash+xml" : "video/mp4");
+      // 音声だけを鳴らす機器では、映像を求めないことを伝える
+      if (m.audioOnly) req.media.streamType = cast.framework.messages.StreamType.BUFFERED;
     }
     req.currentTime = m.time || 0;
     req.autoplay = true;
@@ -184,7 +187,7 @@ try{
     ctx.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, function(e){
       if (e && e.senderId) lastSender = e.senderId;
       // 端末が変わってもすぐ会話できるよう、その場で名乗る
-      reply({type:"started", version:21});
+      reply({type:"started", version:22});
       var t = pm.getCurrentTimeSec();
       if (isFinite(t)) reply({type:"time", time:t, duration:pm.getDurationSec() || 0});
     });
@@ -227,8 +230,8 @@ ctx.start();               // 設定は渡さない
 }
 
 if (!startErr){
-  setTimeout(function(){ reply({type:"started", version:21}); }, 800);
-  setTimeout(function(){ reply({type:"started", version:21}); }, 3000);
+  setTimeout(function(){ reply({type:"started", version:22}); }, 800);
+  setTimeout(function(){ reply({type:"started", version:22}); }, 3000);
 }
 
 </script>
