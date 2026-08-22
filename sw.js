@@ -1,12 +1,14 @@
-/* Contact Sheet — アプリとしてインストールできるようにするための最小構成。
-   Box のデータは保存しない（トークンや動画を勝手に抱え込まないため）。
-   本体の HTML とアイコンだけを控えておき、電波が悪いときも起動はできるようにする。 */
+/* Contact Sheet — アプリとして使えるようにするための最小構成。
+   Box のデータは保存しない（トークンや動画を抱え込まないため）。
 
-const CACHE = "contactsheet-v1";
-const SHELL = ["./", "./index.html", "./manifest.json",
-               "./icon-192.png", "./icon-512.png", "./icon-maskable-512.png"];
+   本体は必ず新しいものを取りに行く。
+   保存されたものを返すのは、通信できないときだけ。 */
+
+const CACHE = "contactsheet-v2";
+const SHELL = ["./manifest.json", "./icon-192.png", "./icon-512.png", "./icon-maskable-512.png"];
 
 self.addEventListener("install", e => {
+  // 本体（index.html）は控えに含めない。毎回取りに行く。
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
 });
 
@@ -18,24 +20,44 @@ self.addEventListener("activate", e => {
   );
 });
 
+self.addEventListener("message", e => {
+  if (e.data === "skipWaiting") self.skipWaiting();
+});
+
 self.addEventListener("fetch", e => {
   const url = new URL(e.request.url);
 
-  // Box への通信には一切手を出さない（認証や動画を控えると事故のもと）
+  // Box や Worker への通信には一切手を出さない
   if (url.hostname.endsWith("box.com") || url.hostname.endsWith("boxcloud.com")
-      || url.hostname.endsWith("workers.dev")){
+      || url.hostname.endsWith("workers.dev") || url.hostname.endsWith("gstatic.com")){
     return;
   }
   if (e.request.method !== "GET" || url.origin !== self.location.origin) return;
 
-  // 本体は「まず通信、だめなら控え」。更新をすぐ反映させるため。
+  const isPage = e.request.mode === "navigate"
+    || url.pathname.endsWith("/") || url.pathname.endsWith(".html");
+
+  if (isPage){
+    // 本体・受信ページは、保存されたものを使わずに取りに行く。
+    // ブラウザ側の控えも使わせない。
+    e.respondWith(
+      fetch(e.request, {cache: "no-store"})
+        .then(res => {
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});
+          return res;
+        })
+        .catch(() => caches.match(e.request).then(r => r || caches.match("./index.html")))
+    );
+    return;
+  }
+
+  // 絵などは控えを優先（変わらないものなので）
   e.respondWith(
-    fetch(e.request)
-      .then(res => {
-        const copy = res.clone();
-        caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});
-        return res;
-      })
-      .catch(() => caches.match(e.request).then(r => r || caches.match("./index.html")))
+    caches.match(e.request).then(hit => hit || fetch(e.request).then(res => {
+      const copy = res.clone();
+      caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});
+      return res;
+    }))
   );
 });
