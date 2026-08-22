@@ -4793,19 +4793,40 @@ async function castLoadCurrent(forceQuality){
   if (!forceQuality && els.castQuality.value === "0" && autoTier > 0)
     return castLoadCurrent(autoTier === 2 ? "orig" : "-1080");
 
-  // 音声専用の機器には、音声だけの配信情報を渡す
+  // 音声専用の機器では、通る形式が機種によって違う。順に試す。
   if (castAudioOnlyDevice){
-    const mpd = await getMpd(currentFile).catch(() => null);
-    const text = mpd && buildAudioOnlyManifest(mpd.xml, mpd.url);
-    if (text){
-      payload.manifestText = text;
-      payload.audioOnly = true;
-      castSend(payload);
-      log("スピーカーへ送りました: 音声のみ");
-      watchLoadAck(payload);
-      return;
+    if (castFormat === 0){
+      const mpd = await getMpd(currentFile).catch(() => null);
+      const text = mpd && buildAudioOnlyManifest(mpd.xml, mpd.url);
+      if (text){
+        payload.manifestText = text;
+        payload.audioOnly = true;
+        castSend(payload);
+        log("スピーカーへ送りました: 音声のみの配信情報");
+        watchLoadAck(payload);
+        return;
+      }
+      castFormat = 1;
+      log("音声だけの配信情報を作れません");
     }
-    log("音声だけの配信情報を作れません。そのまま送ります。");
+    if (castFormat === 1){
+      const mpd = await getMpd(currentFile).catch(() => null);
+      if (mpd){
+        payload.manifest = mpd.url;
+        payload.audioOnly = true;
+        castSend(payload);
+        log("スピーカーへ送りました: 配信情報そのまま");
+        watchLoadAck(payload);
+        return;
+      }
+      castFormat = 2;
+    }
+    payload.url = originalUrl(currentFile);
+    payload.audioOnly = true;
+    castSend(payload);
+    log("スピーカーへ送りました: 元ファイル");
+    watchLoadAck(payload);
+    return;
   }
 
   if (q === "orig"){
@@ -4821,6 +4842,28 @@ async function castLoadCurrent(forceQuality){
   }
   castSend(payload);
   watchLoadAck(payload);
+}
+
+/* 音声専用の機器では、通る形式が機種によって違う。
+   失敗したら次の形式へ順に切り替える。 */
+const CAST_FORMATS = ["音声のみの配信情報", "配信情報そのまま", "元ファイル"];
+let castFormat = 0;
+let castFormatAt = 0;
+
+function tryNextCastFormat(why){
+  if (!presConn || !currentFile) return;
+  if (Date.now() - castFormatAt < 6000) return;      // 立て続けに切り替えない
+  if (castFormat >= CAST_FORMATS.length - 1){
+    log("どの形式でも再生できませんでした: " + (why || ""));
+    els.pNote.textContent = "この機器では再生できません";
+    return;
+  }
+  castFormat++;
+  castFormatAt = Date.now();
+  log(`${CAST_FORMATS[castFormat]} で試します`);
+  els.pNote.textContent = `${CAST_FORMATS[castFormat]} で試しています…`;
+  castStartTime = castLastTime || castStartTime;
+  castLoadCurrent();
 }
 
 function watchLoadAck(payload){
@@ -4930,7 +4973,8 @@ function bindPresConn(conn){
       els.pNote.textContent = "";
     }
     else if (m.type === "error"){
-      log("テレビ側のエラー: " + (m.message || m.code));
+      log("テレビ側のエラー" + (m.where ? `（${m.where}）` : "") + ": " + (m.message || m.code));
+      if (castAudioOnlyDevice) tryNextCastFormat(m.message);
       els.pNote.textContent = "テレビで再生できません（" + (m.message || m.code) + "）";
       say("テレビ側で再生できませんでした: " + (m.message || m.code), true);
     }
