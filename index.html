@@ -814,6 +814,7 @@ let currentFile = null;
 /* ============ ログ ============ */
 const logLines = [];
 let logSaveTimer = null;
+let swUpdating = false;
 function log(...a){
   logLines.push(new Date().toLocaleTimeString("ja-JP") + "  " + a.join(" "));
   if (logLines.length > 600) logLines.shift();
@@ -6194,9 +6195,22 @@ window.addEventListener("appinstalled", () => {
 });
 if ("serviceWorker" in navigator){
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js")
-      .then(() => log("アプリの下準備が整いました"))
+    navigator.serviceWorker.register("sw.js", {updateViaCache: "none"})
+      .then(reg => {
+        log("アプリの下準備が整いました");
+        // 置き換えた版に気づけるよう、起動時と 30 分ごとに確かめる
+        try{ reg.update(); }catch(_){}
+        setInterval(() => { try{ reg.update(); }catch(_){} }, 30 * 60 * 1000);
+      })
       .catch(err => log("service worker を登録できません: " + err.message));
+
+    // 新しい版に入れ替わったら、読み込み直して反映する
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (swUpdating) return;
+      swUpdating = true;
+      say("新しい版に更新します…");
+      setTimeout(() => location.reload(), 800);
+    });
   });
 }
 
