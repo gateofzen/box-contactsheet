@@ -4794,37 +4794,35 @@ async function castLoadCurrent(forceQuality){
     return castLoadCurrent(autoTier === 2 ? "orig" : "-1080");
 
   // 音声専用の機器では、通る形式が機種によって違う。順に試す。
+  // 区間ごとの配信情報は受け付けない機種が多いので、まず素直な 1 本のファイルを渡す。
   if (castAudioOnlyDevice){
+    payload.audioOnly = true;
+
     if (castFormat === 0){
+      payload.url = castReadyUrl || originalUrl(currentFile);
+      payload.contentType = "video/mp4";   // 中身に音声が入っていれば鳴る
+      castSend(payload);
+      log("スピーカーへ送りました: 元ファイル");
+      watchLoadAck(payload);
+      return;
+    }
+    if (castFormat === 1){
       const mpd = await getMpd(currentFile).catch(() => null);
       const text = mpd && buildAudioOnlyManifest(mpd.xml, mpd.url);
       if (text){
         payload.manifestText = text;
-        payload.audioOnly = true;
         castSend(payload);
         log("スピーカーへ送りました: 音声のみの配信情報");
         watchLoadAck(payload);
         return;
       }
-      castFormat = 1;
-      log("音声だけの配信情報を作れません");
-    }
-    if (castFormat === 1){
-      const mpd = await getMpd(currentFile).catch(() => null);
-      if (mpd){
-        payload.manifest = mpd.url;
-        payload.audioOnly = true;
-        castSend(payload);
-        log("スピーカーへ送りました: 配信情報そのまま");
-        watchLoadAck(payload);
-        return;
-      }
       castFormat = 2;
     }
-    payload.url = originalUrl(currentFile);
-    payload.audioOnly = true;
+    const mpd2 = await getMpd(currentFile).catch(() => null);
+    if (mpd2) payload.manifest = mpd2.url;
+    else payload.url = originalUrl(currentFile);
     castSend(payload);
-    log("スピーカーへ送りました: 元ファイル");
+    log("スピーカーへ送りました: 配信情報そのまま");
     watchLoadAck(payload);
     return;
   }
@@ -4846,7 +4844,7 @@ async function castLoadCurrent(forceQuality){
 
 /* 音声専用の機器では、通る形式が機種によって違う。
    失敗したら次の形式へ順に切り替える。 */
-const CAST_FORMATS = ["音声のみの配信情報", "配信情報そのまま", "元ファイル"];
+const CAST_FORMATS = ["元ファイル", "音声のみの配信情報", "配信情報そのまま"];
 let castFormat = 0;
 let castFormatAt = 0;
 
