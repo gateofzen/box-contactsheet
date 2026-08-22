@@ -415,7 +415,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v164</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v165</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -537,7 +537,7 @@ details.sub[open]>summary{color:var(--text)}
             <label class="check"><input id="autohq" type="checkbox"> 常に高画質で作る（遅い）</label>
             <label class="check"><input id="bgAudio" type="checkbox" checked> 画面を消しても音声を続ける</label>
             <label class="check"><input id="wholeAudio" type="checkbox" checked>
-              音声を丸ごと取得してから再生（画面を消しても途切れない）</label>
+              再生しながら音声を丸ごと取得する（取得後は通信不要）</label>
             <div class="field"><label for="audioPrefetch">音声の先読み</label>
               <select id="audioPrefetch">
                 <option value="auto" selected>自動（Wi-Fi は 30 分 / モバイルは 10 分）</option>
@@ -4043,41 +4043,6 @@ async function enterAudioOnly(){
   els.pVideo.pause();
 
   try{
-    // まず丸ごと取得を試みる。取り切ってしまえば、以後は通信に左右されない。
-    if (els.wholeAudio.checked && !wholeAudioBusy){
-      wholeAudioBusy = true;
-      const big = els.audioVeil.querySelector(".big");
-      try{
-        const got = await fetchWholeAudio(currentFile, (done, total) => {
-          const pct = Math.round(done / total * 100);
-          big.textContent = `🎧 音声を取得しています… ${pct}%`;
-          els.pNote.textContent = `音声を取得中 ${pct}%（あと少しで通信不要になります）`;
-        });
-        releaseWholeAudio();
-        wholeAudioUrl = URL.createObjectURL(got.blob);
-        dashAudio.stop();
-        els.pAudio.src = wholeAudioUrl;
-        await new Promise(res => {
-          const done = () => { els.pAudio.removeEventListener("loadedmetadata", done); res(); };
-          els.pAudio.addEventListener("loadedmetadata", done);
-          setTimeout(res, 15000);
-        });
-        els.pAudio.currentTime = t;
-        els.pAudio.muted = false;
-        els.pAudio.volume = userVolume;
-        await els.pAudio.play();
-        big.textContent = "🎧 音声のみ再生中";
-        els.pNote.textContent = "音声のみ再生中（取得済み・通信不要）";
-        log(`音声を丸ごと取得しました（${Math.round(got.blob.size/1048576)}MB）。以後は通信に左右されません。`);
-        wholeAudioBusy = false;
-        return;
-      }catch(err){
-        wholeAudioBusy = false;
-        log("丸ごと取得に失敗: " + err.message + " / 区間配信に切り替えます");
-        big.textContent = "🎧 音声を準備しています…";
-      }
-    }
-
     const ok = await dashAudio.start(currentFile, els.pAudio, ["audio"], t);
     if (!ok) throw new Error("音声トラックを取り出せません");
     els.pAudio.muted = false;
@@ -4086,6 +4051,10 @@ async function enterAudioOnly(){
     els.audioVeil.querySelector(".big").textContent = "🎧 音声のみ再生中";
     els.pNote.textContent = "音声のみ再生中（画面を消しても続きます）";
     log("音声のみ再生に切り替え " + fmtTC(t));
+
+    // 鳴らしながら、裏で音声全体を取得しておく。
+    // 取り終えたら静かに差し替えるので、以後は通信に左右されない。
+    if (els.wholeAudio.checked) grabWholeAudioInBackground(currentFile);
   }catch(err){
     log("音声のみ再生に失敗: " + err.message);
     say("この動画は音声のみ再生に対応していません: " + err.message, true);
@@ -4107,6 +4076,7 @@ function exitAudioOnly(){
   dashAudio.stop();
   els.pAudio.removeAttribute("src");
   releaseWholeAudio();
+  wholeAudioReady = false;
   audioOnly = false;
   clearInterval(audioBufTimer); audioBufTimer = null;
   els.audioVeil.hidden = true;
@@ -4218,9 +4188,9 @@ function startAudioBufferReport(){
         log(`先読み完了: ${min} 分ぶんを手元に置きました`);
       }
       els.castInfo && (els.castInfo.textContent = "");
-      els.pNote.textContent = ahead > 60
-        ? `音声のみ再生中（${min} 分先まで取得済み）`
-        : "音声のみ再生中";
+      els.pNote.textContent = wholeAudioReady
+        ? "音声のみ再生中（取得済み・通信不要）"
+        : (ahead > 60 ? `音声のみ再生中（${min} 分先まで取得済み）` : "音声のみ再生中");
     }
   }, 3000);
 }
@@ -4306,6 +4276,7 @@ async function restartAudioOnly(why){
    以後は通信が切れても最後まで再生できる。 */
 let wholeAudioUrl = null;
 let wholeAudioBusy = false;
+let wholeAudioReady = false;
 
 function releaseWholeAudio(){
   if (wholeAudioUrl){ URL.revokeObjectURL(wholeAudioUrl); wholeAudioUrl = null; }
@@ -4354,6 +4325,53 @@ async function fetchWholeAudio(file, onProgress){
       }
     }
   }
+}
+
+// 再生を止めずに、裏で音声全体を取得する
+async function grabWholeAudioInBackground(file){
+  if (wholeAudioBusy || wholeAudioUrl) return;
+  wholeAudioBusy = true;
+  const big = els.audioVeil.querySelector(".big");
+  let lastPct = -1;
+
+  try{
+    const got = await fetchWholeAudio(file, (done, total) => {
+      const pct = Math.round(done / total * 100);
+      if (pct !== lastPct && pct % 10 === 0){
+        lastPct = pct;
+        if (audioOnly) big.textContent = `🎧 音声のみ再生中（取得 ${pct}%）`;
+      }
+    });
+
+    // 途中で音声のみをやめていたら、差し替えない
+    if (!audioOnly || currentFile !== file){ wholeAudioBusy = false; return; }
+
+    const at = els.pAudio.currentTime || 0;
+    const playing = !els.pAudio.paused;
+    releaseWholeAudio();
+    wholeAudioUrl = URL.createObjectURL(got.blob);
+
+    // 差し替えは一瞬で終わる。位置と再生状態をそのまま引き継ぐ。
+    dashAudio.stop();
+    els.pAudio.src = wholeAudioUrl;
+    await new Promise(res => {
+      const done = () => { els.pAudio.removeEventListener("loadedmetadata", done); res(); };
+      els.pAudio.addEventListener("loadedmetadata", done);
+      setTimeout(res, 15000);
+    });
+    els.pAudio.currentTime = at;
+    els.pAudio.volume = userVolume;
+    if (playing) await els.pAudio.play().catch(() => {});
+
+    big.textContent = "🎧 音声のみ再生中（取得済み）";
+    wholeAudioReady = true;
+    els.pNote.textContent = "音声のみ再生中（取得済み・通信不要）";
+    log(`音声を丸ごと取得しました（${Math.round(got.blob.size/1048576)}MB）。以後は通信に左右されません。`);
+  }catch(err){
+    log("丸ごと取得に失敗: " + err.message + "（区間配信のまま続けます）");
+    if (audioOnly) big.textContent = "🎧 音声のみ再生中";
+  }
+  wholeAudioBusy = false;
 }
 
 function resetAudioState(){
