@@ -415,7 +415,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v165</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v166</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4507,8 +4507,13 @@ function initCastSdk(){
 function attachCastSdkSession(session){
   castSdkSession = session;
   try{
-    const nm = session.receiver && session.receiver.friendlyName;
-    if (nm){ castDeviceName = nm; log("キャスト先: " + nm); }
+    const rc = session.receiver || {};
+    if (rc.friendlyName){ castDeviceName = rc.friendlyName; }
+    // 映像を出せる機器かどうか。スマートスピーカーは音声だけ。
+    const caps = rc.capabilities || [];
+    castAudioOnlyDevice = caps.length > 0 && !caps.includes("video_out");
+    log("キャスト先: " + (castDeviceName || "不明")
+      + (castAudioOnlyDevice ? "（音声専用）" : ""));
   }catch(_){}
   const handlers = [];
   const pending = [];        // 受け取る準備が整う前に届いた通知を溜めておく
@@ -4608,7 +4613,7 @@ function startSdkCast(){
 // 動画そのものを送るのではなく「どこにあるか」を伝えるだけなので、
 // テレビ側でもシークが速く、スマートフォンの負担も小さい。
 const RECEIVER_URL = new URL("receiver.html", location.href).href;
-const CAST_RECEIVER_VERSION = 19;   // cast-receiver.html に期待する版
+const CAST_RECEIVER_VERSION = 20;   // cast-receiver.html に期待する版
 
 let presReq = null;
 let presConn = null;
@@ -4637,6 +4642,7 @@ const castSawTypes = new Set();
 let castStartedLogged = false;
 let castDowngraded = false;
 let castDeviceName = "";
+let castAudioOnlyDevice = false;
 let castDeadFrom = 0;
 let castReviving = false;
 let lastGoodTime = 0;   // 読み込み直しの最中は位置が 0 に戻るため、直前の値を控える
@@ -4749,6 +4755,31 @@ function castSend(obj){
   try{ presConn.send(JSON.stringify(obj)); }catch(err){ log("テレビへの送信に失敗: " + err.message); }
 }
 
+/* 音声だけの配信情報を作る。
+   スマートスピーカーは映像を扱えないため、映像の記述を外したものを渡す。
+   区間の場所は絶対的な形に直しておく。 */
+function buildAudioOnlyManifest(xml, manifestUrl){
+  const sets = [...xml.getElementsByTagName("AdaptationSet")];
+  const audio = sets.find(a =>
+    (a.getAttribute("mimeType") || "").startsWith("audio") ||
+    (a.getAttribute("contentType") || "") === "audio" ||
+    [...a.getElementsByTagName("Representation")]
+      .some(r => (r.getAttribute("mimeType") || "").startsWith("audio")));
+  if (!audio) return null;
+
+  const dur = xml.documentElement.getAttribute("mediaPresentationDuration") || "";
+  const base = manifestUrl.replace(/[^/]*$/, "");     // manifest.mpd を除いた場所
+
+  return `<?xml version="1.0" encoding="utf-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" profiles="urn:mpeg:dash:profile:isoff-live:2011"
+     type="static" mediaPresentationDuration="${dur}" minBufferTime="PT2S">
+  <BaseURL>${base}</BaseURL>
+  <Period>
+${audio.outerHTML}
+  </Period>
+</MPD>`;
+}
+
 async function castLoadCurrent(forceQuality){
   if (!presConn || !currentFile) return;
   const q = forceQuality || els.castQuality.value;
@@ -4762,6 +4793,21 @@ async function castLoadCurrent(forceQuality){
   if (!forceQuality && els.castQuality.value === "0" && autoTier > 0)
     return castLoadCurrent(autoTier === 2 ? "orig" : "-1080");
 
+  // 音声専用の機器には、音声だけの配信情報を渡す
+  if (castAudioOnlyDevice){
+    const mpd = await getMpd(currentFile).catch(() => null);
+    const text = mpd && buildAudioOnlyManifest(mpd.xml, mpd.url);
+    if (text){
+      payload.manifestText = text;
+      payload.audioOnly = true;
+      castSend(payload);
+      log("スピーカーへ送りました: 音声のみ");
+      watchLoadAck(payload);
+      return;
+    }
+    log("音声だけの配信情報を作れません。そのまま送ります。");
+  }
+
   if (q === "orig"){
     // Box の配信用は元の半分ほどのビットレートに再圧縮されている。
     // 画質を優先する場合は原本をそのまま渡す。
@@ -4774,7 +4820,10 @@ async function castLoadCurrent(forceQuality){
     log("テレビへ送りました: " + (payload.manifest ? "区間配信" : "単一ファイル"));
   }
   castSend(payload);
+  watchLoadAck(payload);
+}
 
+function watchLoadAck(payload){
   // テレビが眠っていると、準備が整う前の指示は失われる。
   // 受け取った合図が来るまで送り直す。
   clearInterval(castLoadRetry);
@@ -4834,7 +4883,8 @@ function bindPresConn(conn){
   els.vzoom.classList.add("castmode");
   els.castQ2.value = els.castQuality.value;
   els.castInfo.textContent = "画質を確認しています…";
-  els.castWhere.textContent = "📺 " + (castDeviceName || "テレビ") + " で再生中";
+  els.castWhere.textContent = (castAudioOnlyDevice ? "🔊 " : "📺 ")
+    + (castDeviceName || "テレビ") + " で再生中";
   updateMediaSession();          // 通知に動画の名前を出し続ける
   els.castPlay.textContent = "一時停止";
   castPlaying = true;
@@ -4904,7 +4954,7 @@ function bindPresConn(conn){
         }
       }else castDeadFrom = 0;
       // 【自動】余裕があれば元ファイルへ、足りなければ配信用へ。
-      if (els.castQuality.value === "0") autoTune(m);
+      if (els.castQuality.value === "0" && !castAudioOnlyDevice) autoTune(m);
 
       // 元ファイルは重い。途切れるようなら配信用へ移す。
       const dropRate0 = m.decoded > 200 ? (m.dropped || 0) / m.decoded : 0;
@@ -4930,8 +4980,9 @@ function bindPresConn(conn){
           castTrack = now;
           log("テレビ側の画質: " + castTrack);
         }
-        els.castInfo.textContent = castTrack
-          + (m.estimate ? `　回線 ${m.estimate} kbps` : "");
+        els.castInfo.textContent = castAudioOnlyDevice
+          ? "音声のみ" + (m.stream ? ` / ${m.stream} kbps` : "")
+          : castTrack + (m.estimate ? `　回線 ${m.estimate} kbps` : "");
       }
       if (!castModeLogged){ castModeLogged = true;
         log("再生しているのは: " + (m.mode === "専用アプリ" ? "専用アプリ ✓" : "受信ページ")); }
@@ -5321,6 +5372,7 @@ function endCast(){
   castTrack = "";
   els.pCast.classList.remove("btn-go");
   els.pCast.classList.remove("ready");
+  castAudioOnlyDevice = false;
   els.castPanel.hidden = true;
   els.vzoom.classList.remove("castmode");
   log("キャストを終了しました");
