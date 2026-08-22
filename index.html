@@ -194,6 +194,11 @@ b{font-weight:600}
 .card:hover .hq{opacity:.85}
 .hq:hover{opacity:1;border-color:var(--amber);color:var(--amber)}
 .hq.done{color:var(--mint);border-color:rgba(95,211,196,.5);opacity:.85}
+/* 高画質にしたものは、押せるボタンではなく静かな印にする */
+.strip.hq-done::after{content:"⤢";position:absolute;left:8px;bottom:8px;z-index:3;
+  font-family:var(--mono);font-size:11px;color:var(--mint);opacity:0;transition:.14s;
+  text-shadow:0 1px 3px rgba(0,0,0,.8)}
+.card:hover .strip.hq-done::after{opacity:.7}
 
 .meta{padding:10px 12px 11px}
 .name{font-family:var(--display);font-weight:500;font-size:13.5px;line-height:1.4;
@@ -422,7 +427,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v172</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v173</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2350,7 +2355,9 @@ function makeCard(file){
     try{
       await buildHiRes(file);
       await paintThumbs(file, true);
-      hq.textContent = "⤢ 高画質済"; hq.classList.add("done");
+      hq.hidden = true;
+      const ref0 = cardById.get(file.id);
+      if (ref0) ref0.strip.classList.add("hq-done");
     }catch(err){
       hq.textContent = "⤢ 失敗";
       log("高画質失敗", file.name, err.message);
@@ -2644,7 +2651,17 @@ async function paintThumbs(file, fromCache){
 
   if (rec.duration) ref.dur.textContent = "≈ " + fmtTC(rec.duration);
   else if (rec.interval && rec.total > 1) ref.dur.textContent = "≈ " + fmtTC(rec.total * rec.interval);
-  if (rec.hq){ ref.hq.textContent = "⤢ 高画質済"; ref.hq.classList.add("done"); }
+
+  // 済んでいるものは、押す意味がないので隠す
+  if (rec.hq){
+    ref.hq.hidden = true;
+    ref.strip.classList.add("hq-done");
+  }else{
+    ref.hq.hidden = false;
+    ref.hq.textContent = "⤢ 高画質";
+    ref.hq.disabled = false;
+    ref.strip.classList.remove("hq-done");
+  }
 
   if (ph && !rec.pending){ ph.remove(); ph = null; }
   if (ph && rec.pending){
