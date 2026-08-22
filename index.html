@@ -5138,13 +5138,24 @@ function bindPresConn(conn){
 let castEnding = false;
 // テレビ側の再生を確実に止める
 function stopCastPlayback(){
-  try{ castSend({type:"stop"}); }catch(_){}
-  // 少し待ってから接続を切る（切ってからでは指示が届かない）
+  // 1) 止めるよう伝える（届かないこともある）
+  try{ castSend({type:"stop"}); }catch(err){ log("停止を伝えられません: " + err.message); }
+
+  const sess = castSdkSession;
+  const conn = presConn;
+  castSdkSession = null;
+
+  // 2) 少し待ってから接続を断つ
   setTimeout(() => {
-    try{ if (castSdkSession && castSdkSession.stop) castSdkSession.stop(() => {}, () => {}); }catch(_){}
-    try{ if (presConn && presConn.terminate) presConn.terminate(); }catch(_){}
-    castSdkSession = null;
-  }, 250);
+    try{ if (sess && sess.stop) sess.stop(() => log("テレビ側のアプリを終了しました"),
+                                          err => log("終了できません: " + (err && err.code || err))); }catch(_){}
+    try{ if (conn && conn.terminate) conn.terminate(); }catch(_){}
+  }, 300);
+
+  // 3) それでも止まらない場合に備え、もう一度終了を試みる
+  setTimeout(() => {
+    try{ if (sess && sess.stop) sess.stop(() => {}, () => {}); }catch(_){}
+  }, 2000);
 }
 
 /* ---- 手元の再生の画質調整 ----
