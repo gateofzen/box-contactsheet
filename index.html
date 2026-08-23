@@ -62,7 +62,9 @@ b{font-weight:600}
 @media (max-width:860px){ .menu{left:10px;right:10px;min-width:0} }
 
 /* progress line */
-.pbar{height:2px;background:transparent}
+.pbar{height:2px;background:transparent;position:relative}
+.pbar .fill{position:absolute;left:0;top:0;bottom:0;width:0;
+  background:var(--amber);transition:width .3s ease}
 .pbar.on{background:linear-gradient(90deg,var(--amber),var(--mint),var(--amber));
   background-size:200% 100%;animation:slide 1.4s linear infinite}
 @keyframes slide{to{background-position:-200% 0}}
@@ -427,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v178</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v180</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -447,7 +449,7 @@ details.sub[open]>summary{color:var(--text)}
     <button class="menu-item" data-value="plays">再生回数が多い順</button>
     <button class="menu-item" data-value="recent">最近再生した順</button>
   </div>
-  <div id="pbar" class="pbar"></div>
+  <div id="pbar" class="pbar"><div class="fill"></div></div>
   <div id="statusline" class="statusline">
     <span id="progress"></span>
     <span id="msg" class="msg"></span>
@@ -558,6 +560,7 @@ details.sub[open]>summary{color:var(--text)}
                 <option value="5">5 分ぶん（通信量を抑える）</option>
               </select></div>
             <button id="forgetTiers" class="btn btn-sm">画質の学習を忘れる</button>
+            <button id="tagHq" class="btn btn-sm">既存の高画質に印を付ける</button>
             <button id="forgetHq" class="btn btn-sm">高画質の記録を消す</button>
             <div class="field"><label for="localQuality">手元の画質</label>
               <select id="localQuality">
@@ -781,6 +784,9 @@ const SAMPLE_POINTS = [0.08,0.29,0.50,0.71,0.92];
 const PAGE_SIZE = 60;
 const MD_SCOPE = "global", MD_TPL = "properties";
 const CACHE_FOLDER_NAME = "_ContactSheetCache";
+// Box が作る粗いサムネイルは 5 コマで 100KB 前後。
+// 元動画から作ったものはその数倍になるので、大きさでも見分けられる。
+const HQ_SIZE_HINT = 400 * 1024;
 const UPLOAD_API = "https://upload.box.com/api/2.0";
 const K_FAV = "csFav", K_TAGS = "csTags", K_PLAYS = "csPlays", K_LAST = "csLast";
 const K_RATE = "csRate";   // 5 段階の評価（0 は未評価）
@@ -804,7 +810,7 @@ const els = {};
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castWhere","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","tagHq","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -844,6 +850,14 @@ function say(t, err){
   syncStatusLine();
 }
 function setBusy(on){ els.pbar.classList.toggle("on", !!on); syncStatusLine(); }
+
+// 進んだ割合を帯で示す（0〜1、null で消す）
+function setProgressBar(ratio){
+  const fill = els.pbar.querySelector(".fill");
+  if (!fill) return;
+  if (ratio == null){ fill.style.width = "0"; return; }
+  fill.style.width = Math.round(Math.max(0, Math.min(1, ratio)) * 100) + "%";
+}
 function syncStatusLine(){
   const has = !!(els.progress.textContent || els.msg.textContent
     || !els.cancel.hidden || !els.prefetch.hidden);
@@ -1607,7 +1621,7 @@ async function listFolderLight(id){
   const out = [];
   let marker = "";
   do{
-    const url = `/folders/${id}/items?usemarker=true&limit=1000&fields=id,name,type`
+    const url = `/folders/${id}/items?usemarker=true&limit=1000&fields=id,name,type,size`
       + (marker ? "&marker=" + encodeURIComponent(marker) : "");
     const page = await boxFetch(url);
     out.push(...(page.entries || []));
@@ -1949,7 +1963,9 @@ function getCacheIndex(parentId){
           else {
             cur.id = e.id;
             cur.dur = Number(m[2]) || null;
-            cur.hq = !!m[3];                        // ~h.jpg は高画質で作ったもの
+            // 印があればそれに従う。印を付ける前に作ったものは、
+            // 大きさで見分ける（高画質は元動画から作るため桁が違う）。
+            cur.hq = !!m[3] || (e.size || 0) >= HQ_SIZE_HINT;
           }
           map.set(m[1], cur);
         }
@@ -2246,6 +2262,16 @@ async function loadHqDone(ids){
 }
 
 /* ============ 表示ヘルパ ============ */
+// 残り時間は、長さに応じて単位を変える
+function fmtLeft(ms){
+  const sec = Math.max(0, Math.round(ms / 1000));
+  if (sec < 60) return `あと ${sec} 秒`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `あと ${min} 分`;
+  const h = Math.floor(min / 60);
+  return `あと ${h} 時間 ${min % 60} 分`;
+}
+
 function fmtSize(n){
   if (n == null) return "";
   const u = ["B","KB","MB","GB","TB"]; let i = 0, v = n;
@@ -3200,10 +3226,17 @@ els.hqAll.addEventListener("click", async () => {
 
   for (const f of todo){
     if (!hqRunning) break;
+    // 1 本あたりの実際の時間から、残りを見積もる
     const per = done ? (Date.now() - t0) / done : 20000;
-    const left = Math.ceil((todo.length - done) * per / 60000);
-    els.hqAll.textContent = `高画質 ${done + 1}/${todo.length}（残り ${left} 分）− 押すと中止`;
-    els.progress.textContent = `高画質にしています: ${f.name}`;
+    const restN = todo.length - done;
+    const restMs = restN * per;
+    els.hqAll.textContent = `${done}/${todo.length} − 押すと中止`;
+    els.progress.textContent =
+      `高画質にしています ${done + 1}/${todo.length}`
+      + `　残り ${restN} 本 ${fmtLeft(restMs)}`
+      + (done ? `　1 本あたり ${Math.round(per / 1000)} 秒` : "")
+      + `　${f.name}`;
+    setProgressBar(done / todo.length);
     try{
       await buildHiRes(f);
       await paintThumbs(f, true);
@@ -3218,10 +3251,12 @@ els.hqAll.addEventListener("click", async () => {
   const stopped = !hqRunning;
   hqRunning = false;
   els.hqAll.textContent = "サムネイルを高画質に…";
+  setProgressBar(null);
   syncStatusLine();
-  say(stopped ? `中止しました（${done} 本を高画質にしました）`
-    : failed ? `${done} 本を高画質にしました（${failed} 本は失敗）`
-    : `${done} 本すべてを高画質にしました`);
+  const took = fmtLeft(Date.now() - t0).replace("あと ", "");
+  say(stopped ? `中止しました（${done}/${todo.length} 本・${took}）`
+    : failed ? `${done} 本を高画質にしました（${failed} 本は失敗・${took}）`
+    : `${done} 本すべてを高画質にしました（${took}）`);
 });
 
 els.statsBtn.addEventListener("click", async () => {
@@ -3628,6 +3663,70 @@ els.castSeek.addEventListener("change", () => {
 els.castQ2.addEventListener("change", () => {
   els.castQuality.value = els.castQ2.value;
   els.castQuality.dispatchEvent(new Event("change"));
+});
+
+/* ---- すでに高画質にしたものへ、後から印を付ける ----
+   印を付ける前に作ったサムネイルは、共有の置き場では見分けがつかない。
+   端末に残っている記録を頼りに、名前を付け替えて印を付ける。 */
+els.tagHq.addEventListener("click", async () => {
+  const mine = await idbAll("thumbs");
+  const hqIds = new Set(mine.filter(r => r.hq && r.ok).map(r => r.id));
+  if (!hqIds.size){
+    say("この端末には、高画質にした記録がありません");
+    return;
+  }
+
+  // どのフォルダにあるかは、索引から引く
+  const parents = new Map();
+  for (const f of globalIndex){
+    if (!hqIds.has(f.id) || !f.parentId) continue;
+    if (!parents.has(f.parentId)) parents.set(f.parentId, []);
+    parents.get(f.parentId).push(f.id);
+  }
+  if (!parents.size){
+    say("対象の動画がどのフォルダにあるか分かりません。先にフォルダを走査してください。", true);
+    return;
+  }
+
+  const total = [...parents.values()].reduce((n, a) => n + a.length, 0);
+  if (!confirm(`この端末で高画質にした ${total} 本について、\n`
+    + `共有の置き場にある画像へ印を付けます。\n`
+    + `画像を作り直さないので、すぐ終わります。始めますか？`)) return;
+
+  let renamed = 0, skipped = 0, failed = 0;
+  els.tagHq.disabled = true;
+  for (const [pid, ids] of parents){
+    const folderId = await getCacheFolder(pid, false);
+    if (!folderId){ skipped += ids.length; continue; }
+    let items = [];
+    try{ items = await listFolderLight(folderId); }catch(_){ failed += ids.length; continue; }
+
+    for (const e of items){
+      if (e.type !== "file") continue;
+      const m = /^(\d+)~(\d+)(~h)?(~p)?\.jpg$/.exec(e.name);
+      if (!m || m[3]) continue;                 // 印つきは触らない
+      if (!ids.includes(m[1])) continue;
+      const want = `${m[1]}~${m[2]}~h${m[4] || ""}.jpg`;
+      els.progress.textContent = `印を付けています: ${++renamed} 件`;
+      try{
+        const r = await fetch(`${API}/files/${e.id}`, {
+          method:"PUT",
+          headers:{Authorization:"Bearer " + token(), "Content-Type":"application/json"},
+          body: JSON.stringify({name: want}),
+        });
+        if (!r.ok){ failed++; renamed--; }
+      }catch(_){ failed++; renamed--; }
+    }
+    // 付け替えたので、覚えている一覧を捨てて読み直させる
+    cacheIndexByParent.delete(pid);
+    try{ await idbDelete("folders", "cacheidx:" + folderId); }catch(_){}
+  }
+  els.tagHq.disabled = false;
+  syncStatusLine();
+  log(`印を付けました: ${renamed} 件 / 置き場なし ${skipped} 件 / 失敗 ${failed} 件`);
+  say(renamed
+    ? `${renamed} 件に印を付けました。他の端末でも高画質済みと分かります。`
+    : "印を付けられるものがありませんでした");
 });
 
 els.forgetHq.addEventListener("click", async () => {
