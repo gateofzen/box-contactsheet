@@ -427,7 +427,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v174</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v175</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1444,14 +1444,33 @@ async function prefetchThumbs(list){
   batchRunning = true; batchStop = false;
   els.prefetch.hidden = false; setBusy(true);
   let done = 0, ok = 0, pend = 0;
+  let failStreak = 0;
   const eta = makeEta();
   srcStats.shared = srcStats.made = srcStats.failed = srcStats.local = 0;
+
+  // 細い回線で一度に多く取りに行くと、まとめて弾かれる
+  const c0 = connKind();
+  const lanes = c0.saveData ? 2
+    : /^(slow-2g|2g|3g)$/.test(c0.type) ? 3
+    : (c0.type === "Wi-Fi" ? 8 : 5);
+  if (pool.setLimit) pool.setLimit(lanes);
+  log(`サムネイルの取得: 回線 ${c0.type} / 同時 ${lanes} 本`);
 
   await Promise.all(list.map(f => pool.push(async () => {
     if (batchStop) return;
     let rec = null;
     try{ rec = await buildThumbs(f); }catch(_){}
     done++;
+
+    // 立て続けに失敗するなら、同時に取りに行く数をさらに減らす
+    if (rec && rec.pending && !rec.ok){
+      if (++failStreak >= 3 && pool.cap > 2){
+        pool.setLimit(Math.max(2, pool.cap - 2));
+        log(`取得に失敗が続くため、同時に取りに行く数を ${pool.cap} 本へ減らします`);
+        failStreak = 0;
+      }
+    }else failStreak = 0;
+
     if (rec && rec.ok) ok++; else if (rec && rec.pending) pend++;
     eta.tick();
     els.progress.textContent =
@@ -1463,6 +1482,7 @@ async function prefetchThumbs(list){
   })));
 
   batchRunning = false;
+  pool.setLimit(0);            // 上限の抑えを解く
   els.prefetch.hidden = true; setBusy(false);
   els.progress.textContent = batchStop
     ? `中止しました（${done}/${list.length}）`
@@ -2112,7 +2132,7 @@ function drainPosters(){
   }
 }
 
-async function buildThumbs(file){
+async function buildThumbs(file, attempt){
   const cached = await idbGet("thumbs", file.id);
   if (cached && cached.ok && cached.sheet){
     if (!els.autohq.checked || cached.hq){ srcStats.local++; queuePoster(file, cached); return cached; }
@@ -2157,8 +2177,16 @@ async function buildThumbs(file){
                                  : (jurl ? "→ filmstrip なし、静止画で確定" : "→ サムネイル表現なし"));
     }
   }catch(err){
-    log("thumb error", file.name, err.message);
-    rec.pending = true;   // 通信エラーは一時的なものとして扱う
+    const net = /Failed to fetch|NetworkError|圏外|timeout/i.test(err.message || "");
+    if (net && (attempt || 0) < 3){
+      // 一度に多く取りに行くと弾かれることがある。間を置いて取り直す。
+      const wait = 800 * Math.pow(2, attempt || 0);
+      await new Promise(res => setTimeout(res, wait));
+      return buildThumbs(file, (attempt || 0) + 1);
+    }
+    log("サムネイルを取得できません: " + file.name + " / " + err.message);
+    rec.pending = true;   // 一時的なものとして扱い、次回また試す
+    rec.netFail = true;
   }
   // 生成待ちのものは保存しない（保存すると二度と再試行されないため）
   if (!rec.pending){
@@ -2172,10 +2200,13 @@ async function buildThumbs(file){
 
 /* ============ 同時実行プール ============ */
 class Pool{
-  constructor(){ this.active = 0; this.q = []; }
+  constructor(){ this.active = 0; this.q = []; this.cap = 0; }
+  // 回線が細いときは、設定より少なく抑える
+  setLimit(n){ this.cap = n > 0 ? (n | 0) : 0; this.drain(); }
   push(task){ return new Promise((res,rej) => { this.q.push({task,res,rej}); this.drain(); }); }
   drain(){
-    const limit = Math.max(1, Number(els.conc.value) || 8);
+    const want = Math.max(1, Number(els.conc.value) || 8);
+    const limit = this.cap ? Math.min(want, this.cap) : want;
     while (this.active < limit && this.q.length){
       const {task,res,rej} = this.q.shift();
       this.active++;
@@ -2534,7 +2565,9 @@ async function paintThumbs(file, fromCache){
 
   if (!rec.sheet){
     if (ph){
-      ph.textContent = rec.pending ? "Box が生成中…" : "サムネイルなし";
+      ph.textContent = rec.pending
+        ? (rec.netFail ? "取得できませんでした（あとで再取得します）" : "Box が生成中…")
+        : "サムネイルなし";
       ph.classList.toggle("fail", !rec.pending);
     }
     updateWaitingCount();
