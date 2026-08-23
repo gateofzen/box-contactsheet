@@ -427,7 +427,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v177</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v178</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1942,11 +1942,15 @@ function getCacheIndex(parentId){
         }
         for (const e of await listFolderLight(folderId)){
           if (e.type !== "file") continue;
-          const m = /^(\d+)~(\d+)(~p)?\.jpg$/.exec(e.name);
+          const m = /^(\d+)~(\d+)(~h)?(~p)?\.jpg$/.exec(e.name);
           if (!m) continue;
-          const cur = map.get(m[1]) || {id:null, dur:null, posterId:null};
-          if (m[3]) cur.posterId = e.id;            // ~p.jpg は主画像
-          else { cur.id = e.id; cur.dur = Number(m[2]) || null; }
+          const cur = map.get(m[1]) || {id:null, dur:null, posterId:null, hq:false};
+          if (m[4]) cur.posterId = e.id;            // ~p.jpg は主画像
+          else {
+            cur.id = e.id;
+            cur.dur = Number(m[2]) || null;
+            cur.hq = !!m[3];                        // ~h.jpg は高画質で作ったもの
+          }
           map.set(m[1], cur);
         }
         if (map.size){
@@ -1997,7 +2001,7 @@ async function fetchSharedThumbs(file){
   if (!blob || blob.size < 100 || !/image/.test(blob.type || "image/jpeg"))
     throw new Error(`受け取った内容が画像ではありません (${blob && blob.size} bytes, ${blob && blob.type})`);
   return {id:file.id, sheet: blob, n: FRAME_COUNT, total:0, interval:null, duration:hit.dur || null,
-          ok:true, pending:false, hq:false, shared:true,
+          ok:true, pending:false, hq: !!hit.hq, shared:true,
           poster: posterBlob, posterTried: !!posterBlob, ts:Date.now()};
 }
 
@@ -2034,7 +2038,8 @@ async function uploadSharedThumbs(file, rec){
     const index = await getCacheIndex(file.parentId);
 
     const dur = Math.round(rec.duration || (rec.interval && rec.total ? rec.interval * rec.total : 0));
-    const name = `${file.id}~${dur}.jpg`;
+    // 高画質のものは名前に h を付ける。どの端末でも見分けられるようにするため。
+    const name = `${file.id}~${dur}${rec.hq ? "~h" : ""}.jpg`;
     const sheet = rec.sheet;
     const existing = index.get(file.id);
     if (existing && existing.id && rec.shared) return;   // 共有から受け取ったものを送り返さない
@@ -2050,7 +2055,7 @@ async function uploadSharedThumbs(file, rec){
     // 主画像も置いておくと、他の端末は 1 往復で受け取れる
     if (rec.poster && !existing?.posterId){
       try{
-        const pname = `${file.id}~${dur}~p.jpg`;
+        const pname = `${file.id}~${dur}${rec.hq ? "~h" : ""}~p.jpg`;
         const pfd = new FormData();
         pfd.append("attributes", JSON.stringify({name: pname, parent:{id: folderId}}));
         pfd.append("file", rec.poster, pname);
@@ -3139,6 +3144,7 @@ els.hqAll.addEventListener("click", async () => {
   // まだ高画質になっていないものだけを対象にする。
   // 記録との突き合わせだけで済むので、本数が多くても速い。
   els.progress.textContent = "対象を数えています…";
+  const hqRunning0 = true;
   const already = await loadHqDoneIds();
   const todo = [];
   const unknown = [];
@@ -3146,8 +3152,29 @@ els.hqAll.addEventListener("click", async () => {
     if (already.has(f.id)) continue;
     unknown.push(f);
   }
-  // 記録に無いものだけ、念のためサムネイルの中身も確かめる
+  // 記録に無いものは、まず共有の置き場を見る。
+  // 別の端末で済ませたものも、ここで分かる。
+  const byParent = new Map();
   for (const f of unknown){
+    if (!f.parentId) continue;
+    if (!byParent.has(f.parentId)) byParent.set(f.parentId, []);
+    byParent.get(f.parentId).push(f);
+  }
+  let fromShare = 0;
+  for (const [pid, list] of byParent){
+    if (!hqRunning0) break;
+    let index = null;
+    try{ index = await getCacheIndex(pid); }catch(_){}
+    for (const f of list){
+      const hit = index && index.get(f.id);
+      if (hit && hit.hq){ rememberHqDone(f.id); fromShare++; }
+    }
+  }
+  if (fromShare) log(`共有の置き場から ${fromShare} 本が高画質済みと分かりました`);
+
+  // それでも分からないものだけ、端末内の控えを確かめる
+  for (const f of unknown){
+    if ((await loadHqDoneIds()).has(f.id)) continue;
     const rec = await idbGet("thumbs", f.id).catch(() => null);
     if (rec && rec.hq){ rememberHqDone(f.id); continue; }
     todo.push(f);
