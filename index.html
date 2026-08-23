@@ -427,7 +427,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v173</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v174</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3767,7 +3767,7 @@ function audioPrefetchSeconds(){
 
 function createDashEngine(name){
   return {
-    name, ms:null, el:null, tracks:[], duration:0, stopped:true, ready:false, kbps:0,
+    name, ms:null, el:null, tracks:[], duration:0, stopped:true, ready:false, kbps:0, local:null,
 
     async start(file, mediaEl, kinds, startAt){
       // 閉じる最中は始めない（遅れて走る処理が音を鳴らし続けてしまう）
@@ -3853,6 +3853,11 @@ function createDashEngine(name){
     auth(url){ return url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token()); },
 
     async fetchSeg(url){
+      // 手元に取り込んである区間は、通信せずにそこから読む
+      if (this.local){
+        const hit = this.local.get(url);
+        if (hit) return hit;
+      }
       if (navigator.onLine === false) throw new Error("圏外");
       await ensureFresh();
       const t0 = performance.now();
@@ -4283,7 +4288,7 @@ function startAudioBufferReport(){
 
 async function restartAudioOnly(why){
   if (!audioOnly || !currentFile) return;
-  if (wholeAudioUrl) return;      // 丸ごと取得済みなら、立て直す必要がない
+  if (wholeAudioReady) return;    // 丸ごと手元にあるなら、立て直す必要がない
 
   // 通信が無いなら作り直せない。いま手元にあるぶんを守り、回復を待つ。
   if (navigator.onLine === false){
@@ -4366,9 +4371,10 @@ let wholeAudioReady = false;
 
 function releaseWholeAudio(){
   if (wholeAudioUrl){ URL.revokeObjectURL(wholeAudioUrl); wholeAudioUrl = null; }
+  if (dashAudio) dashAudio.local = null;     // 手元の控えを手放す
 }
 
-async function fetchWholeAudio(file, onProgress){
+async function fetchWholeAudio(file, onProgress, store){
   const mpd = await getMpd(file);
   if (!mpd) throw new Error("配信情報を取得できません");
   const tr = parseTrack(mpd.xml, mpd.url, "audio");
@@ -4381,6 +4387,7 @@ async function fetchWholeAudio(file, onProgress){
 
   const parts = new Array(count + 1);
   parts[0] = await fetchOne(tr.init);
+  if (store) store.set(tr.init, parts[0]);
 
   // 6 本ずつ同時に取りに行く（1 本ずつでは時間がかかりすぎる）
   let done = 0, next = 1;
@@ -4388,14 +4395,16 @@ async function fetchWholeAudio(file, onProgress){
     for (;;){
       const i = next++;
       if (i > count) return;
-      parts[i] = await fetchOne(tr.template(i));
+      const u = tr.template(i);
+      parts[i] = await fetchOne(u);
+      if (store) store.set(u, parts[i]);
       done++;
       if (onProgress) onProgress(done, count);
     }
   });
   await Promise.all(workers);
 
-  return {blob: new Blob(parts, {type:"audio/mp4"}), duration: dur};
+  return {duration: dur, bytes: parts.reduce((n, p) => n + (p ? p.byteLength : 0), 0)};
 
   async function fetchOne(url){
     for (let attempt = 1; ; attempt++){
@@ -4421,38 +4430,26 @@ async function grabWholeAudioInBackground(file){
   let lastPct = -1;
 
   try{
+    const store = new Map();
+    dashAudio.local = store;                 // 取れたそばから使えるようにする
     const got = await fetchWholeAudio(file, (done, total) => {
       const pct = Math.round(done / total * 100);
       if (pct !== lastPct && pct % 10 === 0){
         lastPct = pct;
         if (audioOnly) big.textContent = `🎧 音声のみ再生中（取得 ${pct}%）`;
       }
-    });
+    }, store);
 
-    // 途中で音声のみをやめていたら、差し替えない
+    // 途中で音声のみをやめていたら、何もしない
     if (!audioOnly || currentFile !== file){ wholeAudioBusy = false; return; }
 
-    const at = els.pAudio.currentTime || 0;
-    const playing = !els.pAudio.paused;
-    releaseWholeAudio();
-    wholeAudioUrl = URL.createObjectURL(got.blob);
-
-    // 差し替えは一瞬で終わる。位置と再生状態をそのまま引き継ぐ。
-    dashAudio.stop();
-    els.pAudio.src = wholeAudioUrl;
-    await new Promise(res => {
-      const done = () => { els.pAudio.removeEventListener("loadedmetadata", done); res(); };
-      els.pAudio.addEventListener("loadedmetadata", done);
-      setTimeout(res, 15000);
-    });
-    els.pAudio.currentTime = at;
-    els.pAudio.volume = userVolume;
-    if (playing) await els.pAudio.play().catch(() => {});
-
-    big.textContent = "🎧 音声のみ再生中（取得済み）";
+    // 再生はそのまま続ける。以後の区間は手元の控えから読まれる。
+    // 差し替えると、途中の位置へ飛べずに止まってしまう。
     wholeAudioReady = true;
+    big.textContent = "🎧 音声のみ再生中（取得済み）";
     els.pNote.textContent = "音声のみ再生中（取得済み・通信不要）";
-    log(`音声を丸ごと取得しました（${Math.round(got.blob.size/1048576)}MB）。以後は通信に左右されません。`);
+    log(`音声を丸ごと手元に置きました（${Math.round(got.bytes/1048576)}MB）。`
+      + "以後は通信に左右されません。");
   }catch(err){
     log("丸ごと取得に失敗: " + err.message + "（区間配信のまま続けます）");
     if (audioOnly) big.textContent = "🎧 音声のみ再生中";
