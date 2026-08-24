@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v181</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v182</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -789,8 +789,9 @@ const CACHE_FOLDER_NAME = "_ContactSheetCache";
 // 元動画から作ったものはその数倍になるので、大きさでも見分けられる。
 const HQ_SIZE_HINT = 400 * 1024;
 // 共有の一覧をどれだけ持ち続けるか。
-// 長いと、他の端末で高画質にしたものが届くのが遅れる。
-const CACHE_INDEX_TTL = 20 * 60 * 1000;   // 20 分
+// 取得は名前と大きさだけの軽い問い合わせで、フォルダごとに 1 回。
+// 長く持つ利点はないので、開き直せばほぼ毎回見に行く。
+const CACHE_INDEX_TTL = 60 * 1000;   // 1 分
 const UPLOAD_API = "https://upload.box.com/api/2.0";
 const K_FAV = "csFav", K_TAGS = "csTags", K_PLAYS = "csPlays", K_LAST = "csLast";
 const K_RATE = "csRate";   // 5 段階の評価（0 は未評価）
@@ -1437,6 +1438,10 @@ async function initTree(rootId, force){
 let openSeq = 0;
 async function openSelectedFolder(deep){
   if (!fsel) return;
+  // 開き直すときは、共有の一覧も見直す。
+  // 別の端末での作業をすぐ反映させるため、保存してある分も使わない。
+  cacheIndexByParent.delete(fsel);
+  cacheIndexFresh.add(fsel);
   const seq = ++openSeq;               // 後から選び直されたら、この回は降りる
   localStorage.setItem("bcs_lastfolder", fsel);   // 起点ではなく「前回見ていた場所」
   deepScan = !!deep;
@@ -1887,11 +1892,13 @@ let shareReadOnly = false;
 const cacheFolderByParent = new Map();   // 親フォルダID -> キャッシュフォルダID（無ければ null）
 const cacheIndexByParent  = new Map();   // 親フォルダID -> Map(動画ID -> {id, dur})
 const cacheIndexLoading   = new Map();   // 親フォルダID -> Promise（同時実行の重複を防ぐ）
+const cacheIndexFresh     = new Set();   // この回は保存分を使わず、必ず見に行く
 
 function resetSharedCache(){
   cacheFolderByParent.clear();
   cacheIndexByParent.clear();
   cacheIndexLoading.clear();
+  cacheIndexFresh.clear();
   shareReadOnly = false;
   updateCacheStatus();
 }
@@ -1952,7 +1959,8 @@ function getCacheIndex(parentId){
         // 一度読んだ一覧は保存しておく。
         // ただし長く持ちすぎると、他の端末での作業が反映されない。
         const key = "cacheidx:" + folderId;
-        const saved = await idbGet("folders", key);
+        const fresh = cacheIndexFresh.delete(parentId);
+        const saved = fresh ? null : await idbGet("folders", key);
         if (saved && Date.now() - saved.ts < CACHE_INDEX_TTL){
           for (const [k,v] of saved.entries) map.set(k, v);
           cacheIndexByParent.set(parentId, map);
@@ -3540,7 +3548,13 @@ els.logout.addEventListener("click", () => {
 });
 els.cancel.addEventListener("click", () => scanAbort && scanAbort.abort());
 
-els.loadFolder.addEventListener("click", () => {
+els.loadFolder.addEventListener("click", async () => {
+  // 押したときは、保存してある共有の一覧も捨てて確かめ直す
+  if (fsel){
+    cacheIndexByParent.delete(fsel);
+    const cf = await getCacheFolder(fsel, false);
+    if (cf){ try{ await idbDelete("folders", "cacheidx:" + cf); }catch(_){} }
+  }
   if (!fsel) return say("フォルダを選んでください", true);
   openSelectedFolder(false);
 });
