@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v180</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v181</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -560,6 +560,7 @@ details.sub[open]>summary{color:var(--text)}
                 <option value="5">5 分ぶん（通信量を抑える）</option>
               </select></div>
             <button id="forgetTiers" class="btn btn-sm">画質の学習を忘れる</button>
+            <button id="syncShared" class="btn btn-sm">共有の内容を取り込む</button>
             <button id="tagHq" class="btn btn-sm">既存の高画質に印を付ける</button>
             <button id="forgetHq" class="btn btn-sm">高画質の記録を消す</button>
             <div class="field"><label for="localQuality">手元の画質</label>
@@ -787,6 +788,9 @@ const CACHE_FOLDER_NAME = "_ContactSheetCache";
 // Box が作る粗いサムネイルは 5 コマで 100KB 前後。
 // 元動画から作ったものはその数倍になるので、大きさでも見分けられる。
 const HQ_SIZE_HINT = 400 * 1024;
+// 共有の一覧をどれだけ持ち続けるか。
+// 長いと、他の端末で高画質にしたものが届くのが遅れる。
+const CACHE_INDEX_TTL = 20 * 60 * 1000;   // 20 分
 const UPLOAD_API = "https://upload.box.com/api/2.0";
 const K_FAV = "csFav", K_TAGS = "csTags", K_PLAYS = "csPlays", K_LAST = "csLast";
 const K_RATE = "csRate";   // 5 段階の評価（0 は未評価）
@@ -810,7 +814,7 @@ const els = {};
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castWhere","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","tagHq","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","syncShared","tagHq","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -1945,10 +1949,11 @@ function getCacheIndex(parentId){
     try{
       const folderId = await getCacheFolder(parentId, false);
       if (folderId){
-        // 一度読んだ一覧は保存しておく（6 時間）
+        // 一度読んだ一覧は保存しておく。
+        // ただし長く持ちすぎると、他の端末での作業が反映されない。
         const key = "cacheidx:" + folderId;
         const saved = await idbGet("folders", key);
-        if (saved && Date.now() - saved.ts < 6*60*60*1000){
+        if (saved && Date.now() - saved.ts < CACHE_INDEX_TTL){
           for (const [k,v] of saved.entries) map.set(k, v);
           cacheIndexByParent.set(parentId, map);
           cacheIndexLoading.delete(parentId);
@@ -2159,6 +2164,28 @@ function drainPosters(){
 
 async function buildThumbs(file, attempt){
   const cached = await idbGet("thumbs", file.id);
+
+  // 手元にあるものが高画質でないとき、共有の置き場に高画質があれば
+  // そちらへ入れ替える。別の端末で作ったものを取り込むため。
+  if (cached && cached.ok && cached.sheet && !cached.hq && els.shareThumbs.checked && file.parentId){
+    try{
+      const index = await getCacheIndex(file.parentId);
+      const hit = index.get(file.id);
+      if (hit && hit.hq){
+        const better = await fetchSharedThumbs(file);
+        if (better && better.ok){
+          await idbPut("thumbs", better);
+          srcStats.shared++;
+          markHqDone(file.id);
+          rememberHqDone(file.id);
+          log("共有の高画質に入れ替えました: " + file.name);
+          queuePoster(file, better);
+          return better;
+        }
+      }
+    }catch(err){ log("共有の高画質を取り込めません: " + err.message); }
+  }
+
   if (cached && cached.ok && cached.sheet){
     if (!els.autohq.checked || cached.hq){ srcStats.local++; queuePoster(file, cached); return cached; }
   }
@@ -3668,6 +3695,33 @@ els.castQ2.addEventListener("change", () => {
 /* ---- すでに高画質にしたものへ、後から印を付ける ----
    印を付ける前に作ったサムネイルは、共有の置き場では見分けがつかない。
    端末に残っている記録を頼りに、名前を付け替えて印を付ける。 */
+els.syncShared.addEventListener("click", async () => {
+  // 覚えている一覧を捨てて、いまの内容で見直す
+  const pids = new Set(view.map(f => f.parentId).filter(Boolean));
+  if (!pids.size) return say("先にフォルダを開いてください", true);
+
+  els.syncShared.disabled = true;
+  els.progress.textContent = "共有の内容を確かめています…";
+  for (const pid of pids){
+    cacheIndexByParent.delete(pid);
+    const folderId = await getCacheFolder(pid, false);
+    if (folderId){ try{ await idbDelete("folders", "cacheidx:" + folderId); }catch(_){} }
+  }
+
+  // 高画質に入れ替わるものがあれば、その場で取り込む
+  let upgraded = 0;
+  for (const f of view.slice()){
+    const before = await idbGet("thumbs", f.id).catch(() => null);
+    if (!before || before.hq) continue;
+    const rec = await buildThumbs(f).catch(() => null);
+    if (rec && rec.hq){ upgraded++; await paintThumbs(f, true); }
+  }
+  els.syncShared.disabled = false;
+  els.progress.textContent = "";
+  syncStatusLine();
+  say(upgraded ? `${upgraded} 本を高画質に入れ替えました` : "新しく取り込むものはありませんでした");
+});
+
 els.tagHq.addEventListener("click", async () => {
   const mine = await idbAll("thumbs");
   const hqIds = new Set(mine.filter(r => r.hq && r.ok).map(r => r.id));
