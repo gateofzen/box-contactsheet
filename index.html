@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v184</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v185</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -788,6 +788,8 @@ const CACHE_FOLDER_NAME = "_ContactSheetCache";
 // Box が作る粗いサムネイルは 5 コマで 100KB 前後。
 // 元動画から作ったものはその数倍になるので、大きさでも見分けられる。
 const HQ_SIZE_HINT = 400 * 1024;
+// これより大きい動画は、原本ではなく配信用から取り込む
+const HQ_ORIG_LIMIT = 1.5 * 1024 * 1024 * 1024;   // 1.5GB
 // 共有の一覧をどれだけ持ち続けるか。
 // 取得は名前と大きさだけの軽い問い合わせで、フォルダごとに 1 回。
 // 長く持つ利点はないので、開き直せばほぼ毎回見に行く。
@@ -2143,11 +2145,39 @@ function canMakeHiRes(file){
 
 async function buildHiRes(file){
   const rec = {id:file.id, sheet:null, n:FRAME_COUNT, total:0, interval:null, ok:false, pending:false, hq:true, duration:null, ts:Date.now()};
-  const cap = await captureFromVideo(originalUrl(file), SAMPLE_POINTS, file.size);
+
+  // 大きな動画は、原本ではなく Box の配信用から取り込む。
+  // 原本は先頭の情報を得るだけで時間がかかり、通信量も桁違いになる。
+  // 配信用は 1080p なので、5 コマの画質はほとんど変わらない。
+  let src = originalUrl(file), via = "原本";
+  if ((file.size || 0) > HQ_ORIG_LIMIT){
+    try{
+      const got = await waitForRep(await getRepresentation(file.id, "[mp4]") || {}, 6);
+      const url = repContentUrl(got.rep);
+      if (url){
+        src = url + (url.includes("?") ? "&" : "?")
+          + "access_token=" + encodeURIComponent(token());
+        via = "配信用";
+      }else{
+        log(`${file.name}: 配信用がまだありません（${got.pending ? "生成中" : "なし"}）`);
+      }
+    }catch(err){ log("配信用を取得できません: " + err.message); }
+  }
+
+  let cap;
+  try{
+    cap = await captureFromVideo(src, SAMPLE_POINTS, via === "原本" ? file.size : 0);
+  }catch(err){
+    // 配信用で駄目なら原本を試す（変換が古い、途中までしかない等）
+    if (via !== "配信用") throw err;
+    log(`${file.name}: 配信用では取り込めません（${err.message}）。原本で試します。`);
+    via = "原本";
+    cap = await captureFromVideo(originalUrl(file), SAMPLE_POINTS, file.size);
+  }
   rec.sheet = await composeSheet(cap.frames); rec.n = FRAME_COUNT;
   rec.duration = cap.duration;
   rec.ok = true;
-  log(`高画質 ${file.name} → ${cap.w}x${cap.h} × 5 コマ`);
+  log(`高画質 ${file.name} → ${cap.w}x${cap.h} × 5 コマ（${via}）`);
   await idbPut("thumbs", rec);
   await uploadSharedThumbs(file, rec);
   return rec;
