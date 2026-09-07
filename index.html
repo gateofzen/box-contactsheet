@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v182</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v184</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1850,17 +1850,31 @@ async function composeFromFilmstrip(blob, frameW){
  * filmstrip の 160x90 と違い、元の解像度そのままで取れる。
  * Range リクエストで必要な部分しか落とさないので、5GB の動画でも実用になる。
  */
-async function captureFromVideo(src, points){
+async function captureFromVideo(src, points, size){
   const v = document.createElement("video");
+  v.__size = size || 0;
   v.preload = "metadata";
   v.muted = true;
   v.crossOrigin = "anonymous";
   v.src = src;
 
   await new Promise((res, rej) => {
-    const to = setTimeout(() => rej(new Error("メタデータ取得がタイムアウト")), 30000);
-    v.addEventListener("loadedmetadata", () => { clearTimeout(to); res(); }, {once:true});
-    v.addEventListener("error", () => { clearTimeout(to); rej(new Error("動画を開けません")); }, {once:true});
+    // 大きな動画や細い回線では 30 秒では足りない。
+    // 大きさに応じて延ばし、進みがあれば待ち続ける。
+    let last = 0;
+    // 小さい動画は短く、大きい動画は長く待つ
+    const limit = Math.min(120000, 20000 + (v.__size || 0) / 1e9 * 40000);
+    const to = setInterval(() => {
+      const now = v.readyState;
+      if (now > last){ last = now; return; }        // 進んでいるなら待つ
+      if (Date.now() - t0 < limit) return;
+      clearInterval(to);
+      rej(new Error(`読み込みが進みません（${Math.round(limit/1000)} 秒 / 状態 ${v.readyState}`
+        + ` / 受け取り ${v.buffered && v.buffered.length ? Math.round(v.buffered.end(0)) + "秒ぶん" : "なし"}）`));
+    }, 1000);
+    const t0 = Date.now();
+    v.addEventListener("loadedmetadata", () => { clearInterval(to); res(); }, {once:true});
+    v.addEventListener("error", () => { clearInterval(to); rej(new Error("動画を開けません")); }, {once:true});
   });
 
   const dur = v.duration;
@@ -2117,9 +2131,19 @@ async function uploadSharedThumbs(file, rec){
   }catch(err){ log("共有サムネイルの保存に失敗", file.name, err.message); }
 }
 
+// ブラウザが再生できない形式は、画面を取り込めない。
+// 待たされるだけなので、はじめから見送る。
+const HQ_UNSUPPORTED = /\.(avi|wmv|mkv|flv|mpg|mpeg|rm|rmvb|asf|vob|divx|3gp|ts|m2ts)$/i;
+
+function canMakeHiRes(file){
+  // 拡張子だけで判断する。ブラウザへの問い合わせは、
+  // 環境によって空の答えが返り、扱えるものまで見送ってしまう。
+  return !HQ_UNSUPPORTED.test(file.name || "");
+}
+
 async function buildHiRes(file){
   const rec = {id:file.id, sheet:null, n:FRAME_COUNT, total:0, interval:null, ok:false, pending:false, hq:true, duration:null, ts:Date.now()};
-  const cap = await captureFromVideo(originalUrl(file), SAMPLE_POINTS);
+  const cap = await captureFromVideo(originalUrl(file), SAMPLE_POINTS, file.size);
   rec.sheet = await composeSheet(cap.frames); rec.n = FRAME_COUNT;
   rec.duration = cap.duration;
   rec.ok = true;
@@ -3259,8 +3283,18 @@ els.hqAll.addEventListener("click", async () => {
   let done = 0, failed = 0;
   const t0 = Date.now();
 
+  let skipped = 0;
+  let hqFailStreak = 0;
   for (const f of todo){
     if (!hqRunning) break;
+
+    // 扱えない形式は、待たずに見送る
+    if (!canMakeHiRes(f)){
+      skipped++;
+      await rememberHqDone(f.id);       // 次回また試さないよう記録する
+      log("この形式は高画質にできません: " + f.name);
+      continue;
+    }
     // 1 本あたりの実際の時間から、残りを見積もる
     const per = done ? (Date.now() - t0) / done : 20000;
     const restN = todo.length - done;
@@ -3277,9 +3311,20 @@ els.hqAll.addEventListener("click", async () => {
       await paintThumbs(f, true);
       await rememberHqDone(f.id);
       done++;
+      hqFailStreak = 0;
     }catch(err){
       failed++;
-      log("高画質にできません: " + f.name + " / " + err.message);
+      log(`高画質にできません: ${f.name}（${fmtSize(f.size)}） / ${err.message}`);
+
+      // 続けて失敗するときは、Box 側が要求を絞っていることがある。
+      // 間を置いてから次へ進む。
+      if (++hqFailStreak >= 3){
+        const wait = Math.min(60, 10 * (hqFailStreak - 2));
+        els.progress.textContent = `続けて失敗したため ${wait} 秒待ちます（${hqFailStreak} 回目）`;
+        log(`続けて失敗しています。${wait} 秒待ってから続けます。`);
+        for (let i = 0; i < wait && hqRunning; i++)
+          await new Promise(res => setTimeout(res, 1000));
+      }
     }
   }
 
@@ -3289,9 +3334,10 @@ els.hqAll.addEventListener("click", async () => {
   setProgressBar(null);
   syncStatusLine();
   const took = fmtLeft(Date.now() - t0).replace("あと ", "");
-  say(stopped ? `中止しました（${done}/${todo.length} 本・${took}）`
-    : failed ? `${done} 本を高画質にしました（${failed} 本は失敗・${took}）`
-    : `${done} 本すべてを高画質にしました（${took}）`);
+  const extra = (skipped ? `　扱えない形式 ${skipped} 本` : "")
+    + (failed ? `　失敗 ${failed} 本（あとで再挑戦できます）` : "");
+  say(stopped ? `中止しました（${done}/${todo.length} 本・${took}）${extra}`
+    : `${done} 本を高画質にしました（${took}）${extra}`);
 });
 
 els.statsBtn.addEventListener("click", async () => {
