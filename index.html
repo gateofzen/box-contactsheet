@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v185</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v186</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2152,16 +2152,28 @@ async function buildHiRes(file){
   let src = originalUrl(file), via = "原本";
   if ((file.size || 0) > HQ_ORIG_LIMIT){
     try{
-      const got = await waitForRep(await getRepresentation(file.id, "[mp4]") || {}, 6);
+      // 変換が終わるのを少し待つ。大きな動画ほど時間がかかる。
+      const waitSec = Math.min(40, 10 + (file.size || 0) / 1e9 * 4);
+      const got = await waitForRep(await getRepresentation(file.id, "[mp4]") || {}, waitSec);
       const url = repContentUrl(got.rep);
       if (url){
         src = url + (url.includes("?") ? "&" : "?")
           + "access_token=" + encodeURIComponent(token());
         via = "配信用";
+      }else if (got.pending){
+        // Box が変換中。大きな動画では数分から数十分かかる。
+        // 原本を開いても時間切れになるだけなので、後回しにする。
+        // 要求は出したので、次に実行するときには用意ができている
+        const err = new Error("Box が変換中です（次回には用意ができています）");
+        err.retryLater = true;
+        throw err;
       }else{
-        log(`${file.name}: 配信用がまだありません（${got.pending ? "生成中" : "なし"}）`);
+        log(`${file.name}: 配信用がありません。原本で試します。`);
       }
-    }catch(err){ log("配信用を取得できません: " + err.message); }
+    }catch(err){
+      if (err.retryLater) throw err;          // 後回しの合図は握りつぶさない
+      log("配信用を取得できません: " + err.message);
+    }
   }
 
   let cap;
@@ -3315,6 +3327,7 @@ els.hqAll.addEventListener("click", async () => {
 
   let skipped = 0;
   let hqFailStreak = 0;
+  let later = 0;
   for (const f of todo){
     if (!hqRunning) break;
 
@@ -3343,6 +3356,11 @@ els.hqAll.addEventListener("click", async () => {
       done++;
       hqFailStreak = 0;
     }catch(err){
+      if (err.retryLater){
+        later++;
+        log(`後回し: ${f.name}（${fmtSize(f.size)}） / ${err.message}`);
+        continue;                       // 失敗として数えない
+      }
       failed++;
       log(`高画質にできません: ${f.name}（${fmtSize(f.size)}） / ${err.message}`);
 
@@ -3365,7 +3383,8 @@ els.hqAll.addEventListener("click", async () => {
   syncStatusLine();
   const took = fmtLeft(Date.now() - t0).replace("あと ", "");
   const extra = (skipped ? `　扱えない形式 ${skipped} 本` : "")
-    + (failed ? `　失敗 ${failed} 本（あとで再挑戦できます）` : "");
+    + (later ? `　Box が変換中 ${later} 本（あとでもう一度実行してください）` : "")
+    + (failed ? `　失敗 ${failed} 本` : "");
   say(stopped ? `中止しました（${done}/${todo.length} 本・${took}）${extra}`
     : `${done} 本を高画質にしました（${took}）${extra}`);
 });
