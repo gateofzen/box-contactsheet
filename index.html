@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v188</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v189</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1869,7 +1869,9 @@ async function captureFromVideo(src, points, size, noCors){
     // 大きさに応じて延ばし、進みがあれば待ち続ける。
     let last = 0;
     // 小さい動画は短く、大きい動画は長く待つ
-    const limit = Math.min(120000, 20000 + (v.__size || 0) / 1e9 * 40000);
+    // 原本は大きいほど先頭の情報を得るのに時間がかかる。
+    // 進みがあれば待ち続けるので、上限は長めでよい。
+    const limit = Math.min(240000, 30000 + (v.__size || 0) / 1e9 * 25000);
     const to = setInterval(() => {
       const now = v.readyState;
       if (now > last){ last = now; return; }        // 進んでいるなら待つ
@@ -2173,52 +2175,37 @@ async function buildHiRes(file){
   // 大きな動画は、原本ではなく Box の配信用から取り込む。
   // 原本は先頭の情報を得るだけで時間がかかり、通信量も桁違いになる。
   // 配信用は 1080p なので、5 コマの画質はほとんど変わらない。
+  // Box の配信用は 640x360 しかないため、高画質とは呼べない。
+  // まず原本を試し、開けなかったときの控えとして配信用を使う。
   let src = originalUrl(file), via = "原本";
-  if ((file.size || 0) > HQ_ORIG_LIMIT){
+
+  let cap;
+  try{
+    cap = await captureFromVideo(src, SAMPLE_POINTS, via === "原本" ? file.size : 0);
+  }catch(err){
+    log(`${file.name}: 原本を開けません（${err.message}）`);
+
+    // 原本が重すぎて開けないときだけ、粗いが確実な配信用を使う
     try{
-      // 変換が終わるのを少し待つ。大きな動画ほど時間がかかる。
       const waitSec = Math.min(40, 10 + (file.size || 0) / 1e9 * 4);
       const got = await waitForRep(await getRepresentation(file.id, "[mp4]") || {}, waitSec);
       const url = repContentUrl(got.rep);
       const full = url ? url + (url.includes("?") ? "&" : "?")
         + "access_token=" + encodeURIComponent(token()) : null;
 
-      // Box は変換が終わる前でも場所を返す。実際に読めるか確かめる。
       if (full && await quickReadable(full)){
-        src = full;
         via = "配信用";
-      }else if (full || got.pending){
-        // Box が変換中。大きな動画では数分から数十分かかる。
-        // 原本を開いても時間切れになるだけなので、後回しにする。
-        // 要求は出したので、次に実行するときには用意ができている
-        const err = new Error("配信用がまだ読めません（Box が変換中。次回には用意ができています）");
-        err.retryLater = true;
-        throw err;
+        log(`${file.name}: 配信用で作り直します（粗くなります）`);
+        cap = await captureFromVideo(full, SAMPLE_POINTS, 0);
       }else{
-        log(`${file.name}: 配信用がありません。原本で試します。`);
+        const e2 = new Error("原本を開けず、配信用も用意できていません");
+        e2.retryLater = !!got.pending || !!full;
+        throw e2;
       }
-    }catch(err){
-      if (err.retryLater) throw err;          // 後回しの合図は握りつぶさない
-      log("配信用を取得できません: " + err.message);
+    }catch(e3){
+      if (e3.retryLater) throw e3;
+      throw err;
     }
-  }
-
-  let cap;
-  try{
-    cap = await captureFromVideo(src, SAMPLE_POINTS, via === "原本" ? file.size : 0);
-  }catch(err){
-    // 印なしで読めるなら、通信は通っており取り込みだけが拒まれている。
-    // どちらなのかを記録しておく。
-    let hint = "";
-    try{
-      await captureFromVideo(src, [0], 0, true);
-      hint = " ／ 印なしでは読めます（取り込みが許されていません）";
-    }catch(e2){ hint = " ／ 印なしでも読めません（届いていません）"; }
-    log(`${file.name}: ${via}を開けません（${err.message}）${hint}`);
-
-    if (via !== "配信用") throw err;
-    via = "原本";
-    cap = await captureFromVideo(originalUrl(file), SAMPLE_POINTS, file.size);
   }
   rec.sheet = await composeSheet(cap.frames); rec.n = FRAME_COUNT;
   rec.duration = cap.duration;
@@ -3382,7 +3369,8 @@ els.hqAll.addEventListener("click", async () => {
       `高画質にしています ${done + 1}/${todo.length}`
       + `　残り ${restN} 本 ${fmtLeft(restMs)}`
       + (done ? `　1 本あたり ${Math.round(per / 1000)} 秒` : "")
-      + `　${f.name}`;
+      + `　${f.name}`
+      + ((f.size || 0) > 3e9 ? `（${fmtSize(f.size)}・時間がかかります）` : "");
     setProgressBar(done / todo.length);
     try{
       await buildHiRes(f);
