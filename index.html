@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v186</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v187</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1852,13 +1852,17 @@ async function composeFromFilmstrip(blob, frameW){
  * filmstrip の 160x90 と違い、元の解像度そのままで取れる。
  * Range リクエストで必要な部分しか落とさないので、5GB の動画でも実用になる。
  */
-async function captureFromVideo(src, points, size){
+async function captureFromVideo(src, points, size, noCors){
   const v = document.createElement("video");
   v.__size = size || 0;
   v.preload = "metadata";
   v.muted = true;
-  v.crossOrigin = "anonymous";
+  v.playsInline = true;
+  // 画面を取り込むには、この印が要る。
+  // ただし配信先が許していないと、付けたままでは読めない。
+  if (!noCors) v.crossOrigin = "anonymous";
   v.src = src;
+  v.load();
 
   await new Promise((res, rej) => {
     // 大きな動画や細い回線では 30 秒では足りない。
@@ -1876,7 +1880,13 @@ async function captureFromVideo(src, points, size){
     }, 1000);
     const t0 = Date.now();
     v.addEventListener("loadedmetadata", () => { clearInterval(to); res(); }, {once:true});
-    v.addEventListener("error", () => { clearInterval(to); rej(new Error("動画を開けません")); }, {once:true});
+    v.addEventListener("error", () => {
+      clearInterval(to);
+      const e = v.error || {};
+      const why = {1:"取り消されました", 2:"通信に失敗しました",
+                   3:"内容を読み解けません", 4:"この形式は扱えません"}[e.code] || "不明";
+      rej(new Error(`動画を開けません（${why}）`));
+    }, {once:true});
   });
 
   const dur = v.duration;
@@ -2180,9 +2190,16 @@ async function buildHiRes(file){
   try{
     cap = await captureFromVideo(src, SAMPLE_POINTS, via === "原本" ? file.size : 0);
   }catch(err){
-    // 配信用で駄目なら原本を試す（変換が古い、途中までしかない等）
+    // 印なしで読めるなら、通信は通っており取り込みだけが拒まれている。
+    // どちらなのかを記録しておく。
+    let hint = "";
+    try{
+      await captureFromVideo(src, [0], 0, true);
+      hint = " ／ 印なしでは読めます（取り込みが許されていません）";
+    }catch(e2){ hint = " ／ 印なしでも読めません（届いていません）"; }
+    log(`${file.name}: ${via}を開けません（${err.message}）${hint}`);
+
     if (via !== "配信用") throw err;
-    log(`${file.name}: 配信用では取り込めません（${err.message}）。原本で試します。`);
     via = "原本";
     cap = await captureFromVideo(originalUrl(file), SAMPLE_POINTS, file.size);
   }
@@ -3366,6 +3383,13 @@ els.hqAll.addEventListener("click", async () => {
 
       // 続けて失敗するときは、Box 側が要求を絞っていることがある。
       // 間を置いてから次へ進む。
+      // ほとんど失敗するなら、続けても意味がない
+      if (done === 0 && failed >= 5){
+        log("続けて失敗するため、いったん中止します");
+        say("この環境では高画質にできないようです。診断ログの理由をご確認ください。", true);
+        break;
+      }
+
       if (++hqFailStreak >= 3){
         const wait = Math.min(60, 10 * (hqFailStreak - 2));
         els.progress.textContent = `続けて失敗したため ${wait} 秒待ちます（${hqFailStreak} 回目）`;
