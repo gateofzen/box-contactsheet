@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v189</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v190</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -562,6 +562,7 @@ details.sub[open]>summary{color:var(--text)}
             <button id="forgetTiers" class="btn btn-sm">画質の学習を忘れる</button>
             <button id="syncShared" class="btn btn-sm">共有の内容を取り込む</button>
             <button id="tagHq" class="btn btn-sm">既存の高画質に印を付ける</button>
+            <button id="redoLowHq" class="btn btn-sm">粗いサムネイルを作り直す</button>
             <button id="forgetHq" class="btn btn-sm">高画質の記録を消す</button>
             <div class="field"><label for="localQuality">手元の画質</label>
               <select id="localQuality">
@@ -817,7 +818,7 @@ const els = {};
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castWhere","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","syncShared","tagHq","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","syncShared","tagHq","redoLowHq","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -2209,6 +2210,7 @@ async function buildHiRes(file){
   }
   rec.sheet = await composeSheet(cap.frames); rec.n = FRAME_COUNT;
   rec.duration = cap.duration;
+  rec.w = cap.w; rec.h = cap.h;      // どの大きさで取り込んだか
   rec.ok = true;
   log(`高画質 ${file.name} → ${cap.w}x${cap.h} × 5 コマ（${via}）`
     + (cap.h && cap.h < 700 ? " ※ 元より粗い可能性があります" : ""));
@@ -3920,6 +3922,68 @@ els.tagHq.addEventListener("click", async () => {
   say(renamed
     ? `${renamed} 件に印を付けました。他の端末でも高画質済みと分かります。`
     : "印を付けられるものがありませんでした");
+});
+
+els.redoLowHq.addEventListener("click", async () => {
+  // 配信用（640x360）から作ったものは粗い。作り直しの対象にする。
+  const mine = await idbAll("thumbs");
+  // 大きさを控えていない古いものは、画像の重さで見分ける。
+  // 640x360 の 5 コマは 300KB 前後、1920x1080 は 1MB を超える。
+  const low = mine.filter(r => {
+    if (!r.hq || !r.ok) return false;
+    if (r.h) return r.h < 700;
+    return r.sheet && r.sheet.size && r.sheet.size < 500 * 1024;
+  });
+  if (!low.length){
+    say("粗いまま残っているものはありません");
+    return;
+  }
+  if (!confirm(`粗いまま残っている ${low.length} 本を、作り直しの対象に戻します。\n`
+    + `（配信用の 640x360 から作られたもの）\n`
+    + `そのあと「サムネイルを高画質に…」を実行してください。`)) return;
+
+  const ids = new Set(low.map(r => r.id));
+  // 記録から外す
+  for (const id of ids){
+    try{ await idbDelete("hqdone", id); }catch(_){}
+    hqDone.delete(id);
+    const rec = await idbGet("thumbs", id);
+    if (rec){ rec.hq = false; await idbPut("thumbs", rec); }
+  }
+  hqDoneIds = null;
+
+  // 共有の置き場でも、印を外して作り直させる
+  let renamed = 0;
+  const parents = new Map();
+  for (const f of globalIndex){
+    if (!ids.has(f.id) || !f.parentId) continue;
+    if (!parents.has(f.parentId)) parents.set(f.parentId, []);
+    parents.get(f.parentId).push(f.id);
+  }
+  for (const [pid, list] of parents){
+    const folderId = await getCacheFolder(pid, false);
+    if (!folderId) continue;
+    let items = [];
+    try{ items = await listFolderLight(folderId); }catch(_){ continue; }
+    for (const e of items){
+      const m = /^(\d+)~(\d+)~h(~p)?\.jpg$/.exec(e.name || "");
+      if (!m || !list.includes(m[1])) continue;
+      try{
+        await fetch(`${API}/files/${e.id}`, {
+          method:"PUT",
+          headers:{Authorization:"Bearer " + token(), "Content-Type":"application/json"},
+          body: JSON.stringify({name: `${m[1]}~${m[2]}${m[3] || ""}.jpg`}),
+        });
+        renamed++;
+      }catch(_){}
+    }
+    cacheIndexByParent.delete(pid);
+    try{ await idbDelete("folders", "cacheidx:" + folderId); }catch(_){}
+  }
+
+  log(`粗いものを戻しました: ${low.length} 本（共有の印 ${renamed} 件）`);
+  say(`${low.length} 本を作り直しの対象に戻しました。`
+    + `「サムネイルを高画質に…」を実行してください。`);
 });
 
 els.forgetHq.addEventListener("click", async () => {
