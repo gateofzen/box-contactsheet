@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v190</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v191</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1520,8 +1520,7 @@ async function prefetchThumbs(list){
   log(`内訳: 端末内 ${srcStats.local} / 共有 ${srcStats.shared} / `
     + `新規 ${srcStats.made} / 失敗 ${srcStats.failed}`);
   if (srcStats.local === done && done > 0)
-    log("すべて端末内にあったため、共有キャッシュは参照していません。"
-      + "共有の動作を確かめるには「サムネイルを捨てて作り直す」を押してください。");
+    log("すべて端末内にありました（共有は参照せず）");
   syncStatusLine();
   log(`prefetch done: ${ok}/${list.length}, pending ${pend}`);
 }
