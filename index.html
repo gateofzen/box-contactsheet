@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v187</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v188</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2153,6 +2153,20 @@ function canMakeHiRes(file){
   return !HQ_UNSUPPORTED.test(file.name || "");
 }
 
+// 場所が返っても、変換が終わっていないと中身が来ない。
+// 先頭を少しだけ読んで確かめる。
+async function quickReadable(url){
+  try{
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(url, {headers:{Range:"bytes=0-4095"}, signal: ctl.signal});
+    clearTimeout(to);
+    if (r.status !== 200 && r.status !== 206) return false;
+    const buf = await r.arrayBuffer();
+    return buf.byteLength > 512;
+  }catch(_){ return false; }
+}
+
 async function buildHiRes(file){
   const rec = {id:file.id, sheet:null, n:FRAME_COUNT, total:0, interval:null, ok:false, pending:false, hq:true, duration:null, ts:Date.now()};
 
@@ -2166,15 +2180,18 @@ async function buildHiRes(file){
       const waitSec = Math.min(40, 10 + (file.size || 0) / 1e9 * 4);
       const got = await waitForRep(await getRepresentation(file.id, "[mp4]") || {}, waitSec);
       const url = repContentUrl(got.rep);
-      if (url){
-        src = url + (url.includes("?") ? "&" : "?")
-          + "access_token=" + encodeURIComponent(token());
+      const full = url ? url + (url.includes("?") ? "&" : "?")
+        + "access_token=" + encodeURIComponent(token()) : null;
+
+      // Box は変換が終わる前でも場所を返す。実際に読めるか確かめる。
+      if (full && await quickReadable(full)){
+        src = full;
         via = "配信用";
-      }else if (got.pending){
+      }else if (full || got.pending){
         // Box が変換中。大きな動画では数分から数十分かかる。
         // 原本を開いても時間切れになるだけなので、後回しにする。
         // 要求は出したので、次に実行するときには用意ができている
-        const err = new Error("Box が変換中です（次回には用意ができています）");
+        const err = new Error("配信用がまだ読めません（Box が変換中。次回には用意ができています）");
         err.retryLater = true;
         throw err;
       }else{
@@ -2206,7 +2223,8 @@ async function buildHiRes(file){
   rec.sheet = await composeSheet(cap.frames); rec.n = FRAME_COUNT;
   rec.duration = cap.duration;
   rec.ok = true;
-  log(`高画質 ${file.name} → ${cap.w}x${cap.h} × 5 コマ（${via}）`);
+  log(`高画質 ${file.name} → ${cap.w}x${cap.h} × 5 コマ（${via}）`
+    + (cap.h && cap.h < 700 ? " ※ 元より粗い可能性があります" : ""));
   await idbPut("thumbs", rec);
   await uploadSharedThumbs(file, rec);
   return rec;
