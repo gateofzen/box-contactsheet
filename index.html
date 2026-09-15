@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v194</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v195</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4301,6 +4301,8 @@ function parseTrack(xml, manifestUrl, kind, wantLow){
   if (kind === "video"){
     const usable = reps.filter(r => Number(r.getAttribute("height") || 0) <= 1080);
     const pool = usable.length ? usable : reps;
+    if (pool.length === 1 && wantLow)
+      log(`この動画は 1 種類の画質しかありません（${pool[0].getAttribute("height")||"?"}p のみ）`);
     if (wantLow && pool.length > 1){
       // 立ち上がりを速くするため、最初は軽い方を選ぶ。
       // 再生が始まってから高い方へ移す。
@@ -4329,6 +4331,7 @@ function parseTrack(xml, manifestUrl, kind, wantLow){
 
   return {
     kind, codecs, segDur, start,
+    bw: Number(bw) || 0,
     label: kind === "video"
       ? `${rep.getAttribute("width")||"?"}x${rep.getAttribute("height")||"?"} ${Math.round(Number(bw)/1000)} kbps`
       : `${codecs} ${Math.round(Number(bw)/1000)} kbps`,
@@ -4371,8 +4374,10 @@ function createDashEngine(name){
       this.stop();
       this.el = mediaEl; this.stopped = false; this.kbps = 0;
 
+      const t0 = Date.now();
       const mpd = await getMpd(file);
       if (!mpd) return false;
+      const tMpd = Date.now() - t0;
       this.duration = mpdDuration(mpd.xml);
 
       const defs = [];
@@ -4423,6 +4428,28 @@ function createDashEngine(name){
 
       this.ready = true;
       if (startAt > 0){ try{ mediaEl.currentTime = startAt; }catch(_){} }
+
+      // 最初の 1 区間だけ先に入れて、すぐ再生を始められるようにする。
+      // 残りは再生しながら追いかける。
+      const vtr = this.tracks.find(t => t.kind === "video");
+      if (vtr && this.el === els.pVideo){
+        const mb = Math.round((vtr.bw || 0) * vtr.segDur / 8 / 1e6 * 10) / 10;
+        if (mb >= 3)
+          els.pNote.textContent = `最初の ${vtr.segDur.toFixed(0)} 秒ぶん（約 ${mb}MB）を受け取っています…`;
+      }
+      try{
+        await Promise.all(this.tracks.map(async tr => {
+          if (this.stopped) return;
+          const url = tr.template(tr.next);
+          const buf = await this.fetchSeg(url);
+          if (this.stopped) return;
+          await this.appendWithSpace(tr, buf);
+          tr.next++;
+        }));
+      }catch(err){ log(`${name}: 最初の区間を入れられません（${err.message}）`); }
+      log(`${name}: 準備できました（配信情報 ${(tMpd/1000).toFixed(1)} 秒`
+        + ` / 最初の区間まで ${((Date.now() - t0)/1000).toFixed(1)} 秒）`);
+      if (this.el === els.pVideo) els.pNote.textContent = "";
       const kick = () => this.pumpAll();
       const seek = () => this.onSeek();
       this.listeners = [
@@ -4502,7 +4529,8 @@ function createDashEngine(name){
     },
 
     targetOf(tr){
-      if (tr.justSeeked) return tr.kind === "video" ? 8 : 12;
+      // 開いた直後・シーク直後は、少しだけ貯めて先に鳴らす
+      if (tr.justSeeked) return tr.kind === "video" ? 6 : 10;
       if (tr.capped) return tr.capped;      // 保存領域に収まる範囲まで
       if (tr.kind === "video") return 45;
       // 音声のみ再生では、電波が途切れても止まらないよう厚く貯める。
