@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v196</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v197</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2994,7 +2994,7 @@ async function openPlayer(file, startAt){
     }
     if (!usedDash && els.dashVideoOpt.checked){
       try{
-        // 開始位置を渡す。渡さないと先頭から取り始め、
+        // 開始位置（割合）を渡す。渡さないと先頭から取り始め、
         // そのあと移動するので二度手間になる。
         liftPending = true;
         const at = (pendingStart != null && pendingStart > 0) ? pendingStart : 0;
@@ -4385,6 +4385,12 @@ function createDashEngine(name){
       const tMpd = Date.now() - t0;
       this.duration = mpdDuration(mpd.xml);
 
+      // サムネイルから渡されるのは割合（0〜1）。長さが分かったので秒に直す。
+      if (startAt != null && startAt > 0 && startAt <= 1 && this.duration){
+        startAt = this.duration * startAt;
+        log(`${name}: ${fmtTC(startAt)} から始めます`);
+      }
+
       const defs = [];
       for (const kind of kinds){
         const t = parseTrack(mpd.xml, mpd.url, kind, wantLow);
@@ -4465,8 +4471,21 @@ function createDashEngine(name){
             clearInterval(watch); return;
           }
           const b = els.pVideo.buffered;
-          const ahead = b.length ? Math.max(0, b.end(b.length-1) - els.pVideo.currentTime) : 0;
-          log(`立ち上がり待ち: 手元 ${ahead.toFixed(1)} 秒 / 状態 ${els.pVideo.readyState}`);
+          const t = els.pVideo.currentTime;
+          let covers = false, first = null;
+          for (let i = 0; i < b.length; i++){
+            if (first == null) first = b.start(i);
+            if (b.start(i) <= t + 0.2 && t <= b.end(i) + 0.2) covers = true;
+          }
+          const ahead = b.length ? Math.max(0, b.end(b.length-1) - t) : 0;
+          log(`立ち上がり待ち: 手元 ${ahead.toFixed(1)} 秒 / 状態 ${els.pVideo.readyState}`
+            + (b.length && !covers ? `（いまの位置 ${fmtTC(t)} に中身がありません）` : ""));
+
+          // 位置と手元の中身が食い違っているなら、中身のある場所へ寄せる
+          if (b.length && !covers && first != null && els.pVideo.readyState < 2){
+            log(`位置を ${fmtTC(first)} に寄せます`);
+            try{ els.pVideo.currentTime = first + 0.1; }catch(_){}
+          }
         }, 5000);
       }
       if (this.el === els.pVideo) els.pNote.textContent = "";
@@ -4544,6 +4563,12 @@ function createDashEngine(name){
           if (tr.sb.buffered.start(i) <= t + 0.1 && t <= tr.sb.buffered.end(i) + 0.1)
             return tr.sb.buffered.end(i) - t;
         }
+        // 現在位置を含む範囲がないときは、いくら取っても足りないと
+        // 判断して取り続けてしまう。手元にある総量で歯止めをかける。
+        let total = 0;
+        for (let i = 0; i < tr.sb.buffered.length; i++)
+          total += tr.sb.buffered.end(i) - tr.sb.buffered.start(i);
+        if (total > 60) return total;      // 十分あるので、これ以上は取らない
       }catch(_){}
       return 0;
     },
