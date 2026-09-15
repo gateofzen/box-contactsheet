@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v195</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v196</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2994,9 +2994,14 @@ async function openPlayer(file, startAt){
     }
     if (!usedDash && els.dashVideoOpt.checked){
       try{
-        if (await dashMain.start(file, els.pVideo, ["video","audio"])){
+        // 開始位置を渡す。渡さないと先頭から取り始め、
+        // そのあと移動するので二度手間になる。
+        liftPending = true;
+        const at = (pendingStart != null && pendingStart > 0) ? pendingStart : 0;
+        if (await dashMain.start(file, els.pVideo, ["video","audio"], at, true)){
           if (await waitFor(() => els.pVideo.readyState >= 2, 5000)){
             usedDash = true; videoKind = "DASH";
+            if (at > 0) pendingStart = null;   // すでにその位置から始めている
             els.pNote.textContent = "";
             log("区間配信で再生します");
           }else throw new Error("再生可能になりません");
@@ -4412,7 +4417,9 @@ function createDashEngine(name){
         }
         sb.mode = "segments";
         const tr = Object.assign({}, d, {
-          sb, next:d.start, busy:false, again:false, gen:0, retry:0, justSeeked:false,
+          // 開いた直後も、まずは少しだけ貯めて鳴らす。
+          // 45 秒ぶんを待つと、細い回線では 1 分近くかかってしまう。
+          sb, next:d.start, busy:false, again:false, gen:0, retry:0, justSeeked:true,
           count: d.segDur ? Math.ceil(this.duration / d.segDur) : 0
         });
         if (startAt > 0) tr.next = tr.start + Math.max(0, Math.floor(startAt / tr.segDur));
@@ -4449,6 +4456,19 @@ function createDashEngine(name){
       }catch(err){ log(`${name}: 最初の区間を入れられません（${err.message}）`); }
       log(`${name}: 準備できました（配信情報 ${(tMpd/1000).toFixed(1)} 秒`
         + ` / 最初の区間まで ${((Date.now() - t0)/1000).toFixed(1)} 秒）`);
+
+      // 鳴り出すまでの間、手元にどれだけ届いているかを記録する
+      if (this.el === els.pVideo){
+        let n = 0;
+        const watch = setInterval(() => {
+          if (this.stopped || ++n > 12 || !els.pVideo.paused && els.pVideo.readyState >= 3){
+            clearInterval(watch); return;
+          }
+          const b = els.pVideo.buffered;
+          const ahead = b.length ? Math.max(0, b.end(b.length-1) - els.pVideo.currentTime) : 0;
+          log(`立ち上がり待ち: 手元 ${ahead.toFixed(1)} 秒 / 状態 ${els.pVideo.readyState}`);
+        }, 5000);
+      }
       if (this.el === els.pVideo) els.pNote.textContent = "";
       const kick = () => this.pumpAll();
       const seek = () => this.onSeek();
@@ -5135,6 +5155,8 @@ els.pVideo.addEventListener("loadedmetadata", () => {
     lastGoodDuration = els.pVideo.duration;
 });
 els.pVideo.addEventListener("playing", () => {
+  // 鳴り始めたら、ふだんの先読みに戻す
+  try{ dashMain.tracks.forEach(t => { t.justSeeked = false; }); }catch(_){}
   if (openAt){
     log(`再生が始まるまで ${((Date.now() - openAt) / 1000).toFixed(1)} 秒`);
     openAt = 0;
