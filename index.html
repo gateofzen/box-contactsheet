@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v193</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v194</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2950,6 +2950,8 @@ async function openPlayer(file, startAt){
   pushLayer("player", () => closePlayerNow());
 
   playerClosing = false;
+  liftPending = false;
+  openAt = Date.now();
   lastGoodTime = 0;
   resetLocalTune();
   startLocalTune();
@@ -2963,7 +2965,8 @@ async function openPlayer(file, startAt){
   stopCastSearch();
   els.pCast.classList.remove("btn-go");
   bindCast();
-  if (castSupported()) setTimeout(() => prepareCast(file), 1200);
+  // キャストの準備は、押されるまで行わない。
+  // 原本への問い合わせを含むので、再生の立ち上がりを遅くしてしまう。
   pendingStart = (startAt != null) ? startAt : null;
 
   // 区間配信が使えるなら、そちらで再生する（シークが速い）。
@@ -4281,7 +4284,7 @@ function mpdDuration(xml){
 }
 
 // manifest から 1 トラック分の定義を取り出す
-function parseTrack(xml, manifestUrl, kind){
+function parseTrack(xml, manifestUrl, kind, wantLow){
   const sets = [...xml.getElementsByTagName("AdaptationSet")];
   const belongs = a =>
     (a.getAttribute("mimeType") || "").startsWith(kind) ||
@@ -4297,8 +4300,16 @@ function parseTrack(xml, manifestUrl, kind){
   let rep = reps[0];
   if (kind === "video"){
     const usable = reps.filter(r => Number(r.getAttribute("height") || 0) <= 1080);
-    rep = (usable.length ? usable : reps).reduce((best, r) =>
-      Number(r.getAttribute("bandwidth")||0) > Number(best.getAttribute("bandwidth")||0) ? r : best);
+    const pool = usable.length ? usable : reps;
+    if (wantLow && pool.length > 1){
+      // 立ち上がりを速くするため、最初は軽い方を選ぶ。
+      // 再生が始まってから高い方へ移す。
+      rep = pool.reduce((best, r) =>
+        Number(r.getAttribute("bandwidth")||0) < Number(best.getAttribute("bandwidth")||0) ? r : best);
+    }else{
+      rep = pool.reduce((best, r) =>
+        Number(r.getAttribute("bandwidth")||0) > Number(best.getAttribute("bandwidth")||0) ? r : best);
+    }
   }
 
   const codecs = rep.getAttribute("codecs") || aset.getAttribute("codecs") || "";
@@ -4354,7 +4365,7 @@ function createDashEngine(name){
   return {
     name, ms:null, el:null, tracks:[], duration:0, stopped:true, ready:false, kbps:0, local:null,
 
-    async start(file, mediaEl, kinds, startAt){
+    async start(file, mediaEl, kinds, startAt, wantLow){
       // 閉じる最中は始めない（遅れて走る処理が音を鳴らし続けてしまう）
       if (typeof playerClosing !== "undefined" && playerClosing) return false;
       this.stop();
@@ -4366,7 +4377,7 @@ function createDashEngine(name){
 
       const defs = [];
       for (const kind of kinds){
-        const t = parseTrack(mpd.xml, mpd.url, kind);
+        const t = parseTrack(mpd.xml, mpd.url, kind, wantLow);
         if (!t){ log(`${name}: ${kind} のトラックがありません`); return false; }
         const mime = `${kind}/mp4; codecs="${t.codecs}"`;
         log(`${name}: ${kind} に ${mime} を使います`);
@@ -5094,6 +5105,13 @@ els.pVideo.addEventListener("timeupdate", () => {
 els.pVideo.addEventListener("loadedmetadata", () => {
   if (isFinite(els.pVideo.duration) && els.pVideo.duration > 0)
     lastGoodDuration = els.pVideo.duration;
+});
+els.pVideo.addEventListener("playing", () => {
+  if (openAt){
+    log(`再生が始まるまで ${((Date.now() - openAt) / 1000).toFixed(1)} 秒`);
+    openAt = 0;
+  }
+  if (liftPending) setTimeout(liftQualityAfterStart, 6000);
 });
 els.pVideo.addEventListener("play",  () => { wantPlay = true;  updateMediaSession(); });
 els.pVideo.addEventListener("playing", () => {
@@ -5893,6 +5911,33 @@ function showLocalQuality(){
     + (speed ? `　回線 ${speed} kbps` : "");
 }
 
+// 立ち上がりのために軽い画質で始めたときは、
+// 再生が落ち着いたところで本来の画質へ移す。
+let liftPending = false;
+let openAt = 0;
+
+async function liftQualityAfterStart(){
+  if (!liftPending || !currentFile || presConn || audioOnly) return;
+  liftPending = false;
+
+  // 回線が細いなら、上げても途切れるだけ。軽いままにしておく。
+  const have = Math.round(dashMain.kbps || 0);
+  if (have && have < 9000){
+    log(`回線が足りないため、軽い画質のままにします（実測 ${have} kbps）`);
+    return;
+  }
+  const t = els.pVideo.currentTime || 0;
+  const playing = !els.pVideo.paused;
+  log(`画質を上げます（${fmtTC(t)} から）`);
+  try{
+    dashMain.stop();
+    if (await dashMain.start(currentFile, els.pVideo, ["video","audio"], t)){
+      videoKind = "DASH";
+      if (playing) els.pVideo.play().catch(() => {});
+    }
+  }catch(err){ log("画質を上げられません: " + err.message); }
+}
+
 function startLocalTune(){
   clearInterval(localTuneTimer);
   localTuneTimer = setInterval(() => {
@@ -6361,7 +6406,14 @@ function castMethodNow(){
   return presSupported() ? "receiver" : "standard";
 }
 
-function startCast(){
+async function startCast(){
+  // 押された時点で準備する（開いた直後は再生に専念する）
+  if (!castReadyUrl && currentFile && castSupported()){
+    els.pNote.textContent = "テレビへ送る準備をしています…";
+    await prepareCast(currentFile);
+    els.pNote.textContent = "";
+  }
+
   const way = castMethodNow();
   const sdk = (typeof chrome !== "undefined" && chrome.cast && castSdkReady) ? "SDK 使用可" : "SDK なし";
   log(`📺 を押しました（方式: ${way} / 専用アプリ: ${els.castAppOnly.checked ? "使う" : "使わない"} / ${sdk}`
