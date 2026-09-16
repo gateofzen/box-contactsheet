@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v204</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v205</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3002,7 +3002,9 @@ async function openPlayer(file, startAt){
         liftPending = true;
         const at = (pendingStart != null && pendingStart > 0) ? pendingStart : 0;
         if (await dashMain.start(file, els.pVideo, ["video","audio"], at, true)){
-          if (await waitFor(() => els.pVideo.readyState >= 2, 5000)){
+          // 最初の区間に 10 秒以上かかることがある。早く見切ると
+          // 重い原本に切り替わり、かえって遅くなる。
+          if (await waitFor(() => els.pVideo.readyState >= 2, 25000)){
             usedDash = true; videoKind = "DASH";
             if (at > 0) pendingStart = null;   // すでにその位置から始めている
             els.pNote.textContent = "";
@@ -3010,6 +3012,8 @@ async function openPlayer(file, startAt){
           }else throw new Error("再生可能になりません");
         }else throw new Error("開始できません");
       }catch(err){
+        liftPending = false;                 // 画質の引き上げは行わない
+        clearInterval(liftWatch); liftWatch = null;
         log("区間配信は使えません: " + err.message);
         dashMain.stop();
       }
@@ -4469,13 +4473,16 @@ function createDashEngine(name){
 
       // 鳴り出すまでの間、手元にどれだけ届いているかを記録する
       if (this.el === els.pVideo){
+        els.pNote.textContent = "最初の場面を受け取っています…";
         let n = 0;
         clearInterval(startWatch);
         startWatch = setInterval(() => {
           const watch = startWatch;
           // 鳴り始めたら見張りをやめる
           if (this.stopped || ++n > 6 || (!els.pVideo.paused && els.pVideo.readyState >= 3)){
-            clearInterval(watch); return;
+            clearInterval(watch);
+            if (els.pNote.textContent === "最初の場面を受け取っています…") els.pNote.textContent = "";
+            return;
           }
           const b = els.pVideo.buffered;
           const t = els.pVideo.currentTime;
@@ -5272,6 +5279,7 @@ els.pVideo.addEventListener("loadedmetadata", () => {
 });
 els.pVideo.addEventListener("playing", () => {
   clearInterval(startWatch); startWatch = null;
+  if (els.pNote.textContent === "最初の場面を受け取っています…") els.pNote.textContent = "";
   // 鳴り始めたら、ふだんの先読みに戻す
   try{ dashMain.tracks.forEach(t => { t.justSeeked = false; }); }catch(_){}
   if (openAt){
@@ -5283,6 +5291,7 @@ els.pVideo.addEventListener("playing", () => {
 els.pVideo.addEventListener("play",  () => { wantPlay = true;  updateMediaSession(); });
 els.pVideo.addEventListener("playing", () => {
   clearInterval(startWatch); startWatch = null;
+  if (els.pNote.textContent === "最初の場面を受け取っています…") els.pNote.textContent = "";
   if (!playCounted && currentFile){ playCounted = true; recordPlay(currentFile.id); }
 });
 els.pAudio.addEventListener("playing", () => {
@@ -6094,8 +6103,8 @@ function watchForLift(){
   let waited = 0;
   liftWatch = setInterval(() => {
     waited++;
-    if (!liftPending || !currentFile || presConn || audioOnly){
-      clearInterval(liftWatch); liftWatch = null; return;
+    if (!liftPending || !currentFile || presConn || audioOnly || videoKind !== "DASH"){
+      clearInterval(liftWatch); liftWatch = null; liftPending = false; return;
     }
     if (waited > 30){                       // 30 秒たっても整わないなら諦める
       clearInterval(liftWatch); liftWatch = null;
@@ -6122,6 +6131,11 @@ function watchForLift(){
 
 async function liftQualityAfterStart(){
   if (!liftPending || !currentFile || presConn || audioOnly) return;
+  if (videoKind !== "DASH"){
+    liftPending = false;
+    log("区間配信ではないため、画質はそのままにします");
+    return;
+  }
   liftPending = false;
 
   // 落ち着いて再生できていないなら、上げない。
@@ -6420,7 +6434,9 @@ function endCast(){
         try{
           const keep = els.pVideo.currentTime || resumeAt;
           if (await dashMain.start(f, els.pVideo, ["video","audio"], keep)){
-            if (await waitFor(() => els.pVideo.readyState >= 2, 5000)){
+            // 最初の区間に 10 秒以上かかることがある。早く見切ると
+          // 重い原本に切り替わり、かえって遅くなる。
+          if (await waitFor(() => els.pVideo.readyState >= 2, 25000)){
               videoKind = "DASH";
               els.pNote.textContent = "";
               if (wantPlay) els.pVideo.play().catch(() => {});
