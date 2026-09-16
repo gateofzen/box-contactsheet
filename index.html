@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v198</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v199</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4565,14 +4565,30 @@ function createDashEngine(name){
           if (tr.sb.buffered.start(i) <= t + 0.1 && t <= tr.sb.buffered.end(i) + 0.1)
             return tr.sb.buffered.end(i) - t;
         }
-        // 現在位置を含む範囲がないときは、いくら取っても足りないと
-        // 判断して取り続けてしまう。手元にある総量で歯止めをかける。
-        let total = 0;
-        for (let i = 0; i < tr.sb.buffered.length; i++)
-          total += tr.sb.buffered.end(i) - tr.sb.buffered.start(i);
-        if (total > 60) return total;      // 十分あるので、これ以上は取らない
       }catch(_){}
       return 0;
+    },
+
+    // 現在位置に中身があるか（シークの判断に使う）
+    coversNow(tr){
+      try{
+        if (this.stopped || !this.el || !tr.sb || !tr.sb.buffered.length) return false;
+        const t = this.el.currentTime;
+        for (let i = 0; i < tr.sb.buffered.length; i++)
+          if (tr.sb.buffered.start(i) <= t + 0.1 && t <= tr.sb.buffered.end(i) + 0.1) return true;
+      }catch(_){}
+      return false;
+    },
+
+    // 手元にある総量（取りすぎの歯止めに使う）
+    totalOf(tr){
+      try{
+        if (!tr.sb || !tr.sb.buffered.length) return 0;
+        let n = 0;
+        for (let i = 0; i < tr.sb.buffered.length; i++)
+          n += tr.sb.buffered.end(i) - tr.sb.buffered.start(i);
+        return n;
+      }catch(_){ return 0; }
     },
 
     targetOf(tr){
@@ -4591,6 +4607,9 @@ function createDashEngine(name){
     async pump(tr){
       if (tr.busy){ tr.again = true; return; }
       if (!this.ready || this.stopped || !tr.sb) return;
+      // 位置に中身がないまま取り続けると、通信を占有してしまう。
+      // ただしシークの直後は、その位置を取りに行く必要がある。
+      if (!tr.justSeeked && !this.coversNow(tr) && this.totalOf(tr) > 90) return;
       const last = tr.start + tr.count - 1;
       const gen = tr.gen;
 
@@ -4695,14 +4714,18 @@ function createDashEngine(name){
 
     onSeek(){
       if (!this.ready) return;
+      if (this.el === els.pVideo){
+        const t = this.el.currentTime;
+        log(`${this.name}: ${fmtTC(t)} へ移動しました`);
+      }
       for (const tr of this.tracks){
-        if (this.aheadOf(tr) > 3) continue;
+        if (this.coversNow(tr) && this.aheadOf(tr) > 3) continue;
         tr.gen++;
         tr.next = tr.start + Math.max(0, Math.floor(this.el.currentTime / tr.segDur));
         if (tr.sb && !tr.sb.updating){ try{ tr.sb.abort(); }catch(_){} }
         tr.again = false;
         tr.justSeeked = true;
-        setTimeout(() => { tr.justSeeked = false; this.pump(tr); }, 1500);
+        setTimeout(() => { tr.justSeeked = false; this.pump(tr); }, 6000);
         this.pump(tr);
       }
     }
@@ -6009,10 +6032,11 @@ async function liftQualityAfterStart(){
     return;
   }
 
-  // 回線が細いなら、上げても途切れるだけ。軽いままにしておく。
+  // 実測は、軽い区間ばかり取っていると低く出る。
+  // 目安にとどめ、明らかに足りないときだけ見送る。
   const have = Math.round(dashMain.kbps || 0);
-  if (have && have < 9000){
-    log(`回線が足りないため、軽い画質のままにします（実測 ${have} kbps）`);
+  if (have && have < 3000){
+    log(`回線が細いため、軽い画質のままにします（実測 ${have} kbps）`);
     return;
   }
   const t = els.pVideo.currentTime || 0;
@@ -6023,6 +6047,26 @@ async function liftQualityAfterStart(){
     if (await dashMain.start(currentFile, els.pVideo, ["video","audio"], t)){
       videoKind = "DASH";
       if (playing) els.pVideo.play().catch(() => {});
+
+      // 上げたあと追いつかないようなら、軽い方へ戻す
+      setTimeout(async () => {
+        if (!currentFile || presConn || audioOnly || videoKind !== "DASH") return;
+        const v = els.pVideo;
+        let ahead = 0;
+        try{
+          const b = v.buffered, c = v.currentTime;
+          for (let i = 0; i < b.length; i++)
+            if (b.start(i) <= c + 0.2 && c <= b.end(i) + 0.2) ahead = b.end(i) - c;
+        }catch(_){}
+        if (v.paused || ahead >= 5) return;
+        log(`高い画質では追いつきません（手元 ${ahead.toFixed(0)} 秒）。軽い方へ戻します。`);
+        const back = v.currentTime;
+        dashMain.stop();
+        if (await dashMain.start(currentFile, els.pVideo, ["video","audio"], back, true)){
+          videoKind = "DASH";
+          els.pVideo.play().catch(() => {});
+        }
+      }, 20000);
     }
   }catch(err){ log("画質を上げられません: " + err.message); }
 }
