@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v197</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v198</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -827,6 +827,8 @@ let view = [];
 let rendered = 0;
 let cachedCount = 0;
 let scanAbort = null;
+let pendingStart = null;   // 開いたときに移動したい位置（割合 0〜1）
+let castSeeking = false;   // つまみを操作している最中か
 let globalIndex = [];   // これまでに見つけた全フォルダの動画
 let deepScan = false;   // 「配下をすべて取り込む」で読んだ状態か
 const viewById = new Map();   // いま一覧に出しているファイル（検索結果を含む）
@@ -4717,7 +4719,6 @@ const dashAudio = createDashEngine("音声のみ"); // 音声要素（音声だ�
 
 let audioOnly = false;
 let wantPlay = false;
-let pendingStart = null;
 let posterUrlForSession = null;
 let userVolume = Number(localStorage.getItem("bcs_volume") || 1);
 let videoKind = "原本";
@@ -5186,7 +5187,7 @@ els.pVideo.addEventListener("playing", () => {
     log(`再生が始まるまで ${((Date.now() - openAt) / 1000).toFixed(1)} 秒`);
     openAt = 0;
   }
-  if (liftPending) setTimeout(liftQualityAfterStart, 6000);
+  if (liftPending) setTimeout(liftQualityAfterStart, 15000);
 });
 els.pVideo.addEventListener("play",  () => { wantPlay = true;  updateMediaSession(); });
 els.pVideo.addEventListener("playing", () => {
@@ -5390,7 +5391,6 @@ let castCancelHint = false;
 let promptedAt = 0;
 let castPlaying = false;
 let castDuration = 0;
-let castSeeking = false;
 let castLastTime = 0;
 let castTickTimer = null;
 let castGotTime = false;
@@ -5994,6 +5994,20 @@ let openAt = 0;
 async function liftQualityAfterStart(){
   if (!liftPending || !currentFile || presConn || audioOnly) return;
   liftPending = false;
+
+  // 落ち着いて再生できていないなら、上げない。
+  // 上げると作り直しになり、また待たされてしまう。
+  const b = els.pVideo.buffered;
+  let ahead = 0;
+  try{
+    const t = els.pVideo.currentTime;
+    for (let i = 0; i < b.length; i++)
+      if (b.start(i) <= t + 0.2 && t <= b.end(i) + 0.2) ahead = b.end(i) - t;
+  }catch(_){}
+  if (els.pVideo.paused || ahead < 15){
+    log(`まだ落ち着いていないため、画質はそのままにします（手元 ${ahead.toFixed(0)} 秒）`);
+    return;
+  }
 
   // 回線が細いなら、上げても途切れるだけ。軽いままにしておく。
   const have = Math.round(dashMain.kbps || 0);
