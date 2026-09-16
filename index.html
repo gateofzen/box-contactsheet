@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v202</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v203</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4431,7 +4431,7 @@ function createDashEngine(name){
           sb, next:d.start, busy:false, again:false, gen:0, retry:0, justSeeked:true,
           count: d.segDur ? Math.ceil(this.duration / d.segDur) : 0
         });
-        if (startAt > 0) tr.next = tr.start + Math.max(0, Math.floor(startAt / tr.segDur));
+        if (startAt > 0) tr.next = tr.start + Math.floor(startAt / tr.segDur);
         this.tracks.push(tr);
       }
 
@@ -4463,6 +4463,9 @@ function createDashEngine(name){
           tr.next++;
         }));
       }catch(err){ log(`${name}: 最初の区間を入れられません（${err.message}）`); }
+
+      // 受け取った中身が狙いとずれていないか確かめる
+      if (startAt > 0) this.tracks.forEach(tr => this.learnShift(tr, startAt));
       log(`${name}: 準備できました（配信情報 ${(tMpd/1000).toFixed(1)} 秒`
         + ` / 最初の区間まで ${((Date.now() - t0)/1000).toFixed(1)} 秒）`);
 
@@ -4713,9 +4716,39 @@ function createDashEngine(name){
       try{
         if (this.stopped || !tr.sb || tr.sb.updating || !tr.sb.buffered.length) return;
         const t = this.el.currentTime;
+        // いまの位置に中身がないなら、手元にあるものを捨ててはいけない。
+        // 捨てると、何も残らないまま止まってしまう。
+        if (!this.coversNow(tr)) return;
         const start = tr.sb.buffered.start(0);
         const keep = tr.kind === "video" ? 60 : (this.name === "音声のみ" ? 60 : 180);
         if (t - start > keep + 60) tr.sb.remove(start, t - keep);
+      }catch(_){}
+    },
+
+    // 時刻から区間の番号を求める。
+    // 実際に受け取った中身とのずれが分かっていれば、それを差し引く。
+    indexAt(tr, sec){
+      const shifted = Math.max(0, sec - (tr.timeShift || 0));
+      // その時刻を含む区間。番号が 1 から始まるので、そのまま足す。
+      return tr.start + Math.floor(shifted / tr.segDur);
+    },
+
+    // 受け取った中身が狙いとどれだけずれているかを学ぶ
+    learnShift(tr, wantSec){
+      try{
+        if (!tr.sb || !tr.sb.buffered.length) return;
+        // いま入っている範囲のうち、狙いに最も近いものを見る
+        let best = null;
+        for (let i = 0; i < tr.sb.buffered.length; i++){
+          const st = tr.sb.buffered.start(i);
+          if (best == null || Math.abs(st - wantSec) < Math.abs(best - wantSec)) best = st;
+        }
+        if (best == null) return;
+        const gap = best - Math.floor(wantSec / tr.segDur) * tr.segDur;
+        if (Math.abs(gap) >= tr.segDur * 0.5 && Math.abs(gap) < tr.segDur * 4){
+          tr.timeShift = (tr.timeShift || 0) - gap;
+          log(`${this.name}: ${tr.kind} の時刻のずれを ${gap.toFixed(1)} 秒ぶん補正します`);
+        }
       }catch(_){}
     },
 
@@ -4731,10 +4764,16 @@ function createDashEngine(name){
       for (const tr of this.tracks){
         if (this.coversNow(tr) && this.aheadOf(tr) > 3) continue;
         tr.gen++;
-        tr.next = tr.start + Math.max(0, Math.floor(this.el.currentTime / tr.segDur));
+        tr.next = this.indexAt(tr, this.el.currentTime);
         if (tr.sb && !tr.sb.updating){ try{ tr.sb.abort(); }catch(_){} }
         tr.again = false;
         tr.justSeeked = true;
+        const want = this.el.currentTime;
+        clearTimeout(tr.learnTimer);
+        // 取り込んだあとに、狙いとのずれを確かめる
+        tr.learnTimer = setTimeout(() => {
+          if (!this.stopped && this.tracks.includes(tr)) this.learnShift(tr, want);
+        }, 2500);
         clearTimeout(tr.seekTimer);
         // 連続して動かされたときは、落ち着いてからもう一度確かめる
         tr.seekTimer = setTimeout(() => {
