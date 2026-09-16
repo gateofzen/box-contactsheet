@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v206</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v207</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2090,7 +2090,28 @@ async function uploadPosterOnly(file, rec){
   }catch(err){ log("主画像の保存に失敗: " + err.message); }
 }
 
+// 再生中は共有への保存を控える。
+// 上りの通信は細く、書き込みが再生の立ち上がりを妨げる。
+let deferUploads = false;
+const pendingUploads = [];
+
+function flushPendingUploads(){
+  if (!pendingUploads.length) return;
+  const list = pendingUploads.splice(0);
+  log(`共有への保存を再開します（${list.length} 件）`);
+  (async () => {
+    for (const {file, rec} of list){
+      if (deferUploads){ pendingUploads.push({file, rec}); break; }
+      try{ await uploadSharedThumbs(file, rec); }catch(_){}
+    }
+  })();
+}
+
 async function uploadSharedThumbs(file, rec){
+  if (deferUploads){
+    if (!pendingUploads.some(x => x.file.id === file.id)) pendingUploads.push({file, rec});
+    return false;
+  }
   if (!els.shareThumbs.checked || shareReadOnly || !file.parentId) return false;
   if (!rec.ok || !rec.sheet || rec.n !== FRAME_COUNT) return false;
   try{
@@ -2255,6 +2276,7 @@ const posterQueue = [];
 let posterBusy = 0;
 
 function queuePoster(file, rec){
+  if (deferUploads) return;      // 再生が落ち着いてから
   if (!rec || !rec.ok || rec.hq || rec.poster || rec.posterTried) return;
   posterQueue.push({file, rec});
   drainPosters();
@@ -2960,6 +2982,7 @@ async function openPlayer(file, startAt){
   playerClosing = false;
   // 再生の立ち上がりに通信を回す。サムネイルは後回し。
   pool.pause();
+  deferUploads = true;
   liftPending = false;
   clearInterval(liftWatch); liftWatch = null;
   openAt = Date.now();
@@ -3099,6 +3122,7 @@ function closePlayerNow(){
   clearInterval(localTuneTimer); localTuneTimer = null;
   clearTimeout(poolResumeTimer);
   pool.setLimit(0); pool.resume();      // サムネイルの取得を元に戻す
+  deferUploads = false; flushPendingUploads();
   // 止めている間に見えたものを、改めて取りに行く
   setTimeout(() => {
     document.querySelectorAll(".card").forEach(c => {
@@ -4486,7 +4510,10 @@ function createDashEngine(name){
       }catch(err){ log(`${name}: 最初の区間を入れられません（${err.message}）`); }
 
       log(`${name}: 準備できました（配信情報 ${(tMpd/1000).toFixed(1)} 秒`
-        + ` / 最初の区間まで ${((Date.now() - t0)/1000).toFixed(1)} 秒）`);
+        + ` / 最初の区間まで ${((Date.now() - t0)/1000).toFixed(1)} 秒`
+        + ` / 裏の取得 ${pool.paused ? "停止中" : "動作中"}`
+        + (pendingUploads.length ? ` / 保存待ち ${pendingUploads.length} 件` : "")
+        + `）`);
 
       // 鳴り出すまでの間、手元にどれだけ届いているかを記録する
       if (this.el === els.pVideo){
@@ -5298,7 +5325,10 @@ els.pVideo.addEventListener("playing", () => {
   clearInterval(startWatch); startWatch = null;
   // 鳴り出して少し経ってから、サムネイルの取得を再開する
   clearTimeout(poolResumeTimer);
-  poolResumeTimer = setTimeout(() => { pool.setLimit(2); pool.resume(); }, 8000);
+  poolResumeTimer = setTimeout(() => {
+    pool.setLimit(2); pool.resume();
+    deferUploads = false; flushPendingUploads();
+  }, 8000);
   if (els.pNote.textContent === "最初の場面を受け取っています…") els.pNote.textContent = "";
   // 鳴り始めたら、ふだんの先読みに戻す
   try{ dashMain.tracks.forEach(t => { t.justSeeked = false; }); }catch(_){}
@@ -5313,7 +5343,10 @@ els.pVideo.addEventListener("playing", () => {
   clearInterval(startWatch); startWatch = null;
   // 鳴り出して少し経ってから、サムネイルの取得を再開する
   clearTimeout(poolResumeTimer);
-  poolResumeTimer = setTimeout(() => { pool.setLimit(2); pool.resume(); }, 8000);
+  poolResumeTimer = setTimeout(() => {
+    pool.setLimit(2); pool.resume();
+    deferUploads = false; flushPendingUploads();
+  }, 8000);
   if (els.pNote.textContent === "最初の場面を受け取っています…") els.pNote.textContent = "";
   if (!playCounted && currentFile){ playCounted = true; recordPlay(currentFile.id); }
 });
