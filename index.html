@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v199</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v200</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4468,8 +4468,11 @@ function createDashEngine(name){
       // 鳴り出すまでの間、手元にどれだけ届いているかを記録する
       if (this.el === els.pVideo){
         let n = 0;
-        const watch = setInterval(() => {
-          if (this.stopped || ++n > 12 || !els.pVideo.paused && els.pVideo.readyState >= 3){
+        clearInterval(startWatch);
+        startWatch = setInterval(() => {
+          const watch = startWatch;
+          // 鳴り始めたら見張りをやめる
+          if (this.stopped || ++n > 6 || (!els.pVideo.paused && els.pVideo.readyState >= 3)){
             clearInterval(watch); return;
           }
           const b = els.pVideo.buffered;
@@ -4483,11 +4486,7 @@ function createDashEngine(name){
           log(`立ち上がり待ち: 手元 ${ahead.toFixed(1)} 秒 / 状態 ${els.pVideo.readyState}`
             + (b.length && !covers ? `（いまの位置 ${fmtTC(t)} に中身がありません）` : ""));
 
-          // 位置と手元の中身が食い違っているなら、中身のある場所へ寄せる
-          if (b.length && !covers && first != null && els.pVideo.readyState < 2){
-            log(`位置を ${fmtTC(first)} に寄せます`);
-            try{ els.pVideo.currentTime = first + 0.1; }catch(_){}
-          }
+
         }, 5000);
       }
       if (this.el === els.pVideo) els.pNote.textContent = "";
@@ -4716,7 +4715,10 @@ function createDashEngine(name){
       if (!this.ready) return;
       if (this.el === els.pVideo){
         const t = this.el.currentTime;
-        log(`${this.name}: ${fmtTC(t)} へ移動しました`);
+        if (Math.abs(t - (this.lastSeekLog || -99)) > 3){
+          this.lastSeekLog = t;
+          log(`${this.name}: ${fmtTC(t)} へ移動しました`);
+        }
       }
       for (const tr of this.tracks){
         if (this.coversNow(tr) && this.aheadOf(tr) > 3) continue;
@@ -5193,6 +5195,7 @@ let playCounted = false;
 els.pVideo.addEventListener("waiting", () => {
   if (!audioOnly && !presConn) localStalls++;
 });
+els.pVideo.addEventListener("seeking", () => { lastSeekAt = Date.now(); });
 els.pVideo.addEventListener("timeupdate", () => {
   const t = els.pVideo.currentTime;
   if (t > 1) lastGoodTime = t;
@@ -5204,6 +5207,7 @@ els.pVideo.addEventListener("loadedmetadata", () => {
     lastGoodDuration = els.pVideo.duration;
 });
 els.pVideo.addEventListener("playing", () => {
+  clearInterval(startWatch); startWatch = null;
   // 鳴り始めたら、ふだんの先読みに戻す
   try{ dashMain.tracks.forEach(t => { t.justSeeked = false; }); }catch(_){}
   if (openAt){
@@ -5214,6 +5218,7 @@ els.pVideo.addEventListener("playing", () => {
 });
 els.pVideo.addEventListener("play",  () => { wantPlay = true;  updateMediaSession(); });
 els.pVideo.addEventListener("playing", () => {
+  clearInterval(startWatch); startWatch = null;
   if (!playCounted && currentFile){ playCounted = true; recordPlay(currentFile.id); }
 });
 els.pAudio.addEventListener("playing", () => {
@@ -6012,6 +6017,8 @@ function showLocalQuality(){
 // 立ち上がりのために軽い画質で始めたときは、
 // 再生が落ち着いたところで本来の画質へ移す。
 let liftPending = false;
+let startWatch = null;
+let lastSeekAt = 0;
 let openAt = 0;
 
 async function liftQualityAfterStart(){
@@ -6027,6 +6034,11 @@ async function liftQualityAfterStart(){
     for (let i = 0; i < b.length; i++)
       if (b.start(i) <= t + 0.2 && t <= b.end(i) + 0.2) ahead = b.end(i) - t;
   }catch(_){}
+  // 操作した直後は、まだ落ち着いていない
+  if (Date.now() - lastSeekAt < 8000){
+    log("操作の直後なので、画質はそのままにします");
+    return;
+  }
   if (els.pVideo.paused || ahead < 15){
     log(`まだ落ち着いていないため、画質はそのままにします（手元 ${ahead.toFixed(0)} 秒）`);
     return;
@@ -6059,6 +6071,7 @@ async function liftQualityAfterStart(){
             if (b.start(i) <= c + 0.2 && c <= b.end(i) + 0.2) ahead = b.end(i) - c;
         }catch(_){}
         if (v.paused || ahead >= 5) return;
+        if (Date.now() - lastSeekAt < 8000) return;   // 操作の直後は様子を見る
         log(`高い画質では追いつきません（手元 ${ahead.toFixed(0)} 秒）。軽い方へ戻します。`);
         const back = v.currentTime;
         dashMain.stop();
