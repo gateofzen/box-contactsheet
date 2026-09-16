@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v201</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v202</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4662,8 +4662,13 @@ function createDashEngine(name){
             restartAudioOnly("区間の取得を繰り返し失敗");
         }
       }finally{
+        const changed = tr.gen !== gen;   // 途中で移動された
         tr.busy = false;
-        if (tr.again && !this.stopped){ tr.again = false; this.pump(tr); }
+        if (!this.stopped && (tr.again || changed)){
+          tr.again = false;
+          // 新しい位置を取りに行く
+          setTimeout(() => { if (!this.stopped && this.tracks.includes(tr)) this.pump(tr); }, 0);
+        }
       }
     },
 
@@ -4730,7 +4735,12 @@ function createDashEngine(name){
         if (tr.sb && !tr.sb.updating){ try{ tr.sb.abort(); }catch(_){} }
         tr.again = false;
         tr.justSeeked = true;
-        setTimeout(() => { tr.justSeeked = false; this.pump(tr); }, 6000);
+        clearTimeout(tr.seekTimer);
+        // 連続して動かされたときは、落ち着いてからもう一度確かめる
+        tr.seekTimer = setTimeout(() => {
+          tr.justSeeked = false;
+          if (!this.stopped && this.tracks.includes(tr)) this.pump(tr);
+        }, 6000);
         this.pump(tr);
       }
     }
@@ -5199,6 +5209,40 @@ els.pVideo.addEventListener("waiting", () => {
   if (!audioOnly && !presConn) localStalls++;
 });
 els.pVideo.addEventListener("seeking", () => { lastSeekAt = Date.now(); });
+
+// 移動したのに鳴り出さないまま止まっていないか、見張る
+setInterval(() => {
+  if (!currentFile || audioOnly || presConn) return;
+  if (videoKind !== "DASH" || !dashMain.ready) return;
+  const v = els.pVideo;
+  if (v.paused || v.readyState >= 3) return;
+  if (Date.now() - lastSeekAt < 3000) return;     // 動かした直後は待つ
+
+  let covers = false;
+  try{
+    const b = v.buffered, t = v.currentTime;
+    for (let i = 0; i < b.length; i++)
+      if (b.start(i) <= t + 0.3 && t <= b.end(i) + 0.3) covers = true;
+  }catch(_){}
+  if (covers) return;                              // 中身はある。待てば鳴る。
+
+  // 何が起きているかを残す（次に同じことが起きたとき手がかりになる）
+  const tr = dashMain.tracks.find(t => t.kind === "video") || {};
+  let ranges = "";
+  try{
+    const b = v.buffered;
+    const parts = [];
+    for (let i = 0; i < b.length && i < 3; i++)
+      parts.push(`${fmtTC(b.start(i))}〜${fmtTC(b.end(i))}`);
+    ranges = parts.join(" / ") || "なし";
+  }catch(_){ ranges = "?"; }
+
+  log(`${fmtTC(v.currentTime)} の中身が届いていません。取りに行きます。`
+    + `（状態 ${v.readyState} / 手元 ${ranges}`
+    + ` / 次に取る区間 ${tr.next != null ? tr.next : "?"} / 取得中 ${tr.busy ? "はい" : "いいえ"}`
+    + ` / 失敗 ${tr.retry || 0} 回）`);
+  try{ dashMain.onSeek(); }catch(_){}
+}, 4000);
 els.pVideo.addEventListener("timeupdate", () => {
   const t = els.pVideo.currentTime;
   if (t > 1) lastGoodTime = t;
