@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v205</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v206</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2368,11 +2368,15 @@ async function buildThumbs(file, attempt){
 
 /* ============ 同時実行プール ============ */
 class Pool{
-  constructor(){ this.active = 0; this.q = []; this.cap = 0; }
+  constructor(){ this.active = 0; this.q = []; this.cap = 0; this.paused = false; }
+  // 再生中など、通信を譲りたいときに手を止める
+  pause(){ this.paused = true; }
+  resume(){ this.paused = false; this.drain(); }
   // 回線が細いときは、設定より少なく抑える
   setLimit(n){ this.cap = n > 0 ? (n | 0) : 0; this.drain(); }
   push(task){ return new Promise((res,rej) => { this.q.push({task,res,rej}); this.drain(); }); }
   drain(){
+    if (this.paused) return;
     const want = Math.max(1, Number(els.conc.value) || 8);
     const limit = this.cap ? Math.min(want, this.cap) : want;
     while (this.active < limit && this.q.length){
@@ -2746,6 +2750,8 @@ function refreshCard(id){
 const thumbObserver = new IntersectionObserver(entries => {
   for (const en of entries){
     if (!en.isIntersecting) continue;
+    // 再生の立ち上がりに通信を回す
+    if (pool.paused) continue;
     thumbObserver.unobserve(en.target);
     // 検索結果は files に入っていないので、表示中の一覧から引く
     const f = findFile(en.target.dataset.id);
@@ -2952,6 +2958,8 @@ async function openPlayer(file, startAt){
   pushLayer("player", () => closePlayerNow());
 
   playerClosing = false;
+  // 再生の立ち上がりに通信を回す。サムネイルは後回し。
+  pool.pause();
   liftPending = false;
   clearInterval(liftWatch); liftWatch = null;
   openAt = Date.now();
@@ -3089,6 +3097,15 @@ function closePlayerNow(){
   try{ els.pAudio.load(); }catch(_){}
 
   clearInterval(localTuneTimer); localTuneTimer = null;
+  clearTimeout(poolResumeTimer);
+  pool.setLimit(0); pool.resume();      // サムネイルの取得を元に戻す
+  // 止めている間に見えたものを、改めて取りに行く
+  setTimeout(() => {
+    document.querySelectorAll(".card").forEach(c => {
+      const strip = c.querySelector(".strip");
+      if (strip && strip.querySelector(".placeholder")) thumbObserver.observe(c);
+    });
+  }, 300);
   currentFile = null;
   castStartTime = 0; castLastTime = 0;
   setTimeout(() => { playerClosing = false; }, 800);
@@ -5279,6 +5296,9 @@ els.pVideo.addEventListener("loadedmetadata", () => {
 });
 els.pVideo.addEventListener("playing", () => {
   clearInterval(startWatch); startWatch = null;
+  // 鳴り出して少し経ってから、サムネイルの取得を再開する
+  clearTimeout(poolResumeTimer);
+  poolResumeTimer = setTimeout(() => { pool.setLimit(2); pool.resume(); }, 8000);
   if (els.pNote.textContent === "最初の場面を受け取っています…") els.pNote.textContent = "";
   // 鳴り始めたら、ふだんの先読みに戻す
   try{ dashMain.tracks.forEach(t => { t.justSeeked = false; }); }catch(_){}
@@ -5291,6 +5311,9 @@ els.pVideo.addEventListener("playing", () => {
 els.pVideo.addEventListener("play",  () => { wantPlay = true;  updateMediaSession(); });
 els.pVideo.addEventListener("playing", () => {
   clearInterval(startWatch); startWatch = null;
+  // 鳴り出して少し経ってから、サムネイルの取得を再開する
+  clearTimeout(poolResumeTimer);
+  poolResumeTimer = setTimeout(() => { pool.setLimit(2); pool.resume(); }, 8000);
   if (els.pNote.textContent === "最初の場面を受け取っています…") els.pNote.textContent = "";
   if (!playCounted && currentFile){ playCounted = true; recordPlay(currentFile.id); }
 });
@@ -6091,6 +6114,7 @@ function showLocalQuality(){
 // 再生が落ち着いたところで本来の画質へ移す。
 let liftPending = false;
 let startWatch = null;
+let poolResumeTimer = null;
 let lastSeekAt = 0;
 let openAt = 0;
 
