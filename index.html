@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v200</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v201</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2953,6 +2953,7 @@ async function openPlayer(file, startAt){
 
   playerClosing = false;
   liftPending = false;
+  clearInterval(liftWatch); liftWatch = null;
   openAt = Date.now();
   lastGoodTime = 0;
   resetLocalTune();
@@ -4591,8 +4592,10 @@ function createDashEngine(name){
     },
 
     targetOf(tr){
-      // 開いた直後・シーク直後は、少しだけ貯めて先に鳴らす
+      // 開いた直後・シーク直後は、少しだけ貯めて先に鳴らす。
+      // ただし鳴り出したら、すぐ次の判断ができる量まで伸ばす。
       if (tr.justSeeked) return tr.kind === "video" ? 6 : 10;
+      if (tr.kind === "video" && liftPending) return 14;
       if (tr.capped) return tr.capped;      // 保存領域に収まる範囲まで
       if (tr.kind === "video") return 45;
       // 音声のみ再生では、電波が途切れても止まらないよう厚く貯める。
@@ -5214,7 +5217,7 @@ els.pVideo.addEventListener("playing", () => {
     log(`再生が始まるまで ${((Date.now() - openAt) / 1000).toFixed(1)} 秒`);
     openAt = 0;
   }
-  if (liftPending) setTimeout(liftQualityAfterStart, 15000);
+  if (liftPending) watchForLift();
 });
 els.pVideo.addEventListener("play",  () => { wantPlay = true;  updateMediaSession(); });
 els.pVideo.addEventListener("playing", () => {
@@ -6021,6 +6024,41 @@ let startWatch = null;
 let lastSeekAt = 0;
 let openAt = 0;
 
+// 手元に十分たまった時点で、すぐ画質を上げる。
+// 決まった秒数を待つと、速い回線でも待たされてしまう。
+let liftWatch = null;
+
+function watchForLift(){
+  clearInterval(liftWatch);
+  let waited = 0;
+  liftWatch = setInterval(() => {
+    waited++;
+    if (!liftPending || !currentFile || presConn || audioOnly){
+      clearInterval(liftWatch); liftWatch = null; return;
+    }
+    if (waited > 30){                       // 30 秒たっても整わないなら諦める
+      clearInterval(liftWatch); liftWatch = null;
+      liftPending = false;
+      log("手元に余裕ができないため、画質はそのままにします");
+      return;
+    }
+    const v = els.pVideo;
+    if (v.paused || Date.now() - lastSeekAt < 4000) return;
+
+    let ahead = 0;
+    try{
+      const b = v.buffered, t = v.currentTime;
+      for (let i = 0; i < b.length; i++)
+        if (b.start(i) <= t + 0.2 && t <= b.end(i) + 0.2) ahead = b.end(i) - t;
+    }catch(_){}
+
+    // 10 秒ぶん先まで受け取れていれば、上げても大丈夫
+    if (ahead < 10) return;
+    clearInterval(liftWatch); liftWatch = null;
+    liftQualityAfterStart();
+  }, 1000);
+}
+
 async function liftQualityAfterStart(){
   if (!liftPending || !currentFile || presConn || audioOnly) return;
   liftPending = false;
@@ -6034,12 +6072,7 @@ async function liftQualityAfterStart(){
     for (let i = 0; i < b.length; i++)
       if (b.start(i) <= t + 0.2 && t <= b.end(i) + 0.2) ahead = b.end(i) - t;
   }catch(_){}
-  // 操作した直後は、まだ落ち着いていない
-  if (Date.now() - lastSeekAt < 8000){
-    log("操作の直後なので、画質はそのままにします");
-    return;
-  }
-  if (els.pVideo.paused || ahead < 15){
+  if (els.pVideo.paused || ahead < 5){
     log(`まだ落ち着いていないため、画質はそのままにします（手元 ${ahead.toFixed(0)} 秒）`);
     return;
   }
