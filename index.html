@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v207</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v208</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -560,6 +560,7 @@ details.sub[open]>summary{color:var(--text)}
                 <option value="5">5 分ぶん（通信量を抑える）</option>
               </select></div>
             <button id="forgetTiers" class="btn btn-sm">画質の学習を忘れる</button>
+            <button id="findNew" class="btn btn-sm">増えた動画を探して高画質に</button>
             <button id="syncShared" class="btn btn-sm">共有の内容を取り込む</button>
             <button id="tagHq" class="btn btn-sm">既存の高画質に印を付ける</button>
             <label class="check"><input id="thinLocal" type="checkbox">
@@ -820,7 +821,7 @@ const els = {};
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castWhere","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","syncShared","tagHq","redoLowHq","thinLocal","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","findNew","syncShared","tagHq","redoLowHq","thinLocal","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -3334,14 +3335,97 @@ async function rememberHqDone(id){
   idbPut("hqdone", {id, at: Date.now()});
 }
 
+/* ---- 新しく増えた動画だけを見つける ----
+   Box は「前回からの変更」を問い合わせられる。
+   フォルダを全部なめ直さなくても、増えたものが分かる。 */
+async function findNewVideos(){
+  const savedPos = localStorage.getItem("bcs_streampos");
+
+  // 初回は、いまの時点を控えるだけ
+  if (!savedPos){
+    const now = await boxFetch("/events?stream_position=now&limit=1").catch(() => null);
+    if (now && now.next_stream_position){
+      localStorage.setItem("bcs_streampos", String(now.next_stream_position));
+      return {first:true, files:[]};
+    }
+    return null;
+  }
+
+  const found = new Map();
+  let pos = savedPos;
+  for (let page = 0; page < 20; page++){
+    const d = await boxFetch(`/events?stream_position=${encodeURIComponent(pos)}&limit=500`)
+      .catch(() => null);
+    if (!d) return null;
+
+    for (const e of d.entries || []){
+      const src = e.source || {};
+      if (src.type !== "file") continue;
+      if (!/ITEM_(UPLOAD|CREATE|COPY|MOVE|UNDELETE_VIA_TRASH)/.test(e.event_type || "")) continue;
+      const ext = (src.name || "").split(".").pop().toLowerCase();
+      if (!VIDEO_EXT.has(ext)) continue;
+      found.set(src.id, {
+        id: src.id, name: src.name, size: src.size,
+        modified: src.modified_at || src.created_at,
+        parentId: src.parent ? src.parent.id : null,
+        path: src.parent ? "/" + src.parent.name : "",
+      });
+    }
+
+    if (d.next_stream_position) pos = d.next_stream_position;
+    if (!d.entries || d.entries.length < 500) break;
+  }
+  localStorage.setItem("bcs_streampos", String(pos));
+  return {first:false, files:[...found.values()]};
+}
+
+els.findNew.addEventListener("click", async () => {
+  els.findNew.disabled = true;
+  els.progress.textContent = "増えた動画を探しています…";
+
+  const got = await findNewVideos();
+  els.findNew.disabled = false;
+  els.progress.textContent = "";
+
+  if (!got){
+    say("変更の履歴を取得できませんでした。フォルダを調べ直してください。", true);
+    return;
+  }
+  if (got.first){
+    say("これからの追加を見張ります。次回から、増えたぶんだけをすぐ見つけられます。");
+    return;
+  }
+  if (!got.files.length){
+    syncStatusLine();
+    say("増えた動画はありません");
+    return;
+  }
+
+  await mergeIndex(got.files);
+  log(`増えた動画: ${got.files.length} 本`);
+
+  const names = got.files.slice(0, 5).map(f => f.name).join("\n");
+  if (!confirm(`${got.files.length} 本の動画が増えています。\n\n${names}`
+    + (got.files.length > 5 ? `\n… ほか ${got.files.length - 5} 本` : "")
+    + `\n\nこれらを高画質にしますか？`)) return;
+
+  hqTargets = got.files.slice();     // 走査せずに、この一覧を対象にする
+  els.hqAll.click();
+});
+
 els.hqAll.addEventListener("click", async () => {
   if (hqRunning){ hqRunning = false; return; }         // 押し直しで中止
 
   const folderName = els.selName.textContent || "選択中のフォルダ";
   let targets = deepScan ? files.slice() : view.slice();
 
-  // 直下だけを読んでいる場合は、配下すべてに広げられる
-  if (!deepScan){
+  // 「増えたぶん」から呼ばれたときは、走査も範囲の確認も省く
+  if (hqTargets){
+    targets = hqTargets;
+    hqTargets = null;
+    log(`増えたぶん ${targets.length} 本を対象にします（走査は行いません）`);
+  }else if (!deepScan){
+
     const ans = confirm(`高画質にする範囲を選んでください。\n\n`
       + `［OK］ ${folderName} の配下すべて（サブフォルダを含む）\n`
       + `［キャンセル］ いま表示している ${view.length} 本だけ`);
@@ -6148,6 +6232,7 @@ function showLocalQuality(){
 let liftPending = false;
 let startWatch = null;
 let poolResumeTimer = null;
+let hqTargets = null;   // 走査を省いて指定された対象
 let lastSeekAt = 0;
 let openAt = 0;
 
