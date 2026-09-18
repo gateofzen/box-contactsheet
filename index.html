@@ -442,7 +442,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v213</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v214</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2984,6 +2984,18 @@ async function paintThumbs(file, fromCache){
   };
   scrubFrom(framesEl);
   scrubFrom(ref.hero);
+
+  // 触れた時点で配信情報を用意しておくと、押したときにすぐ始まる。
+  // 取得は 1 回だけ、他に何もしていないときに限る。
+  if (!ref.warmed){
+    const warm = () => {
+      if (ref.warmed || presConn || els.scrim.classList.contains("open")) return;
+      ref.warmed = true;
+      getMpd(file).catch(() => {});
+    };
+    ref.card.addEventListener("mouseenter", warm, {once:true});
+    ref.card.addEventListener("touchstart", warm, {once:true, passive:true});
+  }
   showDefault();
   showScrubHint(ref.hero);
 
@@ -4473,10 +4485,17 @@ els.scrim.addEventListener("click", e => {
 //       背景再生したいときだけ、別の音声要素に音声トラックだけを流す。
 //       2 つを同時に鳴らして同期させることはしない。
 
-let mpdCache = {id:null, xml:null, url:null};
+// 配信情報の取得には数秒かかる。最後の 1 件だけでなく、
+// 何件か覚えておく（行き来しても待たされない）。
+const mpdCache = new Map();
+const MPD_KEEP = 20;
 
 async function getMpd(file){
-  if (mpdCache.id === file.id && mpdCache.xml) return mpdCache;
+  const hit = mpdCache.get(file.id);
+  if (hit && hit.xml && Date.now() - hit.at < 30 * 60 * 1000){
+    mpdCache.delete(file.id); mpdCache.set(file.id, hit);   // 使ったものを新しい扱いに
+    return hit;
+  }
   let repInfo;
   try{
     repInfo = await waitForRep(await getRepresentation(file.id, "[dash]") || {}, 6);
@@ -4495,8 +4514,10 @@ async function getMpd(file){
     log("この dash は暗号化されています（DRM）。区間配信は使えません。");
     return null;
   }
-  mpdCache = {id:file.id, xml, url};
-  return mpdCache;
+  const rec = {id:file.id, xml, url, at: Date.now()};
+  mpdCache.set(file.id, rec);
+  while (mpdCache.size > MPD_KEEP) mpdCache.delete(mpdCache.keys().next().value);
+  return rec;
 }
 
 function mpdDuration(xml){
@@ -4598,6 +4619,7 @@ function createDashEngine(name){
       this.el = mediaEl; this.stopped = false; this.kbps = 0;
 
       const t0 = Date.now();
+      const warmed = mpdCache.has(file.id);
       const mpd = await getMpd(file);
       if (!mpd) return false;
       const tMpd = Date.now() - t0;
@@ -4679,7 +4701,26 @@ function createDashEngine(name){
         }));
       }catch(err){ log(`${name}: 最初の区間を入れられません（${err.message}）`); }
 
+      // 音声と映像で区間の区切りが違うことがある。
+      // 狙った位置に中身が来ていない道筋を、前後を取って埋める。
+      if (startAt > 0){
+        for (const tr of this.tracks){
+          for (let k = 0; k < 3; k++){
+            if (this.stopped) break;
+            if (this.coversNow(tr)) break;
+            const back = tr.next - 2 - k;
+            if (back < tr.start) break;
+            try{
+              const buf = await this.fetchSeg(tr.template(back));
+              await this.appendWithSpace(tr, buf);
+              log(`${name}: ${tr.kind} の手前の区間を足しました`);
+            }catch(_){ break; }
+          }
+        }
+      }
+
       log(`${name}: 準備できました（配信情報 ${(tMpd/1000).toFixed(1)} 秒`
+        + (warmed ? "・用意済み" : "")
         + ` / 最初の区間まで ${((Date.now() - t0)/1000).toFixed(1)} 秒`
         + ` / 裏の取得 ${pool.paused ? "停止中" : "動作中"}`
         + (pendingUploads.length ? ` / 保存待ち ${pendingUploads.length} 件` : "")
@@ -5274,7 +5315,7 @@ async function restartAudioOnly(why){
   try{
     dashAudio.stop();
     // 配信元の場所は時間が経つと通らなくなる。取り直す。
-    mpdCache = {id:null, xml:null, url:null};
+    mpdCache.delete(currentFile.id);   // この動画のぶんだけ取り直す
     await ensureFresh().catch(() => {});
     const ok = await dashAudio.start(currentFile, els.pAudio, ["audio"], t);
     if (!ok) throw new Error("作り直せません");
