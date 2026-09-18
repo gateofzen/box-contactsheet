@@ -442,7 +442,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v212</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v213</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -454,9 +454,12 @@ details.sub[open]>summary{color:var(--text)}
     <button id="advBtn" class="iconbtn" title="設定" aria-label="設定">⚙</button>
   </div>
   <div id="sortMenu" class="menu" hidden>
-    <button class="menu-item" data-value="name">名前</button>
+    <button class="menu-item" data-value="name">名前 あ→ん</button>
+    <button class="menu-item" data-value="nameDesc">名前 ん→あ</button>
     <button class="menu-item" data-value="modified">更新が新しい順</button>
+    <button class="menu-item" data-value="modifiedAsc">更新が古い順</button>
     <button class="menu-item" data-value="size">サイズが大きい順</button>
+    <button class="menu-item" data-value="sizeAsc">サイズが小さい順</button>
     <button class="menu-item" data-value="rateDesc">★ が多い順</button>
     <button class="menu-item" data-value="rateAsc">★ が少ない順</button>
     <button class="menu-item" data-value="plays">再生回数が多い順</button>
@@ -534,13 +537,16 @@ details.sub[open]>summary{color:var(--text)}
               <input id="col" class="w-num" type="number" value="340" min="200" max="900" step="20"></div>
             <div class="field" hidden><label for="sort">並び順</label>
               <select id="sort">
-                <option value="name">名前</option>
+                <option value="name">名前 あ→ん</option>
+                <option value="nameDesc">名前 ん→あ</option>
                 <option value="modified">更新が新しい順</option>
+                <option value="modifiedAsc">更新が古い順</option>
                 <option value="size">サイズが大きい順</option>
+                <option value="sizeAsc">サイズが小さい順</option>
                 <option value="rateDesc">★ が多い順</option>
                 <option value="rateAsc">★ が少ない順</option>
-          <option value="plays">再生回数が多い順</option>
-          <option value="recent">最近再生した順</option>
+                <option value="plays">再生回数が多い順</option>
+                <option value="recent">最近再生した順</option>
               </select></div>
           </div>
         </div>
@@ -2611,8 +2617,11 @@ function applyView(){
       if (la !== lb) return lb - la;
       return a.name.localeCompare(b.name,"ja");
     }
-    if (mode === "size") return (b.size||0) - (a.size||0);
-    if (mode === "modified") return String(b.modified||"").localeCompare(String(a.modified||""));
+    if (mode === "size")        return (b.size||0) - (a.size||0);
+    if (mode === "sizeAsc")     return (a.size||0) - (b.size||0);
+    if (mode === "modified")    return String(b.modified||"").localeCompare(String(a.modified||""));
+    if (mode === "modifiedAsc") return String(a.modified||"").localeCompare(String(b.modified||""));
+    if (mode === "nameDesc")    return b.name.localeCompare(a.name,"ja");
     return a.name.localeCompare(b.name,"ja");
   });
 
@@ -4036,9 +4045,24 @@ function setAdvOpen(open){
 els.advBtn.addEventListener("click", () => setAdvOpen(!els.advBox.open));
 
 /* ---- 並び順のメニュー ---- */
+const SORT_SHORT = {
+  name:"名前 あ→ん", nameDesc:"名前 ん→あ",
+  modified:"更新 新しい", modifiedAsc:"更新 古い",
+  size:"サイズ 大", sizeAsc:"サイズ 小",
+  rateDesc:"★ 多い", rateAsc:"★ 少ない",
+  plays:"再生回数", recent:"最近見た",
+};
+
 function markSortMenu(){
   els.sortMenu.querySelectorAll(".menu-item").forEach(b =>
     b.classList.toggle("on", b.dataset.value === els.sort.value));
+}
+
+// いま何順かが分かるよう、ボタンの説明に出す
+function showSortOnButton(){
+  const label = SORT_SHORT[els.sort.value] || "並び順";
+  els.sortBtn.title = "並び順: " + label;
+  els.sortBtn.setAttribute("aria-label", "並び順: " + label);
 }
 function applySortMenu(open){
   els.sortMenu.hidden = !open;
@@ -4357,6 +4381,7 @@ els.sortMenu.addEventListener("click", e => {
   if (!item) return;
   els.sort.value = item.dataset.value;
   localStorage.setItem("bcs_sort", els.sort.value);
+  showSortOnButton();
   openSortMenu(false);
   applyView();
   
@@ -7461,6 +7486,7 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   els.folder.value   = localStorage.getItem("bcs_treeroot") || "0";
   els.col.value      = localStorage.getItem("bcs_col") || "380";
   els.sort.value     = localStorage.getItem("bcs_sort") || "name";
+  showSortOnButton();
   els.castQuality.value = localStorage.getItem("bcs_castq") || "0";
   els.castMethod.value = localStorage.getItem("bcs_castmethod") || "auto";
   els.castAppId.value = (localStorage.getItem("bcs_castappid") || "").trim() || DEFAULTS.castAppId;
