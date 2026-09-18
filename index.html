@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v208</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v209</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1910,7 +1910,17 @@ async function captureFromVideo(src, points, size, noCors){
       v.addEventListener("seeked", () => { clearTimeout(to); res(); }, {once:true});
       v.currentTime = Math.min(dur - 0.1, Math.max(0, dur * p));
     });
-    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+    // 移動が終わっても、画が用意されていないことがある。
+    // 用意できるまで少し待ってから取り込む。
+    for (let i = 0; i < 20 && v.readyState < 2; i++)
+      await new Promise(r => setTimeout(r, 100));
+    if (v.readyState < 2) throw new Error(`画が用意されません（状態 ${v.readyState}）`);
+
+    try{
+      ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+    }catch(err){
+      throw new Error("画を取り込めません: " + (err.message || err));
+    }
     frames.push(await new Promise(r => canvas.toBlob(r, "image/jpeg", .85)));
   }
   v.src = ""; v.load();
@@ -3596,7 +3606,13 @@ els.hqAll.addEventListener("click", async () => {
         continue;                       // 失敗として数えない
       }
       failed++;
-      log(`高画質にできません: ${f.name}（${fmtSize(f.size)}） / ${err.message}`);
+      // 理由が長いと診断ログで切れてしまう。要点だけ残す。
+      const why = String(err.message || err)
+        .replace(/Failed to execute '(\w+)' on '[^']+'/, "$1 に失敗")
+        .replace(/The provided value is not of type[^.]*/, "値の形式が違います")
+        .replace(/\s+/g, " ")
+        .slice(0, 80);
+      log(`高画質にできません: ${f.name}（${fmtSize(f.size)}） / ${why}`);
 
       // 続けて失敗するときは、Box 側が要求を絞っていることがある。
       // 間を置いてから次へ進む。
@@ -7314,9 +7330,20 @@ if ("serviceWorker" in navigator){
     navigator.serviceWorker.register("sw.js", {updateViaCache: "none"})
       .then(reg => {
         log("アプリの下準備が整いました");
-        // 置き換えた版に気づけるよう、起動時と 30 分ごとに確かめる
-        try{ reg.update(); }catch(_){}
-        setInterval(() => { try{ reg.update(); }catch(_){} }, 30 * 60 * 1000);
+        // 置き換えた版に気づけるよう、起動時と 30 分ごとに確かめる。
+        // sw.js が置かれていないこともあるので、失敗しても黙って続ける。
+        let swFails = 0;
+        const check = () => {
+          try{
+            const r = reg.update();
+            if (r && r.catch) r.catch(err => {
+              if (++swFails === 1) log("更新の確認ができません: " + err.message);
+              if (swFails >= 3) clearInterval(swTimer);   // 何度も失敗するなら諦める
+            });
+          }catch(_){}
+        };
+        check();
+        const swTimer = setInterval(check, 30 * 60 * 1000);
       })
       .catch(err => log("service worker を登録できません: " + err.message));
 
