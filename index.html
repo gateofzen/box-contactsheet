@@ -442,7 +442,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v214</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v215</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4682,6 +4682,10 @@ function createDashEngine(name){
       this.ready = true;
       if (startAt > 0){ try{ mediaEl.currentTime = startAt; }catch(_){} }
 
+      // 狙った位置が埋まるまで、先読みは始めない。
+      // 先に進まれると、手前を足したい番号が分からなくなる。
+      this.holdPump = true;
+
       // 最初の 1 区間だけ先に入れて、すぐ再生を始められるようにする。
       // 残りは再生しながら追いかける。
       const vtr = this.tracks.find(t => t.kind === "video");
@@ -4705,16 +4709,30 @@ function createDashEngine(name){
       // 狙った位置に中身が来ていない道筋を、前後を取って埋める。
       if (startAt > 0){
         for (const tr of this.tracks){
-          for (let k = 0; k < 3; k++){
-            if (this.stopped) break;
-            if (this.coversNow(tr)) break;
-            const back = tr.next - 2 - k;
+          // 狙った時刻の区間から数える。取得中の番号はすでに先へ
+          // 進んでいるので、そこから数えると後ろを取ってしまう。
+          const base = this.indexAt(tr, startAt);
+          for (let k = 1; k <= 3; k++){
+            if (this.stopped || this.coversNow(tr)) break;
+            const back = base - k;
             if (back < tr.start) break;
             try{
               const buf = await this.fetchSeg(tr.template(back));
               await this.appendWithSpace(tr, buf);
-              log(`${name}: ${tr.kind} の手前の区間を足しました`);
+              log(`${name}: ${tr.kind} の ${k} つ手前（区間 ${back}）を足しました`);
             }catch(_){ break; }
+          }
+
+          // それでも届かないなら、実際にどこに入ったかを残す
+          if (!this.coversNow(tr)){
+            let where = "なし";
+            try{
+              const b = tr.sb.buffered, parts = [];
+              for (let i = 0; i < b.length && i < 3; i++)
+                parts.push(`${fmtTC(b.start(i))}〜${fmtTC(b.end(i))}`);
+              where = parts.join(" / ") || "なし";
+            }catch(_){}
+            log(`${name}: ${tr.kind} が ${fmtTC(startAt)} に届きません（入った範囲 ${where}）`);
           }
         }
       }
@@ -4754,7 +4772,7 @@ function createDashEngine(name){
         }, 5000);
       }
       if (this.el === els.pVideo) els.pNote.textContent = "";
-      const kick = () => this.pumpAll();
+      const kick = () => { if (!this.holdPump) this.pumpAll(); };
       const seek = () => this.onSeek();
       this.listeners = [
         [mediaEl, "timeupdate", kick], [mediaEl, "progress", kick],
@@ -4763,6 +4781,7 @@ function createDashEngine(name){
       ];
       this.listeners.forEach(([el, ev, fn]) => el.addEventListener(ev, fn));
       this.tracks.forEach(t => t.sb.addEventListener("updateend", kick));
+      this.holdPump = false;
       this.pumpAll();
       return true;
     },
