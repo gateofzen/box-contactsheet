@@ -429,7 +429,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v209</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v210</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2002,9 +2002,11 @@ function getCacheIndex(parentId){
         // 一度読んだ一覧は保存しておく。
         // ただし長く持ちすぎると、他の端末での作業が反映されない。
         const key = "cacheidx:" + folderId;
-        const fresh = cacheIndexFresh.delete(parentId);
+        const fresh = !allowStale && cacheIndexFresh.delete(parentId);
         const saved = fresh ? null : await idbGet("folders", key);
-        if (saved && Date.now() - saved.ts < CACHE_INDEX_TTL){
+        // 数を確かめるだけのときは、保存してある一覧をそのまま使う
+        const ttl = allowStale ? 7 * 24 * 60 * 60 * 1000 : CACHE_INDEX_TTL;
+        if (saved && Date.now() - saved.ts < ttl){
           for (const [k,v] of saved.entries) map.set(k, v);
           cacheIndexByParent.set(parentId, map);
           cacheIndexLoading.delete(parentId);
@@ -3472,7 +3474,7 @@ els.hqAll.addEventListener("click", async () => {
 
   // まだ高画質になっていないものだけを対象にする。
   // 記録との突き合わせだけで済むので、本数が多くても速い。
-  els.progress.textContent = "対象を数えています…";
+  els.progress.textContent = `対象を数えています… ${targets.length} 本`;
   const hqRunning0 = true;
   const already = await loadHqDoneIds();
   let todo = [];
@@ -3489,17 +3491,56 @@ els.hqAll.addEventListener("click", async () => {
     if (!byParent.has(f.parentId)) byParent.set(f.parentId, []);
     byParent.get(f.parentId).push(f);
   }
+  // フォルダを 1 つずつ確かめると、数百あるときに何十分もかかる。
+  // まとめて確かめ、進み具合を示す。途中でやめられるようにする。
   let fromShare = 0;
-  for (const [pid, list] of byParent){
-    if (!hqRunning0) break;
-    let index = null;
-    try{ index = await getCacheIndex(pid); }catch(_){}
-    for (const f of list){
-      const hit = index && index.get(f.id);
-      if (hit && hit.hq){ rememberHqDone(f.id); fromShare++; }
-    }
+  const parents = [...byParent.keys()];
+
+  // フォルダが多いと確認だけで時間がかかる。やるかどうかを尋ねる。
+  let doShare = parents.length > 0;
+  if (parents.length > 30){
+    doShare = confirm(
+      `別の端末での作業を確かめるには、${parents.length} 個のフォルダを見に行きます。\n`
+      + `${Math.ceil(parents.length * 0.7 / 6)} 秒ほどかかります。\n\n`
+      + `［OK］ 確かめる（作り直しを防げます）\n`
+      + `［キャンセル］ 飛ばす（すぐ始まります）`);
   }
-  if (fromShare) log(`共有の置き場から ${fromShare} 本が高画質済みと分かりました`);
+
+  if (doShare && parents.length){
+    let checked = 0, giveUp = false;
+    const started = Date.now();
+    let next = 0;
+
+    await Promise.all(Array.from({length: 6}, async () => {
+      for (;;){
+        const k = next++;
+        if (k >= parents.length || giveUp) return;
+        const pid = parents[k];
+
+        // 時間がかかりすぎるようなら、確認を切り上げる
+        if (!giveUp && Date.now() - started > 60000){
+          giveUp = true;
+          log("共有の置き場の確認に時間がかかるため、途中で切り上げます");
+          return;
+        }
+
+        let index = null;
+        try{ index = await getCacheIndex(pid, true); }catch(_){}
+        for (const f of byParent.get(pid)){
+          const hit = index && index.get(f.id);
+          if (hit && hit.hq){ rememberHqDone(f.id); fromShare++; }
+        }
+        checked++;
+        if (checked % 5 === 0 || checked === parents.length)
+          els.progress.textContent =
+            `共有の置き場を確認しています ${checked}/${parents.length} フォルダ`
+            + (fromShare ? `（${fromShare} 本が処理済み）` : "");
+      }
+    }));
+    els.progress.textContent = "";
+    log(`共有の置き場を ${checked}/${parents.length} フォルダ確認しました`
+      + (fromShare ? ` → ${fromShare} 本が高画質済み` : ""));
+  }
 
   // 残りは対象に入れる。端末内の控えは、処理の直前に確かめる。
   // 3 万件を 1 本ずつ照会すると、数えるだけで何分もかかってしまう。
