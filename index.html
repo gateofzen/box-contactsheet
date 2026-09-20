@@ -442,7 +442,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v216</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v217</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -4725,6 +4725,10 @@ function createDashEngine(name){
             }catch(_){ break; }
           }
 
+          // 入るのを待つ（入れ終わる前に確かめると「なし」に見える）
+          for (let w = 0; w < 30 && !this.coversNow(tr); w++)
+            await new Promise(r => setTimeout(r, 100));
+
           // それでも届かないなら、実際にどこに入ったかを残す
           if (!this.coversNow(tr)){
             let where = "なし";
@@ -4783,6 +4787,25 @@ function createDashEngine(name){
       ];
       this.listeners.forEach(([el, ev, fn]) => el.addEventListener(ev, fn));
       this.tracks.forEach(t => t.sb.addEventListener("updateend", kick));
+      // 狙いにぴったり合わなくても、届いている場所から始める。
+      // 数秒の違いより、すぐ始まることを優先する。
+      if (startAt > 0 && this.el === els.pVideo){
+        const vtr = this.tracks.find(t => t.kind === "video");
+        if (vtr && !this.coversNow(vtr)){
+          try{
+            const b = vtr.sb.buffered;
+            let near = null;
+            for (let i = 0; i < b.length; i++)
+              if (near == null || Math.abs(b.start(i) - startAt) < Math.abs(near - startAt))
+                near = b.start(i);
+            if (near != null && Math.abs(near - startAt) < 30){
+              this.el.currentTime = near + 0.05;
+              log(`${name}: ${fmtTC(near)} から始めます（${fmtTC(startAt)} の少し先）`);
+            }
+          }catch(_){}
+        }
+      }
+
       this.holdPump = false;
       this.pumpAll();
       return true;
@@ -5546,6 +5569,19 @@ setInterval(() => {
       parts.push(`${fmtTC(b.start(i))}〜${fmtTC(b.end(i))}`);
     ranges = parts.join(" / ") || "なし";
   }catch(_){ ranges = "?"; }
+
+  // 近くに届いているなら、そこへ寄せて始める
+  try{
+    const b = v.buffered, t = v.currentTime;
+    let near = null;
+    for (let i = 0; i < b.length; i++)
+      if (near == null || Math.abs(b.start(i) - t) < Math.abs(near - t)) near = b.start(i);
+    if (near != null && Math.abs(near - t) < 12 && Date.now() - lastSeekAt > 6000){
+      log(`${fmtTC(t)} の中身がないため、${fmtTC(near)} から続けます`);
+      v.currentTime = near + 0.05;
+      return;
+    }
+  }catch(_){}
 
   log(`${fmtTC(v.currentTime)} の中身が届いていません。取りに行きます。`
     + `（状態 ${v.readyState} / 手元 ${ranges}`
