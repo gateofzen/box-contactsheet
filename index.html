@@ -442,7 +442,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v215</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v216</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -588,7 +588,8 @@ details.sub[open]>summary{color:var(--text)}
             <button id="forgetHq" class="btn btn-sm">高画質の記録を消す</button>
             <div class="field"><label for="localQuality">手元の画質</label>
               <select id="localQuality">
-                <option value="auto" selected>自動（回線に応じて原本まで上げる）</option>
+                <option value="auto" selected>自動（軽く始めて、落ち着いたら上げる）</option>
+                <option value="low">軽いまま（すぐ始まる・画質はそのまま）</option>
                 <option value="dash">配信用 1080p（通信量を抑える）</option>
                 <option value="orig">常に原本（最高画質）</option>
               </select></div>
@@ -3068,6 +3069,7 @@ async function openPlayer(file, startAt){
   pool.pause();
   deferUploads = true;
   liftPending = false;
+  liftDone = false;
   clearInterval(liftWatch); liftWatch = null;
   openAt = Date.now();
   lastGoodTime = 0;
@@ -4793,6 +4795,16 @@ function createDashEngine(name){
       this.listeners = [];
       // ここで endOfStream すると「最後まで再生した」ことになってしまう。
       // 途中で止める場合もあるので伝えない。
+
+      // 入れ物を外しておかないと、次に作るときに失敗する
+      try{
+        for (const t of this.tracks)
+          if (t.sb && this.ms && this.ms.readyState === "open") this.ms.removeSourceBuffer(t.sb);
+      }catch(_){}
+      if (this.el && this.msUrl){
+        try{ URL.revokeObjectURL(this.msUrl); }catch(_){}
+        this.msUrl = null;
+      }
       this.ms = null; this.tracks = []; this.duration = 0;
     },
 
@@ -6376,6 +6388,7 @@ function showLocalQuality(){
 // 立ち上がりのために軽い画質で始めたときは、
 // 再生が落ち着いたところで本来の画質へ移す。
 let liftPending = false;
+let liftDone = false;
 let startWatch = null;
 let poolResumeTimer = null;
 let hqTargets = null;   // 走査を省いて指定された対象
@@ -6394,14 +6407,14 @@ function watchForLift(){
     if (!liftPending || !currentFile || presConn || audioOnly || videoKind !== "DASH"){
       clearInterval(liftWatch); liftWatch = null; liftPending = false; return;
     }
-    if (waited > 30){                       // 30 秒たっても整わないなら諦める
+    if (waited > 45){                       // 30 秒たっても整わないなら諦める
       clearInterval(liftWatch); liftWatch = null;
       liftPending = false;
       log("手元に余裕ができないため、画質はそのままにします");
       return;
     }
     const v = els.pVideo;
-    if (v.paused || Date.now() - lastSeekAt < 4000) return;
+    if (v.paused || Date.now() - lastSeekAt < 10000) return;
 
     let ahead = 0;
     try{
@@ -6417,7 +6430,31 @@ function watchForLift(){
   }, 1000);
 }
 
+// 作り直しが重ならないようにする
+let switching = false;
+
+async function switchStream(at, wantLow, why){
+  if (switching) return false;
+  switching = true;
+  try{
+    dashMain.stop();
+    await new Promise(r => setTimeout(r, 120));   // 後始末を待つ
+    const ok = await dashMain.start(currentFile, els.pVideo, ["video","audio"], at, wantLow);
+    if (ok) videoKind = "DASH";
+    return ok;
+  }catch(err){
+    log(`${why}に失敗: ` + (err.message || err));
+    return false;
+  }finally{ switching = false; }
+}
+
 async function liftQualityAfterStart(){
+  if (liftDone) return;
+  if (els.localQuality.value === "low"){
+    liftPending = false;
+    log("設定により、軽い画質のままにします");
+    return;
+  }
   if (!liftPending || !currentFile || presConn || audioOnly) return;
   if (videoKind !== "DASH"){
     liftPending = false;
@@ -6451,10 +6488,10 @@ async function liftQualityAfterStart(){
   const playing = !els.pVideo.paused;
   log(`画質を上げます（${fmtTC(t)} から）`);
   try{
-    dashMain.stop();
-    if (await dashMain.start(currentFile, els.pVideo, ["video","audio"], t)){
-      videoKind = "DASH";
+    if (await switchStream(t, false, "画質を上げるの")){
       if (playing) els.pVideo.play().catch(() => {});
+
+      liftDone = true;      // この動画では、もう画質を変えない
 
       // 上げたあと追いつかないようなら、軽い方へ戻す
       setTimeout(async () => {
@@ -6470,10 +6507,9 @@ async function liftQualityAfterStart(){
         if (Date.now() - lastSeekAt < 8000) return;   // 操作の直後は様子を見る
         log(`高い画質では追いつきません（手元 ${ahead.toFixed(0)} 秒）。軽い方へ戻します。`);
         const back = v.currentTime;
-        dashMain.stop();
-        if (await dashMain.start(currentFile, els.pVideo, ["video","audio"], back, true)){
-          videoKind = "DASH";
+        if (await switchStream(back, true, "軽い画質へ戻すの")){
           els.pVideo.play().catch(() => {});
+          log("以後この動画では、画質を変えません");
         }
       }, 20000);
     }
