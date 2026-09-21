@@ -442,7 +442,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v221</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v222</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3319,10 +3319,21 @@ async function openPlayer(file, startAt){
         // そのあと移動するので二度手間になる。
         liftPending = true;
         const at = (pendingStart != null && pendingStart > 0) ? pendingStart : 0;
+        lastSnapAt = -1;
         if (await dashMain.start(file, els.pVideo, ["video","audio"], at, true)){
           // 最初の区間に 10 秒以上かかることがある。早く見切ると
           // 重い原本に切り替わり、かえって遅くなる。
-          if (await waitFor(() => els.pVideo.readyState >= 2, 25000)){
+          // 待っている間に中身が届いたら、その場所へ寄せてすぐ始める。
+          const target = els.pVideo.currentTime || 0;
+          let ok = await waitFor(() => {
+            if (els.pVideo.readyState >= 2) return true;
+            snapToBuffered(target, 60);
+            return false;
+          }, 25000);
+          // 見切る前に、手元に届いている中身が少しでもあれば使う
+          if (!ok && snapToBuffered(target, 600))
+            ok = await waitFor(() => els.pVideo.readyState >= 2, 8000);
+          if (ok){
             usedDash = true; videoKind = "DASH";
             if (at > 0) pendingStart = null;   // すでにその位置から始めている
             els.pNote.textContent = "";
@@ -4930,6 +4941,7 @@ function createDashEngine(name){
           const url = tr.template(tr.next);
           const buf = await this.fetchSeg(url);
           if (this.stopped) return;
+          tr.firstSeg = {n: tr.next, kb: Math.round((buf.byteLength || 0) / 1024)};
           await this.appendWithSpace(tr, buf);
           tr.next++;
         }));
@@ -4978,7 +4990,12 @@ function createDashEngine(name){
                 parts.push(`${fmtTC(b.start(i))}〜${fmtTC(b.end(i))}`);
               where = parts.join(" / ") || "なし";
             }catch(_){}
-            log(`${name}: ${tr.kind} が ${fmtTC(startAt)} に届きません（入った範囲 ${where}）`);
+            const fs0 = tr.firstSeg || {};
+            log(`${name}: ${tr.kind} が ${fmtTC(startAt)} に届きません（入った範囲 ${where}`
+              + ` / 区間 ${fs0.n ?? "?"}・${fs0.kb ?? "?"}KB`
+              + ` / 受け口 ${this.ms ? this.ms.readyState : "なし"}`
+              + (this.el && this.el.error ? ` / 再生エラー ${this.el.error.code}` : "")
+              + `）`);
           }
         }
       }
@@ -6747,6 +6764,30 @@ function watchForLift(){
     clearInterval(liftWatch); liftWatch = null;
     liftQualityAfterStart();
   }, 1000);
+}
+
+// 再生位置に中身がなく、近くに届いた中身があるなら、そこへ寄せる。
+// 区間の区切りと時刻が少しずれている動画でも、すぐ始められるようにする。
+let lastSnapAt = -1;
+function snapToBuffered(target, range){
+  const vtr = dashMain.tracks.find(t => t.kind === "video");
+  if (!vtr || !vtr.sb) return false;
+  if (dashMain.coversNow(vtr)) return false;
+  try{
+    const b = vtr.sb.buffered;
+    let near = null;
+    for (let i = 0; i < b.length; i++){
+      const st = b.start(i), en = b.end(i);
+      if (en - st < 0.5) continue;
+      if (near == null || Math.abs(st - target) < Math.abs(near - target)) near = st;
+    }
+    if (near == null || Math.abs(near - target) > range) return false;
+    if (Math.abs(near - lastSnapAt) < 0.01) return false;     // 同じ場所へ何度も寄せない
+    lastSnapAt = near;
+    els.pVideo.currentTime = near + 0.05;
+    log(`${fmtTC(near)} から始めます（${fmtTC(target)} に中身が届かないため、届いた場所へ寄せました）`);
+    return true;
+  }catch(_){ return false; }
 }
 
 // 作り直しが重ならないようにする
