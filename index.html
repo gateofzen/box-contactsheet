@@ -306,6 +306,31 @@ details.sub[open]>summary{color:var(--text)}
 .bulkbar .btn{background:#171208;border-color:#171208;color:#F0E6D2}
 
 /* ---------- player ---------- */
+.histpanel{position:fixed;inset:0;z-index:210;background:rgba(0,0,0,.55);
+  display:flex;align-items:flex-start;justify-content:center;padding:56px 12px 12px}
+.histpanel[hidden]{display:none}
+.histbox{background:var(--panel);border:1px solid rgba(255,255,255,.14);border-radius:12px;
+  width:100%;max-width:640px;max-height:calc(100vh - 80px);display:flex;flex-direction:column}
+.histhead{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.08)}
+.histhead h3{margin:0;font-size:15px;font-family:var(--display);color:var(--amber)}
+.histhead .iconbtn{margin-left:auto}
+.histnote{font-size:11.5px;color:var(--dim)}
+.histlist{overflow-y:auto;padding:6px}
+.histrow{display:flex;gap:10px;align-items:center;padding:8px;border-radius:9px;cursor:pointer}
+.histrow:hover{background:rgba(255,255,255,.05)}
+.histthumb{flex:none;width:112px;aspect-ratio:16/9;border-radius:6px;background:#0b0e11 center/cover no-repeat}
+.histmeta{flex:1;min-width:0}
+.histname{font-size:13px;line-height:1.35;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;
+  -webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-all}
+.histsub{font-size:11px;color:var(--dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.histbar{height:3px;background:rgba(255,255,255,.12);border-radius:2px;margin-top:6px;overflow:hidden}
+.histbar i{display:block;height:100%;background:var(--amber)}
+.histpos{font-size:11px;color:var(--mint);margin-top:3px;font-family:var(--mono)}
+.histdel{flex:none;background:none;border:0;color:var(--dim);font-size:14px;padding:6px;cursor:pointer;border-radius:6px}
+.histdel:hover{color:#fff;background:rgba(255,255,255,.08)}
+.histempty{padding:28px 12px;text-align:center;color:var(--dim);font-size:13px}
+.histfoot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;
+  border-top:1px solid rgba(255,255,255,.08)}
 .hqpanel{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);
   display:flex;align-items:center;justify-content:center;padding:16px}
 .hqpanel[hidden]{display:none}
@@ -442,13 +467,14 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v223</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v224</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
              aria-label="絞り込み" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other">
     </div>
     <button id="installBtn" class="btn btn-go" hidden>アプリとして追加</button>
+    <button id="histBtn" class="iconbtn" title="再生履歴" aria-label="再生履歴">🕘</button>
     <button id="sortBtn" class="iconbtn" title="並び順" aria-label="並び順">⇅</button>
     <button id="loginTop" class="btn btn-go" hidden>ログイン</button>
     <button id="advBtn" class="iconbtn" title="設定" aria-label="設定">⚙</button>
@@ -721,6 +747,21 @@ details.sub[open]>summary{color:var(--text)}
 </div>
 <datalist id="tagOptions"></datalist>
 
+<div id="histPanel" class="histpanel" hidden>
+  <div class="histbox" role="dialog" aria-label="再生履歴">
+    <div class="histhead">
+      <h3>再生履歴</h3>
+      <span id="histNote" class="histnote"></span>
+      <button id="histClose" class="iconbtn" aria-label="閉じる">✕</button>
+    </div>
+    <div id="histList" class="histlist"></div>
+    <div class="histfoot">
+      <span id="histSyncNote" class="histnote"></span>
+      <button id="histClear" class="btn btn-sm">履歴をすべて消す</button>
+    </div>
+  </div>
+</div>
+
 <div id="hqPanel" class="hqpanel" hidden>
   <div class="hqbox">
     <h3>サムネイルを高画質に</h3>
@@ -878,7 +919,7 @@ const els = {};
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castWhere","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","findNew","syncShared","hqPanel","hqScope","hqSource","hqShare","hqBatch","hqInfo","hqGo","hqCancel","tagHq","redoLowHq","thinLocal","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","findNew","syncShared","hqPanel","hqScope","hqSource","hqShare","hqBatch","hqInfo","hqGo","hqCancel","histBtn","histPanel","histList","histNote","histClose","histClear","histSyncNote","tagHq","redoLowHq","thinLocal","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -1258,6 +1299,7 @@ function recordPlay(id){
   queueSync(id);
   refreshCard(id);
   log(`再生回数: ${m.plays} 回目`);
+  if (currentFile && currentFile.id === id) histTouch(currentFile, {newPlay:true, flush:true});
 }
 function normTag(s){ return String(s || "").trim().replace(/\s+/g,"_").replace(/^#/,""); }
 
@@ -3394,6 +3436,8 @@ function closePlayer(){
 let playerClosing = false;
 
 function closePlayerNow(){
+  // 再生位置は、受信を止めると 0 に戻ってしまう。その前に履歴へ控える。
+  if (currentFile && playCounted) histTouch(currentFile, {flush:true});
   // 閉じる最中であることを先に示す。
   // これが無いと、キャストの終了処理が「手元での再生」を始めてしまい、
   // 画面を閉じたのに音だけが鳴り続ける。
@@ -3433,6 +3477,333 @@ function closePlayerNow(){
   castStartTime = 0; castLastTime = 0;
   setTimeout(() => { playerClosing = false; }, 800);
 }
+
+/* ============ 再生履歴（すべての端末で共有） ============
+   自分の Box の一番上に _ContactSheet/history.json を置き、
+   どの端末もそれを読み書きする。動画ごとに「いつ・どの端末で・どこまで見たか」を残す。
+   2 台で同時に書いたときは、動画ごとに新しい方を残して統合する。
+   各自の Box に置くので、フォルダを共有している他の人には見えない。 */
+const HIST_FOLDER = "_ContactSheet";
+const HIST_FILE = "history.json";
+const HIST_MAX = 500;
+let hist = {items: []};
+let histIds = {folder:null, file:null, etag:null};
+let histSyncing = false, histDirty = false, histTimer = null;
+let histThumbUrls = [];
+
+function deviceLabel(){
+  const ua = navigator.userAgent || "";
+  if (/Android/i.test(ua)) return "Android";
+  if (/iPhone/.test(ua)) return "iPhone";
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return "iPad";
+  if (/Windows/.test(ua)) return "Windows";
+  if (/Macintosh/.test(ua)) return "Mac";
+  return "端末";
+}
+
+function loadHistLocal(){
+  try{ hist = JSON.parse(localStorage.getItem("bcs_hist") || '{"items":[]}'); }catch(_){ hist = {items:[]}; }
+  if (!hist || !Array.isArray(hist.items)) hist = {items:[]};
+}
+function saveHistLocal(){
+  try{ localStorage.setItem("bcs_hist", JSON.stringify(hist)); }catch(_){}
+}
+
+// 動画ごとに新しい方を残す（消した印も、新しければ勝つ）
+function mergeHist(a, b){
+  const map = new Map();
+  for (const it of [...(a || []), ...(b || [])]){
+    if (!it || !it.id) continue;
+    const cur = map.get(it.id);
+    if (!cur || (it.at || 0) > (cur.at || 0)){
+      const plays = Math.max(it.plays || 0, cur ? (cur.plays || 0) : 0);
+      map.set(it.id, Object.assign({}, it, {plays}));
+    }else{
+      cur.plays = Math.max(cur.plays || 0, it.plays || 0);
+    }
+  }
+  return [...map.values()].sort((x, y) => (y.at || 0) - (x.at || 0)).slice(0, HIST_MAX);
+}
+
+async function histFindIds(){
+  if (histIds.folder) return;
+  try{
+    const saved = JSON.parse(localStorage.getItem("bcs_histids") || "null");
+    if (saved && saved.folder){ histIds.folder = saved.folder; histIds.file = saved.file || null; return; }
+  }catch(_){}
+  const root = await listFolderLight("0");
+  let fo = root.find(e => e.type === "folder" && e.name === HIST_FOLDER);
+  if (!fo){
+    const r = await fetch(API + "/folders", {method:"POST",
+      headers:{Authorization:"Bearer " + token(), "Content-Type":"application/json"},
+      body: JSON.stringify({name: HIST_FOLDER, parent:{id:"0"}})});
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) fo = d;
+    else if (r.status === 409 && d.context_info && d.context_info.conflicts){
+      const c = d.context_info.conflicts; fo = Array.isArray(c) ? c[0] : c;
+    }else throw new Error("履歴の置き場を作れません（" + r.status + "）");
+    log(`再生履歴の置き場を作りました: ${HIST_FOLDER}`);
+  }
+  histIds.folder = fo.id;
+  const inner = await listFolderLight(fo.id);
+  const fi = inner.find(e => e.type === "file" && e.name === HIST_FILE);
+  histIds.file = fi ? fi.id : null;
+  localStorage.setItem("bcs_histids", JSON.stringify({folder: histIds.folder, file: histIds.file}));
+}
+
+function forgetHistIds(){
+  histIds = {folder:null, file:null, etag:null};
+  localStorage.removeItem("bcs_histids");
+}
+
+async function histDownload(){
+  if (!histIds.file) return [];
+  const meta = await fetch(`${API}/files/${histIds.file}?fields=etag`,
+    {headers:{Authorization:"Bearer " + token()}});
+  if (meta.status === 404){ forgetHistIds(); return null; }
+  if (meta.ok){ const m = await meta.json().catch(() => ({})); histIds.etag = m.etag || null; }
+  const r = await fetch(`${API}/files/${histIds.file}/content`, {headers:{Authorization:"Bearer " + token()}});
+  if (r.status === 404){ forgetHistIds(); return null; }
+  if (!r.ok) throw new Error("履歴を読めません（" + r.status + "）");
+  const d = await r.json().catch(() => ({}));
+  return Array.isArray(d.items) ? d.items : [];
+}
+
+async function histUpload(items){
+  const blob = new Blob([JSON.stringify({v:1, ts:Date.now(), items})], {type:"application/json"});
+  const fd = new FormData();
+  if (histIds.file){
+    fd.append("attributes", JSON.stringify({name: HIST_FILE}));
+    fd.append("file", blob, HIST_FILE);
+    const headers = {Authorization:"Bearer " + token()};
+    if (histIds.etag) headers["If-Match"] = histIds.etag;     // 読んだ後に他の端末が書いていたら断られる
+    const r = await fetch(`${UPLOAD_API}/files/${histIds.file}/content`, {method:"POST", headers, body: fd});
+    if (r.status === 412) return "conflict";
+    if (r.status === 404){ forgetHistIds(); return "missing"; }
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error("履歴を保存できません（" + r.status + "）");
+    histIds.etag = (d.entries && d.entries[0] && d.entries[0].etag) || null;
+    return "ok";
+  }
+  fd.append("attributes", JSON.stringify({name: HIST_FILE, parent:{id: histIds.folder}}));
+  fd.append("file", blob, HIST_FILE);
+  const r = await fetch(`${UPLOAD_API}/files/content`,
+    {method:"POST", headers:{Authorization:"Bearer " + token()}, body: fd});
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 409){
+    const c = d.context_info && d.context_info.conflicts;
+    histIds.file = c ? (Array.isArray(c) ? c[0].id : c.id) : null;
+    return "conflict";
+  }
+  if (!r.ok) throw new Error("履歴を作れません（" + r.status + "）");
+  histIds.file = d.entries[0].id; histIds.etag = d.entries[0].etag || null;
+  localStorage.setItem("bcs_histids", JSON.stringify({folder: histIds.folder, file: histIds.file}));
+  return "ok";
+}
+
+// Box 上の履歴を読み、手元と統合し、必要なら書き戻す
+async function histSync(why){
+  if (histSyncing){ histDirty = true; return; }
+  if (!token() || !db) return;
+  histSyncing = true;
+  if (els.histSyncNote) els.histSyncNote.textContent = "同期しています…";
+  try{
+    await histFindIds();
+    for (let attempt = 0; attempt < 4; attempt++){
+      let remote = await histDownload();
+      if (remote === null){ await histFindIds(); remote = await histDownload() || []; }
+      const merged = mergeHist(hist.items, remote);
+      hist.items = merged; saveHistLocal();
+      const same = histIds.file && JSON.stringify(merged.map(x => [x.id, x.at]))
+                               === JSON.stringify(mergeHist(remote, []).map(x => [x.id, x.at]));
+      if (same) break;                                   // Box 側がすでに最新
+      const res = await histUpload(merged);
+      if (res === "ok") break;
+      await sleep(400 * (attempt + 1));                  // 他の端末と重なったので、読み直してもう一度
+    }
+    histDirty = false;
+    if (els.histSyncNote) els.histSyncNote.textContent = "すべての端末で共有済み";
+    if (!els.histPanel.hidden) renderHist();
+  }catch(err){
+    log("再生履歴を同期できません: " + err.message);
+    if (els.histSyncNote) els.histSyncNote.textContent = "同期できませんでした（この端末には保存済み）";
+  }finally{
+    histSyncing = false;
+    if (histDirty){ histDirty = false; clearTimeout(histTimer); histTimer = setTimeout(() => histSync("追加の変更"), 3000); }
+  }
+}
+
+function histSoon(ms){
+  clearTimeout(histTimer);
+  histTimer = setTimeout(() => histSync("再生"), ms);
+}
+
+// いまの再生位置と長さ
+function playPos(){
+  if (presConn && castLastTime) return castLastTime;
+  if (audioOnly) return els.pAudio.currentTime || 0;
+  return els.pVideo.currentTime || 0;
+}
+function playDur(){
+  for (const d of [els.pVideo.duration, els.pAudio.duration, dashMain.duration])
+    if (isFinite(d) && d > 0) return d;
+  return 0;
+}
+
+// 履歴に書く（手元にはすぐ、Box には少しまとめてから）
+function histTouch(file, opts = {}){
+  if (!file || !file.id) return;
+  const pos = opts.pos != null ? opts.pos : playPos();
+  const dur = opts.dur != null ? opts.dur : playDur();
+  const cur = hist.items.find(x => x.id === file.id);
+  const done = dur > 0 && pos >= dur * 0.95;
+  const it = {
+    id: file.id, name: file.name, parentId: file.parentId || null,
+    path: file.path || "", size: file.size || 0,
+    at: Date.now(), pos: done ? 0 : Math.max(0, Math.round(pos || 0)),
+    dur: Math.round(dur || (cur && cur.dur) || 0),
+    dev: deviceLabel(), plays: ((cur && !cur.gone && cur.plays) || 0) + (opts.newPlay ? 1 : 0),
+    done: !!done,
+  };
+  hist.items = mergeHist([it], hist.items.filter(x => x.id !== file.id));
+  saveHistLocal();
+  histSoon(opts.flush ? 800 : 20000);
+}
+
+function histRemove(id){
+  const cur = hist.items.find(x => x.id === id);
+  hist.items = mergeHist([{id, at: Date.now(), gone: true, name: cur ? cur.name : ""}],
+                         hist.items.filter(x => x.id !== id));
+  saveHistLocal(); renderHist(); histSoon(800);
+}
+
+function agoText(t){
+  const s = Math.max(0, (Date.now() - (t || 0)) / 1000);
+  if (s < 60) return "たった今";
+  if (s < 3600) return `${Math.floor(s / 60)} 分前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 時間前`;
+  if (s < 172800) return "昨日";
+  const d = new Date(t);
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+async function paintHistThumb(el, id){
+  try{
+    const rec = await idbGet("thumbs", id);
+    if (!rec) return;
+    if (rec.poster){
+      const u = URL.createObjectURL(rec.poster); histThumbUrls.push(u);
+      el.style.backgroundImage = `url(${u})`;
+    }else if (rec.sheet){
+      const u = URL.createObjectURL(rec.sheet); histThumbUrls.push(u);
+      const n = rec.n || FRAME_COUNT;
+      el.style.backgroundImage = `url(${u})`;
+      el.style.backgroundSize = `${n * 100}% 100%`;
+      el.style.backgroundPosition = `${Math.min(2, n - 1) / Math.max(1, n - 1) * 100}% 0`;
+    }
+  }catch(_){}
+}
+
+function renderHist(){
+  histThumbUrls.forEach(u => URL.revokeObjectURL(u)); histThumbUrls = [];
+  const items = hist.items.filter(x => !x.gone);
+  els.histNote.textContent = items.length ? `${items.length} 本` : "";
+  els.histList.innerHTML = "";
+  if (!items.length){
+    const e = document.createElement("div");
+    e.className = "histempty";
+    e.textContent = "まだ履歴がありません。動画を再生すると、どの端末の分もここに並びます。";
+    els.histList.appendChild(e);
+    return;
+  }
+  for (const it of items.slice(0, 200)){
+    const row = document.createElement("div"); row.className = "histrow";
+    const th = document.createElement("div"); th.className = "histthumb";
+    const meta = document.createElement("div"); meta.className = "histmeta";
+    const nm = document.createElement("div"); nm.className = "histname"; nm.textContent = it.name || "（名前不明）";
+    const sub = document.createElement("div"); sub.className = "histsub";
+    const where = (it.path || "").split("/").filter(Boolean).pop() || "";
+    sub.textContent = `${agoText(it.at)}・${it.dev || ""}` + (where ? `・${where}` : "");
+    const bar = document.createElement("div"); bar.className = "histbar";
+    const fill = document.createElement("i");
+    fill.style.width = (it.done ? 100 : (it.dur && it.pos ? Math.min(100, it.pos / it.dur * 100) : 0)) + "%";
+    bar.appendChild(fill);
+    const pos = document.createElement("div"); pos.className = "histpos";
+    pos.textContent = it.done ? "最後まで見ました（最初から再生）"
+      : it.pos ? `${fmtTC(it.pos)} から再生` + (it.dur ? `　/ ${fmtTC(it.dur)}` : "")
+      : "最初から再生";
+    meta.append(nm, sub, bar, pos);
+    const del = document.createElement("button");
+    del.className = "histdel"; del.textContent = "✕"; del.title = "この履歴を消す";
+    del.addEventListener("click", e => { e.stopPropagation(); histRemove(it.id); });
+    row.append(th, meta, del);
+    row.addEventListener("click", () => openFromHist(it));
+    els.histList.appendChild(row);
+    paintHistThumb(th, it.id);
+  }
+}
+
+function openHistPanel(open){
+  if (open){
+    if (!els.histPanel.hidden) return;
+    els.histPanel.hidden = false;
+    pushLayer("hist", () => { els.histPanel.hidden = true; });
+    renderHist();
+    histSync("一覧を開いた");
+  }else{
+    if (!popping && dropLayer("hist")) return;
+    els.histPanel.hidden = true;
+  }
+}
+
+function openFromHist(it){
+  openHistPanel(false);
+  const f = (typeof findFile === "function" && findFile(it.id))
+         || globalIndex.find(x => x.id === it.id)
+         || {id: it.id, name: it.name, parentId: it.parentId, path: it.path, size: it.size};
+  // 最後まで見たものは最初から。途中のものは、その位置から（割合で渡す）
+  const frac = (!it.done && it.pos > 5 && it.dur > 0) ? Math.min(0.99, it.pos / it.dur) : null;
+  log(`履歴から再生: ${frac ? fmtTC(it.pos) + " から" : "最初から"}（${it.dev || "端末"}で視聴）`);
+  openPlayer(f, frac);
+}
+
+let histClearArmed = 0;
+els.histBtn.addEventListener("click", () => openHistPanel(true));
+els.histClose.addEventListener("click", () => openHistPanel(false));
+els.histPanel.addEventListener("click", e => { if (e.target === els.histPanel) openHistPanel(false); });
+els.histClear.addEventListener("click", () => {
+  // ブラウザの確認は出さず、もう一度押してもらう
+  if (Date.now() - histClearArmed > 4000){
+    histClearArmed = Date.now();
+    els.histClear.textContent = "もう一度押すと消します";
+    setTimeout(() => { els.histClear.textContent = "履歴をすべて消す"; }, 4000);
+    return;
+  }
+  histClearArmed = 0;
+  const now = Date.now();
+  hist.items = mergeHist(hist.items.map(x => ({id:x.id, at:now, gone:true, name:x.name})), []);
+  saveHistLocal(); renderHist(); histSoon(500);
+  els.histClear.textContent = "履歴をすべて消す";
+  say("再生履歴を消しました（すべての端末から消えます）");
+});
+
+// 再生中は 15 秒ごとに位置を控える
+setInterval(() => {
+  if (!currentFile || !playCounted || playerClosing) return;
+  if (!els.scrim.classList.contains("open")) return;
+  const playing = presConn ? true : (audioOnly ? !els.pAudio.paused : !els.pVideo.paused);
+  if (playing) histTouch(currentFile);
+}, 15000);
+
+// 止めたとき・画面を離れたときは、すぐ Box へ
+els.pVideo.addEventListener("pause", () => {
+  if (currentFile && playCounted && !playerClosing && !audioOnly) histTouch(currentFile, {flush:true});
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "hidden") return;
+  if (currentFile && playCounted) histTouch(currentFile, {flush:true});
+  else if (histTimer){ clearTimeout(histTimer); histSync("画面を離れた"); }
+});
 
 /* ============ 一括操作 ============ */
 function bulk(fn){
@@ -8003,6 +8374,8 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   if (els.castAppOnly.checked) loadCastSdk();
   primeCastProbe();       // 受信ページ方式が使えない場合の備え
   log("marks: " + marks.size + " / 索引: " + globalIndex.length);
+  loadHistLocal();
+  setTimeout(() => { if (token()) histSync("起動"); }, 5000);
 
   // Box からの折り返し（?code=...）を処理する
   const params = new URLSearchParams(location.search);
