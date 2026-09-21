@@ -442,7 +442,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v217</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v218</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -588,10 +588,10 @@ details.sub[open]>summary{color:var(--text)}
             <button id="forgetHq" class="btn btn-sm">高画質の記録を消す</button>
             <div class="field"><label for="localQuality">手元の画質</label>
               <select id="localQuality">
-                <option value="auto" selected>自動（軽く始めて、落ち着いたら上げる）</option>
+                <option value="auto" selected>自動（軽く始めて 1080p へ・途切れなし）</option>
                 <option value="low">軽いまま（すぐ始まる・画質はそのまま）</option>
-                <option value="dash">配信用 1080p（通信量を抑える）</option>
-                <option value="orig">常に原本（最高画質）</option>
+                <option value="dash">最初から 1080p（始まりは少し遅い）</option>
+                <option value="orig">常に原本（最高画質・通信量が多い）</option>
               </select></div>
             <label class="check"><input id="castAppOnly" type="checkbox" checked> テレビへは専用アプリで送る（推奨）</label>
 
@@ -4713,16 +4713,28 @@ function createDashEngine(name){
         for (const tr of this.tracks){
           // 狙った時刻の区間から数える。取得中の番号はすでに先へ
           // 進んでいるので、そこから数えると後ろを取ってしまう。
-          const base = this.indexAt(tr, startAt);
-          for (let k = 1; k <= 3; k++){
-            if (this.stopped || this.coversNow(tr)) break;
-            const back = base - k;
-            if (back < tr.start) break;
+          // 入り終わるのを少し待ってから確かめる
+          for (let w = 0; w < 10 && !this.coversNow(tr); w++)
+            await new Promise(r => setTimeout(r, 50));
+
+          // 届いていなければ、ずれの向きを見て 1 つだけ足す
+          if (!this.stopped && !this.coversNow(tr)){
+            let add = null;
             try{
-              const buf = await this.fetchSeg(tr.template(back));
-              await this.appendWithSpace(tr, buf);
-              log(`${name}: ${tr.kind} の ${k} つ手前（区間 ${back}）を足しました`);
-            }catch(_){ break; }
+              const b = tr.sb.buffered;
+              if (b.length){
+                const first = b.start(0), last = b.end(b.length - 1);
+                const base = this.indexAt(tr, startAt);
+                add = startAt >= last ? base + 1 : (startAt < first ? base - 1 : null);
+              }
+            }catch(_){}
+            if (add != null && add >= tr.start){
+              try{
+                const buf = await this.fetchSeg(tr.template(add));
+                await this.appendWithSpace(tr, buf);
+                log(`${name}: ${tr.kind} の区間 ${add} を足しました`);
+              }catch(_){}
+            }
           }
 
           // 入るのを待つ（入れ終わる前に確かめると「なし」に見える）
@@ -5039,12 +5051,55 @@ function createDashEngine(name){
       }catch(_){}
     },
 
-    // 時刻から区間の番号を求める。
-    // 区間の切れ目と時刻が少しずれている動画があるので、
-    // 1 つ手前から取って確実に覆う（余分は 5 秒ぶんだけ）。
+    // 再生を止めずに、映像の画質だけを差し替える。
+    // 入れ物は作り直さず、いま見ている少し先から新しい画質の区間を入れていく。
+    // すでに手元にある古い画質のぶんは、そのまま再生される。
+    async swapVideoRung(wantLow){
+      const tr = this.tracks.find(t => t.kind === "video");
+      if (!tr || !tr.sb || typeof tr.sb.changeType !== "function") return false;
+      const mpd = await getMpd(currentFile);
+      if (!mpd) return false;
+      const nt = parseTrack(mpd.xml, mpd.url, "video", wantLow);
+      if (!nt || nt.template(1) === tr.template(1)) return false;
+      const mime = `video/mp4; codecs="${nt.codecs}"`;
+      if (!MediaSource.isTypeSupported(mime)) return false;
+
+      // いま取得中のものは捨て、差し替えが終わるまで取りに行かない
+      tr.gen++;
+      this.holdPump = true;
+      try{
+        for (let i = 0; i < 50 && (tr.busy || tr.sb.updating); i++)
+          await new Promise(r => setTimeout(r, 40));
+
+        // 新しい画質の初期化情報を入れる
+        tr.sb.changeType(mime);
+        const init = await this.fetchSeg(nt.init);
+        await this.appendWithSpace(tr, init);
+
+        // 手元にある古い画質の続きから、新しい画質で取りに行く
+        const b = tr.sb.buffered, t = this.el.currentTime;
+        let end = t;
+        for (let i = 0; i < b.length; i++)
+          if (b.start(i) <= t + 0.2 && t <= b.end(i) + 0.2) end = b.end(i);
+        Object.assign(tr, {
+          init: nt.init, template: nt.template, label: nt.label,
+          bw: nt.bw, codecs: nt.codecs, mime,
+        });
+        tr.next = this.indexAt(tr, end + 0.1);
+        log(`${this.name}: 画質を ${nt.label} へ切り替えます（${fmtTC(end)} から、途切れなし）`);
+        return true;
+      }catch(err){
+        log(`${this.name}: 途切れない切り替えができません（${err.message}）`);
+        return false;
+      }finally{
+        this.holdPump = false;
+        this.pumpAll();
+      }
+    },
+
+    // 時刻から、その時刻を含む区間の番号を求める。
     indexAt(tr, sec){
-      const i = Math.floor(Math.max(0, sec) / tr.segDur) - 1;
-      return tr.start + Math.max(0, i);
+      return tr.start + Math.floor(Math.max(0, sec) / tr.segDur);
     },
 
     onSeek(){
@@ -6522,7 +6577,14 @@ async function liftQualityAfterStart(){
   }
   const t = els.pVideo.currentTime || 0;
   const playing = !els.pVideo.paused;
-  log(`画質を上げます（${fmtTC(t)} から）`);
+
+  // まず、再生を止めずに差し替える
+  if (await dashMain.swapVideoRung(false)){
+    liftDone = true;
+    return;
+  }
+
+  log(`画質を上げます（${fmtTC(t)} から・一瞬途切れます）`);
   try{
     if (await switchStream(t, false, "画質を上げるの")){
       if (playing) els.pVideo.play().catch(() => {});
@@ -6558,7 +6620,9 @@ function startLocalTune(){
     if (!currentFile || !els.scrim.classList.contains("open") || presConn || audioOnly) return;
     const mode = els.localQuality.value;
     showLocalQuality();
-    if (mode !== "auto") return;
+    // 自動では原本へは上げない。配信用の 1080p と見た目はほぼ同じで、
+    // 切り替えのたびに画面が一瞬途切れるため。原本は「常に原本」で選べる。
+    if (mode !== "orig-auto") return;
     if (Date.now() < localGrace){ localStalls = 0; localGoodFrom = 0; return; }
 
     const need = localOrigKbps();
