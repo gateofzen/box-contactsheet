@@ -442,7 +442,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v222</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v223</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3338,6 +3338,7 @@ async function openPlayer(file, startAt){
             if (at > 0) pendingStart = null;   // すでにその位置から始めている
             els.pNote.textContent = "";
             log("区間配信で再生します");
+            lastSeekAt = 0;        // 開始時の位置合わせは、利用者の操作ではない
           }else throw new Error("再生可能になりません");
         }else throw new Error("開始できません");
       }catch(err){
@@ -5169,7 +5170,7 @@ function createDashEngine(name){
       // 開いた直後・シーク直後は、少しだけ貯めて先に鳴らす。
       // ただし鳴り出したら、すぐ次の判断ができる量まで伸ばす。
       if (tr.justSeeked) return tr.kind === "video" ? 6 : 10;
-      if (tr.kind === "video" && liftPending) return 14;
+      if (tr.kind === "video" && liftPending) return 10;
       if (tr.capped) return tr.capped;      // 保存領域に収まる範囲まで
       if (tr.kind === "video") return 45;
       // 音声のみ再生では、電波が途切れても止まらないよう厚く貯める。
@@ -5194,7 +5195,8 @@ function createDashEngine(name){
         // 音声を貯めるときは、まとめて同時に取りに行く。
         // 1 つずつでは電波が切れる前に貯めきれない。
         const par = (this.name === "音声のみ" && !tr.justSeeked) ? 6 : 1;
-        while (!this.stopped && tr.gen === gen && tr.next <= last && this.aheadOf(tr) < this.targetOf(tr)){
+        while (!this.stopped && tr.gen === gen && tr.next <= last
+               && (this.aheadOf(tr) < this.targetOf(tr) || (tr.replaceUntil && tr.next <= tr.replaceUntil))){
           const nums = [];
           for (let k = 0; k < par && tr.next + k <= last; k++) nums.push(tr.next + k);
           // 取得は同時に、書き込みは順番に（順序が入れ替わると繋がらない）
@@ -5207,6 +5209,7 @@ function createDashEngine(name){
             tr.next++;
           }
           tr.retry = 0;
+          if (tr.replaceUntil && tr.next > tr.replaceUntil) tr.replaceUntil = 0;
           await this.trim(tr);
         }
         if (!this.stopped && this.tracks.every(t => t.next > t.start + t.count - 1)){
@@ -5321,7 +5324,6 @@ function createDashEngine(name){
         const init = await this.fetchSeg(nt.init);
         await this.appendWithSpace(tr, init);
 
-        // 手元にある古い画質の続きから、新しい画質で取りに行く
         const b = tr.sb.buffered, t = this.el.currentTime;
         let end = t;
         for (let i = 0; i < b.length; i++)
@@ -5330,8 +5332,23 @@ function createDashEngine(name){
           init: nt.init, template: nt.template, label: nt.label,
           bw: nt.bw, codecs: nt.codecs, mime,
         });
-        tr.next = this.indexAt(tr, end + 0.1);
-        log(`${this.name}: 画質を ${nt.label} へ切り替えます（${fmtTC(end)} から、途切れなし）`);
+
+        // 回線に余裕があれば、手元にある軽い画質を待たずに、
+        // すぐ先の区間から高画質で上書きしていく（軽い画質は届くまでの控え）。
+        // 余裕がなければ、手元の軽い画質を流し終えてから高画質に移る。
+        const have = Math.round(this.kbps || 0), need = Math.round((nt.bw || 0) / 1000);
+        const roomy = !have || !need || have >= need * 1.5;
+        if (roomy && end - t > 4){
+          const from = this.indexAt(tr, t + 2) + 1;       // いま流れている区間の次から
+          tr.next = from;
+          tr.replaceUntil = this.indexAt(tr, end + 0.1);   // 手元の軽い画質の終わりまで取り直す
+          const at = (from - tr.start) * tr.segDur;
+          log(`${this.name}: 画質を ${nt.label} へ切り替えます（${fmtTC(at)} 付近から、途切れなし）`);
+        }else{
+          tr.next = this.indexAt(tr, end + 0.1);
+          tr.replaceUntil = 0;
+          log(`${this.name}: 画質を ${nt.label} へ切り替えます（${fmtTC(end)} から、途切れなし）`);
+        }
         return true;
       }catch(err){
         log(`${this.name}: 途切れない切り替えができません（${err.message}）`);
@@ -6759,8 +6776,9 @@ function watchForLift(){
         if (b.start(i) <= t + 0.2 && t <= b.end(i) + 0.2) ahead = b.end(i) - t;
     }catch(_){}
 
-    // 10 秒ぶん先まで受け取れていれば、上げても大丈夫
-    if (ahead < 10) return;
+    // 6 秒ぶん先まで受け取れていれば、上げても大丈夫
+    // （途切れない差し替えなので、軽い画質が控えとして残る）
+    if (ahead < 6) return;
     clearInterval(liftWatch); liftWatch = null;
     liftQualityAfterStart();
   }, 1000);
