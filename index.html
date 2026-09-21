@@ -442,7 +442,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v220</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v221</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2047,7 +2047,7 @@ async function getCacheFolder(parentId, create){
 }
 
 // 親フォルダごとに、既にあるサムネイルの一覧を 1 回だけ読む
-function getCacheIndex(parentId){
+function getCacheIndex(parentId, allowStale){
   if (cacheIndexByParent.has(parentId)) return Promise.resolve(cacheIndexByParent.get(parentId));
   if (cacheIndexLoading.has(parentId)) return cacheIndexLoading.get(parentId);
 
@@ -2058,7 +2058,7 @@ function getCacheIndex(parentId){
       if (folderId){
         // 一度読んだ一覧は保存しておく。
         // ただし長く持ちすぎると、他の端末での作業が反映されない。
-        const key = "cacheidx:" + folderId;
+        const key = "cacheidx2:" + folderId;
         const fresh = !allowStale && cacheIndexFresh.delete(parentId);
         const saved = fresh ? null : await idbGet("folders", key);
         // 数を確かめるだけのときは、保存してある一覧をそのまま使う
@@ -2073,20 +2073,32 @@ function getCacheIndex(parentId){
           if (e.type !== "file") continue;
           const m = /^(\d+)~(\d+)(~h)?(~p)?\.jpg$/.exec(e.name);
           if (!m) continue;
-          const cur = map.get(m[1]) || {id:null, dur:null, posterId:null, hq:false};
-          if (m[4]) cur.posterId = e.id;            // ~p.jpg は主画像
-          else {
-            cur.id = e.id;
-            cur.dur = Number(m[2]) || null;
+          const cur = map.get(m[1]) || {id:null, dur:null, posterId:null, hq:false, posterHq:false};
+          // 同じ動画の画像が複数あることがある（通常画質と高画質）。
+          // Box が返す順番は決まっていないので、高画質の方を必ず優先する。
+          if (m[4]){                                  // ~p.jpg は主画像
+            const pHq = !!m[3];
+            if (!cur.posterId || (pHq && !cur.posterHq)){
+              if (cur.posterId) cur.stalePosterId = cur.posterId;
+              cur.posterId = e.id; cur.posterHq = pHq;
+            }else if (!pHq && cur.posterHq){
+              cur.stalePosterId = e.id;
+            }
+          }else{
             // 印があればそれに従う。印を付ける前に作ったものは、
             // 大きさで見分ける（高画質は元動画から作るため桁が違う）。
-            cur.hq = !!m[3] || (e.size || 0) >= HQ_SIZE_HINT;
+            const isHq = !!m[3] || (e.size || 0) >= HQ_SIZE_HINT;
+            if (!cur.id || (isHq && !cur.hq)){
+              cur.id = e.id;
+              cur.dur = Number(m[2]) || null;
+              cur.hq = isHq;
+            }
           }
           map.set(m[1], cur);
         }
         if (map.size){
           log(`共有サムネイル ${map.size} 件（フォルダ ${parentId}）`);
-          await idbPut("folders", {id:"cacheidx:" + folderId, entries:[...map.entries()], ts:Date.now()});
+          await idbPut("folders", {id:"cacheidx2:" + folderId, entries:[...map.entries()], ts:Date.now()});
         }
       }
     }catch(err){ log("共有サムネイル一覧の取得に失敗", parentId, err.message); }
@@ -2122,9 +2134,12 @@ async function fetchSharedThumbs(file){
   if (!hit || !hit.id) return null;
   const auth = {headers:{Authorization:"Bearer " + token()}};
   // シートと主画像を同時に取る（順番に取ると 1 本あたりの待ちが倍になる）
+  // 帯が高画質なのに主画像が古い（低画質）ままなら、主画像は使わない。
+  // 大きな画像は高画質の帯の中央のコマで表示する（作った端末と同じ見え方）。
+  const posterOk = hit.posterId && (!hit.hq || hit.posterHq);
   const [r, rp] = await Promise.all([
     fetch(`${API}/files/${hit.id}/content`, auth),
-    hit.posterId ? fetch(`${API}/files/${hit.posterId}/content`, auth) : Promise.resolve(null)
+    posterOk ? fetch(`${API}/files/${hit.posterId}/content`, auth) : Promise.resolve(null)
   ]);
   if (!r.ok) throw new Error("共有サムネイルの取得 " + r.status);
   const posterBlob = (rp && rp.ok) ? await rp.blob() : null;
@@ -2132,8 +2147,8 @@ async function fetchSharedThumbs(file){
   if (!blob || blob.size < 100 || !/image/.test(blob.type || "image/jpeg"))
     throw new Error(`受け取った内容が画像ではありません (${blob && blob.size} bytes, ${blob && blob.type})`);
   return {id:file.id, sheet: blob, n: FRAME_COUNT, total:0, interval:null, duration:hit.dur || null,
-          ok:true, pending:false, hq: !!hit.hq, shared:true,
-          poster: posterBlob, posterTried: !!posterBlob, ts:Date.now()};
+          ok:true, pending:false, hq: !!hit.hq, shared:true, posterHq: !!hit.posterHq,
+          poster: posterBlob, posterTried: !!posterBlob || !!hit.hq, ts:Date.now()};
 }
 
 // 主画像だけを共有に追加する。
@@ -2224,7 +2239,22 @@ async function uploadSharedThumbs(file, rec){
       }catch(_){}
     }
     if (r.ok && d.entries && d.entries[0]){
-      index.set(file.id, {id: d.entries[0].id, dur});
+      const prev = index.get(file.id) || {};
+      const next = {id: d.entries[0].id, dur, hq: !!rec.hq,
+                    posterId: prev.posterId || null, posterHq: !!prev.posterHq};
+      // 高画質にしたのに主画像が古いままなら、その主画像は片づける
+      if (rec.hq){
+        for (const old of [prev.posterHq ? null : prev.posterId, prev.stalePosterId]){
+          if (!old) continue;
+          try{
+            const dr = await fetch(`${API}/files/${old}`,
+              {method:"DELETE", headers:{Authorization:"Bearer " + token()}});
+            if (dr.ok || dr.status === 404) log(`古い主画像を片づけました: ${file.name}`);
+          }catch(_){}
+        }
+        if (!prev.posterHq){ next.posterId = null; next.posterHq = false; }
+      }
+      index.set(file.id, next);
       log(`共有に保存: ${name} → フォルダ ${folderId}`);
     }else if (r.status === 409 && d.context_info && d.context_info.conflicts){
       const c = d.context_info.conflicts;
@@ -3066,6 +3096,12 @@ async function paintThumbs(file, fromCache){
   heroTc.className = "tc";
   ref.hero.appendChild(heroImg); ref.hero.appendChild(heroTc);
 
+  // 共有から受け取った高画質の帯に、古い低画質の主画像が付いていることがある。
+  // その主画像は使わず、帯の中央のコマを大きく表示する。
+  if (rec.poster && rec.hq && rec.shared && !rec.posterHq){
+    rec.poster = null;
+    idbPut("thumbs", rec).catch(() => {});
+  }
   if (ref.posterUrl) URL.revokeObjectURL(ref.posterUrl);
   ref.posterUrl = rec.poster ? URL.createObjectURL(rec.poster) : null;
   const defaultIdx = Math.min(2, n - 1);
@@ -4160,7 +4196,7 @@ els.loadFolder.addEventListener("click", async () => {
   if (fsel){
     cacheIndexByParent.delete(fsel);
     const cf = await getCacheFolder(fsel, false);
-    if (cf){ try{ await idbDelete("folders", "cacheidx:" + cf); }catch(_){} }
+    if (cf){ try{ await idbDelete("folders", "cacheidx2:" + cf); }catch(_){} }
   }
   if (!fsel) return say("フォルダを選んでください", true);
   openSelectedFolder(false);
@@ -4341,7 +4377,7 @@ els.syncShared.addEventListener("click", async () => {
   for (const pid of pids){
     cacheIndexByParent.delete(pid);
     const folderId = await getCacheFolder(pid, false);
-    if (folderId){ try{ await idbDelete("folders", "cacheidx:" + folderId); }catch(_){} }
+    if (folderId){ try{ await idbDelete("folders", "cacheidx2:" + folderId); }catch(_){} }
   }
 
   // 高画質に入れ替わるものがあれば、その場で取り込む
@@ -4409,7 +4445,7 @@ els.tagHq.addEventListener("click", async () => {
     }
     // 付け替えたので、覚えている一覧を捨てて読み直させる
     cacheIndexByParent.delete(pid);
-    try{ await idbDelete("folders", "cacheidx:" + folderId); }catch(_){}
+    try{ await idbDelete("folders", "cacheidx2:" + folderId); }catch(_){}
   }
   els.tagHq.disabled = false;
   syncStatusLine();
@@ -4483,7 +4519,7 @@ els.redoLowHq.addEventListener("click", async () => {
       }catch(_){}
     }
     cacheIndexByParent.delete(pid);
-    try{ await idbDelete("folders", "cacheidx:" + folderId); }catch(_){}
+    try{ await idbDelete("folders", "cacheidx2:" + folderId); }catch(_){}
   }
 
   log(`粗いものを戻しました: ${low.length} 本（共有の印 ${renamed} 件）`);
