@@ -319,6 +319,11 @@ details.sub[open]>summary{color:var(--text)}
 .histrow{display:flex;gap:10px;align-items:center;padding:8px;border-radius:9px;cursor:pointer}
 .histrow:hover{background:rgba(255,255,255,.05)}
 .histthumb{flex:none;width:112px;aspect-ratio:16/9;border-radius:6px;background:#0b0e11 center/cover no-repeat}
+.histthumb.loading{background-image:linear-gradient(90deg,#0b0e11,#1a2027,#0b0e11)!important;
+  background-size:200% 100%!important;animation:histshimmer 1.2s linear infinite}
+@keyframes histshimmer{from{background-position:100% 0}to{background-position:-100% 0}}
+.histthumb.none{display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:18px}
+.histthumb.none::after{content:"🎞"}
 .histmeta{flex:1;min-width:0}
 .histname{font-size:13px;line-height:1.35;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-all}
@@ -467,7 +472,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v225</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v226</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3687,21 +3692,102 @@ function agoText(t){
   return `${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
-async function paintHistThumb(el, id){
+// 手元のサムネイルを、履歴の小さな画像として描く
+function applyHistThumb(el, rec, blob){
+  if (blob){
+    const u = URL.createObjectURL(blob); histThumbUrls.push(u);
+    el.style.backgroundImage = `url(${u})`;
+    el.style.backgroundSize = "cover"; el.style.backgroundPosition = "center";
+    el.classList.remove("loading");
+    return true;
+  }
+  if (!rec) return false;
+  if (rec.poster && !(rec.hq && rec.shared && !rec.posterHq)) return applyHistThumb(el, null, rec.poster);
+  if (rec.sheet){
+    const u = URL.createObjectURL(rec.sheet); histThumbUrls.push(u);
+    const n = rec.n || FRAME_COUNT;
+    el.style.backgroundImage = `url(${u})`;
+    el.style.backgroundSize = `${n * 100}% 100%`;
+    el.style.backgroundPosition = `${Math.min(2, n - 1) / Math.max(1, n - 1) * 100}% 0`;
+    el.classList.remove("loading");
+    return true;
+  }
+  return false;
+}
+
+// 別の端末で見た動画は、この端末にサムネイルが無いことが多い。
+// 見えた行だけ、共有の置き場（なければ Box の画像）から取ってくる。
+const histThumbGot = new Map();     // ファイルID -> {rec} か {blob}（この画面を開いている間の控え）
+const histThumbWait = [];
+let histThumbBusy = 0;
+const histThumbObserver = ("IntersectionObserver" in window) ? new IntersectionObserver(entries => {
+  for (const en of entries){
+    if (!en.isIntersecting) continue;
+    histThumbObserver.unobserve(en.target);
+    histThumbWait.push(en.target);
+  }
+  drainHistThumbs();
+}, {rootMargin: "200px 0px"}) : null;
+
+async function fetchHistThumb(it){
+  const f = {id: it.id, name: it.name, parentId: it.parentId, path: it.path, size: it.size};
+  // 共有の置き場（誰かが作ったサムネイル。高画質のこともある）
+  if (els.shareThumbs.checked && f.parentId){
+    try{
+      const rec = await fetchSharedThumbs(f);
+      if (rec && rec.ok){
+        // 端末に溜めない設定でなければ、次からすぐ出せるよう控えておく
+        if (!els.thinLocal.checked){
+          const had = await idbGet("thumbs", f.id).catch(() => null);
+          if (!had || !had.sheet) await idbPut("thumbs", rec);
+        }
+        return {rec};
+      }
+    }catch(_){}
+  }
+  // Box が用意する画像
   try{
-    const rec = await idbGet("thumbs", id);
-    if (!rec) return;
-    if (rec.poster){
-      const u = URL.createObjectURL(rec.poster); histThumbUrls.push(u);
-      el.style.backgroundImage = `url(${u})`;
-    }else if (rec.sheet){
-      const u = URL.createObjectURL(rec.sheet); histThumbUrls.push(u);
-      const n = rec.n || FRAME_COUNT;
-      el.style.backgroundImage = `url(${u})`;
-      el.style.backgroundSize = `${n * 100}% 100%`;
-      el.style.backgroundPosition = `${Math.min(2, n - 1) / Math.max(1, n - 1) * 100}% 0`;
-    }
+    const blob = await fetchPoster(f.id);
+    if (blob) return {blob};
   }catch(_){}
+  return null;
+}
+
+function drainHistThumbs(){
+  while (histThumbBusy < 2 && histThumbWait.length){
+    const el = histThumbWait.shift();
+    const it = el._hist;
+    if (!it || !el.isConnected) continue;
+    histThumbBusy++;
+    (async () => {
+      try{
+        let got = histThumbGot.get(it.id);
+        if (!got){
+          got = await fetchHistThumb(it);
+          if (got) histThumbGot.set(it.id, got);
+        }
+        if (!got || !applyHistThumb(el, got.rec || null, got.blob || null)){
+          el.classList.remove("loading"); el.classList.add("none");
+        }
+      }finally{
+        histThumbBusy--; drainHistThumbs();
+      }
+    })();
+  }
+}
+
+async function paintHistThumb(el, it){
+  // 1) この端末に保存してあるもの
+  const rec = await idbGet("thumbs", it.id).catch(() => null);
+  if (applyHistThumb(el, rec, null)) return;
+  // 2) この画面を開いている間に取ってきたもの
+  const got = histThumbGot.get(it.id);
+  if (got && applyHistThumb(el, got.rec || null, got.blob || null)) return;
+  // 3) 見えたら取りに行く
+  el.classList.add("loading");
+  el._hist = it;
+  if (histThumbObserver) histThumbObserver.observe(el);
+  else { histThumbWait.push(el); drainHistThumbs(); }
 }
 
 function renderHist(){
@@ -3739,7 +3825,7 @@ function renderHist(){
     row.append(th, meta, del);
     row.addEventListener("click", () => openFromHist(it));
     els.histList.appendChild(row);
-    paintHistThumb(th, it.id);
+    paintHistThumb(th, it);
   }
 }
 
