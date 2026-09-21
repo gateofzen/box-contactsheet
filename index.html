@@ -467,7 +467,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v224</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v225</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3756,8 +3756,28 @@ function openHistPanel(open){
   }
 }
 
-function openFromHist(it){
-  openHistPanel(false);
+// 一覧を閉じるときの「1 つ戻す」は、ブラウザで少し遅れて実行される。
+// 閉じ終わる前にプレーヤーを開くと、遅れてきた「戻す」でプレーヤーの方が閉じられてしまう。
+// 閉じ終わるのを待ってから次へ進む。
+function closeHistAndWait(){
+  if (els.histPanel.hidden) return Promise.resolve();
+  return new Promise(res => {
+    let finished = false;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      window.removeEventListener("popstate", done);
+      setTimeout(res, 0);          // 戻す処理（層を閉じる）が終わってから
+    };
+    window.addEventListener("popstate", done);
+    openHistPanel(false);
+    if (els.histPanel.hidden && !uiLayers.some(l => l.name === "hist")) setTimeout(done, 50);
+    setTimeout(done, 800);         // 念のため
+  });
+}
+
+async function openFromHist(it){
+  await closeHistAndWait();
   const f = (typeof findFile === "function" && findFile(it.id))
          || globalIndex.find(x => x.id === it.id)
          || {id: it.id, name: it.name, parentId: it.parentId, path: it.path, size: it.size};
