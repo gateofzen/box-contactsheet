@@ -442,7 +442,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v219</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v220</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1859,20 +1859,20 @@ async function waitForRep(entry, tries = 5){
   let e = entry;
   for (let i = 0; i < tries; i++){
     const state = e.status && e.status.state;
-    if (state === "success" || state === "viewable") return {rep:e, pending:false};
-    if (state === "error") return {rep:null, pending:false};
-    if (!e.info || !e.info.url) return {rep:null, pending:false};
+    if (state === "success" || state === "viewable") return {rep:e, pending:false, state};
+    if (state === "error") return {rep:null, pending:false, state:"error"};
+    if (!e.info || !e.info.url) return {rep:null, pending:false, state: state || "none"};
 
     const r = await fetch(e.info.url, {headers:{Authorization:"Bearer " + token()}});
-    if (!r.ok) return {rep:null, pending:false};
+    if (!r.ok) return {rep:null, pending:false, state:"http " + r.status};
     e = await r.json();
 
     const st = e.status && e.status.state;
-    if (st === "success" || st === "viewable") return {rep:e, pending:false};
-    if (st === "error") return {rep:null, pending:false};
+    if (st === "success" || st === "viewable") return {rep:e, pending:false, state:st};
+    if (st === "error") return {rep:null, pending:false, state:"error"};
     await sleep(2000 * (i + 1));
   }
-  return {rep:null, pending:true};
+  return {rep:null, pending:true, state:"pending"};
 }
 const repContentUrl = e => (e && e.content && e.content.url_template)
   ? e.content.url_template.replace("{+asset_path}","") : null;
@@ -2270,6 +2270,54 @@ async function quickReadable(url){
    原本がブラウザで扱えない方式（H.265 など）でも、Box が変換したものなら開ける。
    各場面の区間を 1 つずつ取り、初期化情報とつないだ小さな動画として開く。
    区間 1 つは数 MB なので、1 本あたり数十 MB で済む。 */
+// 本編の再生と同じ仕組みで区間 1 つを開き、狙った時刻の絵を用意する。
+// 小さな動画として開く方法より、受け付けられる動画が多い。
+async function openSegmentMSE(init, seg, mime, t){
+  const v = document.createElement("video");
+  v.muted = true; v.playsInline = true;
+  const ms = new MediaSource();
+  const url = URL.createObjectURL(ms);
+  v.src = url;
+  const cleanup = () => {
+    try{ v.removeAttribute("src"); v.load(); }catch(_){}
+    try{ URL.revokeObjectURL(url); }catch(_){}
+  };
+  try{
+    await new Promise((res, rej) => {
+      const to = setTimeout(() => rej(new Error("入れ物を開けません")), 8000);
+      ms.addEventListener("sourceopen", () => { clearTimeout(to); res(); }, {once:true});
+    });
+    const sb = ms.addSourceBuffer(mime);
+    const append = buf => new Promise((res, rej) => {
+      const ok = () => { sb.removeEventListener("error", ng); res(); };
+      const ng = () => { sb.removeEventListener("updateend", ok); rej(new Error("区間を受け付けません")); };
+      sb.addEventListener("updateend", ok, {once:true});
+      sb.addEventListener("error", ng, {once:true});
+      sb.appendBuffer(buf);
+    });
+    await append(init);
+    await append(seg);
+    const b = sb.buffered;
+    if (!b.length) throw new Error("区間が空です");
+    const want = Math.min(b.end(0) - 0.05, Math.max(b.start(0) + 0.02, t));
+    await new Promise((res, rej) => {
+      const to = setTimeout(() => rej(new Error("絵が用意されません")), 10000);
+      const check = () => {
+        if (v.readyState >= 2 && !v.seeking){ clearTimeout(to); res(); }
+      };
+      v.addEventListener("seeked", check);
+      v.addEventListener("loadeddata", check);
+      v.addEventListener("canplay", check);
+      v.currentTime = want;
+      setTimeout(check, 50);
+    });
+    return {v, cleanup};
+  }catch(err){
+    cleanup();
+    throw err;
+  }
+}
+
 async function captureFromDash(file, points){
   const mpd = await getMpd(file);
   if (!mpd) throw new Error("配信情報を取得できません");
@@ -2294,6 +2342,29 @@ async function captureFromDash(file, points){
     const t = Math.min(dur - 1, Math.max(0, dur * p));
     const n = tr.start + Math.floor(t / tr.segDur);
     const seg = await get(tr.template(n));
+
+    // まず本編と同じ仕組みで開く
+    const mime = `video/mp4; codecs="${tr.codecs}"`;
+    if (window.MediaSource && MediaSource.isTypeSupported(mime)){
+      let opened = null;
+      try{ opened = await openSegmentMSE(init, seg, mime, t); }
+      catch(e){ if (!mseNoteShown){ mseNoteShown = true; log(`区間の開き方を切り替えます（${shortWhy(e)}）`); } }
+      if (opened){
+        try{
+          const v = opened.v;
+          if (!v.videoWidth) throw new Error("絵が取り出せません");
+          if (!ctx){
+            canvas.width = v.videoWidth; canvas.height = v.videoHeight;
+            ctx = canvas.getContext("2d");
+          }
+          ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+          frames.push(await new Promise(r => canvas.toBlob(r, "image/jpeg", .85)));
+          continue;
+        }finally{ opened.cleanup(); }
+      }
+    }
+
+    // 駄目なら、初期化情報とつないだ小さな動画として開く
     const url = URL.createObjectURL(new Blob([init, seg], {type:"video/mp4"}));
     const v = document.createElement("video");
     v.muted = true; v.playsInline = true; v.preload = "auto";
@@ -2334,6 +2405,14 @@ async function captureFromDash(file, points){
   return {frames, duration: dur, w: canvas.width, h: canvas.height};
 }
 
+// 失敗の理由を短くまとめる（記録が長すぎて切れないように）
+function shortWhy(err){
+  return String((err && err.message) || err || "")
+    .replace(/Failed to execute '(\w+)' on '[^']+'/, "$1 に失敗")
+    .replace(/\s+/g, " ")
+    .slice(0, 40);
+}
+
 async function buildHiRes(file){
   const rec = {id:file.id, sheet:null, n:FRAME_COUNT, total:0, interval:null, ok:false, pending:false, hq:true, duration:null, ts:Date.now()};
 
@@ -2350,14 +2429,14 @@ async function buildHiRes(file){
     if (HQ_UNSUPPORTED.test(file.name || "")) throw new Error("この形式はブラウザで開けません");
     cap = await captureFromVideo(src, SAMPLE_POINTS, via === "原本" ? file.size : 0);
   }catch(err){
-    log(`${file.name}: 原本を開けません（${err.message}）`);
+    log(`原本を開けません（${shortWhy(err)}）: ${file.name}`);
 
     // 原本がブラウザで扱えない方式でも、Box が変換した 1080p なら開ける
     try{
       cap = await captureFromDash(file, SAMPLE_POINTS);
       via = "配信用 1080p";
     }catch(e1){
-      log(`${file.name}: 配信用 1080p からも取り込めません（${e1.message}）`);
+      log(`配信用 1080p も失敗（${shortWhy(e1)}）: ${file.name}`);
     }
   }
   if (!cap){
@@ -2372,7 +2451,7 @@ async function buildHiRes(file){
 
       if (full && await quickReadable(full)){
         via = "変換版 640x360";
-        log(`${file.name}: 変換版で作り直します（粗くなります）`);
+        log(`変換版 640x360 で作ります（粗くなります）: ${file.name}`);
         cap = await captureFromVideo(full, SAMPLE_POINTS, 0);
       }else{
         const e2 = new Error("原本を開けず、配信用も用意できていません");
@@ -2380,7 +2459,13 @@ async function buildHiRes(file){
         throw e2;
       }
     }catch(e3){
-      if (e3.retryLater) throw e3;
+      if (e3.retryLater && dashState.get(file.id) !== "error") throw e3;
+      // Box 自身が変換に失敗しているなら、何度試しても同じ
+      if (dashState.get(file.id) === "error"){
+        const e4 = new Error("Box でも変換できない動画です");
+        e4.unplayable = true;
+        throw e4;
+      }
       throw err;
     }
   }
@@ -2388,7 +2473,7 @@ async function buildHiRes(file){
   rec.duration = cap.duration;
   rec.w = cap.w; rec.h = cap.h;      // どの大きさで取り込んだか
   rec.ok = true;
-  log(`高画質 ${file.name} → ${cap.w}x${cap.h} × 5 コマ（${via}）`
+  log(`高画質 ${cap.w}x${cap.h}（${via}）: ${file.name}`
     + (cap.h && cap.h < 700 ? " ※ 元より粗い可能性があります" : ""));
   await idbPut("thumbs", rec);
   await uploadSharedThumbs(file, rec);
@@ -3718,6 +3803,7 @@ async function processHqList(todo, allTodo){
   let skipped = 0;
   let hqFailStreak = 0;
   let later = 0;
+  let unplayable = 0;
   for (const f of todo){
     if (!hqRunning) break;
 
@@ -3759,9 +3845,16 @@ async function processHqList(todo, allTodo){
         }
       }
     }catch(err){
+      if (err.unplayable){
+        unplayable++;
+        try{ await idbPut("hqdone", {id: f.id, at: Date.now(), skip: "box-error"}); }catch(_){}
+        (await loadHqDoneIds()).add(f.id);
+        log(`見送り（Box でも変換できない動画）: ${f.name}`);
+        continue;
+      }
       if (err.retryLater){
         later++;
-        log(`後回し: ${f.name}（${fmtSize(f.size)}） / ${err.message}`);
+        log(`後回し（${shortWhy(err)}）: ${f.name}`);
         continue;                       // 失敗として数えない
       }
       failed++;
@@ -3771,7 +3864,7 @@ async function processHqList(todo, allTodo){
         .replace(/The provided value is not of type[^.]*/, "値の形式が違います")
         .replace(/\s+/g, " ")
         .slice(0, 80);
-      log(`高画質にできません: ${f.name}（${fmtSize(f.size)}） / ${why}`);
+      log(`高画質にできません（${why}）: ${f.name}`);
 
       // 続けて失敗するときは、Box 側が要求を絞っていることがある。
       // 間を置いてから次へ進む。
@@ -3800,6 +3893,7 @@ async function processHqList(todo, allTodo){
   const took = fmtLeft(Date.now() - t0).replace("あと ", "");
   const extra = (skipped ? `　扱えない形式 ${skipped} 本` : "")
     + (later ? `　Box が変換中 ${later} 本（あとでもう一度実行してください）` : "")
+    + (unplayable ? `　Box でも変換できない ${unplayable} 本（以後は見送ります）` : "")
     + (failed ? `　失敗 ${failed} 本` : "");
   const left = Math.max(0, allTodo - done - skipped);
   const leftNote = left ? `　残り ${left} 本` : "　すべて終わりました";
@@ -4582,6 +4676,8 @@ els.scrim.addEventListener("click", e => {
 // 何件か覚えておく（行き来しても待たされない）。
 const mpdCache = new Map();
 const MPD_KEEP = 20;
+const dashState = new Map();
+let mseNoteShown = false;   // ファイルID -> Box の配信用の状態
 
 async function getMpd(file){
   const hit = mpdCache.get(file.id);
@@ -4596,9 +4692,14 @@ async function getMpd(file){
 
   const tmpl = repInfo && repInfo.rep && repInfo.rep.content && repInfo.rep.content.url_template;
   if (!tmpl){
-    log(repInfo && repInfo.pending ? "dash 表現を Box が生成中です" : "この動画に dash 表現がありません");
+    const st = (repInfo && repInfo.state) || "none";
+    dashState.set(file.id, st);
+    log(st === "pending" ? "配信用を Box が作っています（しばらくお待ちください）"
+      : st === "error" ? "Box が配信用への変換に失敗しています"
+      : `この動画には配信用がありません（${st}）`);
     return null;
   }
+  dashState.set(file.id, "ok");
   const url = tmpl.replace("{+asset_path}", "manifest.mpd");
   const r = await fetch(url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token()));
   if (!r.ok){ log("manifest の取得に失敗: " + r.status); return null; }
