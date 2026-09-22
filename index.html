@@ -472,7 +472,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v226</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v227</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2405,9 +2405,15 @@ async function captureFromDash(file, points){
 
   const auth = u => u + (u.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
   const get = async u => {
-    const r = await fetch(auth(u));
-    if (!r.ok) throw new Error("区間の取得 " + r.status);
-    return r.arrayBuffer();
+    // Box が準備中のときは中身が空で返る。少し待って取り直す
+    for (let i = 0; i < 15; i++){
+      const r = await fetch(auth(u));
+      if (!r.ok) throw new Error("区間の取得 " + r.status);
+      const b = r.status === 202 ? new ArrayBuffer(0) : await r.arrayBuffer();
+      if (b.byteLength) return b;
+      await new Promise(res => setTimeout(res, Math.min(3000, 500 * (i + 1))));
+    }
+    throw new Error("区間の準備が終わりません");
   };
 
   const init = await get(tr.init);
@@ -5576,14 +5582,36 @@ function createDashEngine(name){
       }
       if (navigator.onLine === false) throw new Error("圏外");
       await ensureFresh();
-      const t0 = performance.now();
-      let r = await fetch(this.auth(url));
-      if (r.status === 401){
-        try{ await refreshTokens(); r = await fetch(this.auth(url)); }
-        catch(err){ throw new Error("トークン更新に失敗: " + err.message); }
+      // Box は区間をまだ用意できていないとき、「準備中」の応答を中身なしで返す。
+      // 空のまま入れて次へ進むと、その範囲がまるごと抜けてしまう。
+      // 中身が届くまで、同じ区間を少し待って取り直す。
+      const waitFrom = Date.now();
+      let tries = 0, r, buf, t0;
+      for (;;){
+        t0 = performance.now();
+        r = await fetch(this.auth(url));
+        if (r.status === 401){
+          try{ await refreshTokens(); r = await fetch(this.auth(url)); }
+          catch(err){ throw new Error("トークン更新に失敗: " + err.message); }
+        }
+        if (!r.ok) throw new Error("区間 " + r.status);
+        buf = (r.status === 202) ? new ArrayBuffer(0) : await r.arrayBuffer();
+        if (buf.byteLength > 0) break;
+
+        if (this.stopped) throw new Error("停止済み");
+        tries++;
+        if (tries === 1){
+          const seg = (String(url).match(/\/(\d+)\.m4s/) || [])[1];
+          log(`${this.name}: Box が区間${seg ? " " + seg : ""}を準備中です。届くまで待ちます`);
+          if (this.el === els.pVideo && !els.pVideo.currentTime)
+            els.pNote.textContent = "Box が動画を準備しています…";
+        }
+        if (Date.now() - waitFrom > 30000) throw new Error("区間の準備が終わりません（Box 側で変換中）");
+        const ra = Number(r.headers && r.headers.get && r.headers.get("Retry-After")) || 0;
+        const wait = ra > 0 ? Math.min(5000, ra * 1000) : Math.min(3000, 500 * tries);
+        await new Promise(res => setTimeout(res, wait));
       }
-      if (!r.ok) throw new Error("区間 " + r.status);
-      const buf = await r.arrayBuffer();
+      if (tries) log(`${this.name}: 区間が届きました（${((Date.now() - waitFrom) / 1000).toFixed(1)} 秒待ち）`);
       // 実測の速さを控える（直近を重めに見る）。
       // 音声の区間は小さすぎて待ち時間が支配的になるため、映像だけで測る。
       const sec = (performance.now() - t0) / 1000;
@@ -5596,6 +5624,7 @@ function createDashEngine(name){
 
     append(tr, buf){
       return new Promise((res, rej) => {
+        if (!buf || !buf.byteLength) return rej(new Error("空の区間です"));
         if (this.stopped || !tr.sb || !this.tracks.includes(tr))
           return rej(new Error("停止済み"));
         // 映像要素の差し替えで MediaSource が閉じていることがある
@@ -6248,7 +6277,10 @@ async function fetchWholeAudio(file, onProgress, store){
         const u = url + (url.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token());
         const r = await fetch(u);
         if (!r.ok) throw new Error("区間 " + r.status);
-        return await r.arrayBuffer();
+        // Box が準備中のときは中身が空で返る。取り直す
+        const b = r.status === 202 ? new ArrayBuffer(0) : await r.arrayBuffer();
+        if (!b.byteLength) throw new Error("区間を準備中");
+        return b;
       }catch(err){
         if (attempt >= 30) throw err;
         await new Promise(res => setTimeout(res, Math.min(15000, 1000 * attempt)));
