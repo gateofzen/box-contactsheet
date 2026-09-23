@@ -368,6 +368,10 @@ details.sub[open]>summary{color:var(--text)}
    プレーヤーは前面の覆いなので、背後の画面が動かなくても困らない。 */
 .peoplefind{display:flex;gap:8px;align-items:center;padding:10px 12px;
   border-bottom:1px solid rgba(255,255,255,.08)}
+.peopletest{padding:8px 12px;font-size:12px;line-height:1.7;color:var(--dim);
+  border-bottom:1px solid rgba(255,255,255,.08);white-space:pre-wrap;word-break:break-all}
+.peopletest b{color:var(--mint);font-weight:500}
+.peopletest i{color:var(--amber);font-style:normal}
 .peoplelist{overflow-y:auto;padding:8px 10px;display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start}
 .peoplelist .person{font-size:12.5px;padding:4px 11px}
 .peoplelist .person b{font-family:var(--mono);font-weight:500;opacity:.65;margin-left:6px}
@@ -500,7 +504,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v236</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v237</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -789,6 +793,12 @@ details.sub[open]>summary{color:var(--text)}
       <button id="peopleClose" class="iconbtn" aria-label="閉じる">✕</button>
     </div>
     <div class="peoplefind">
+      <input id="peopleTest" type="text" placeholder="ファイル名を貼ると、拾える名前を調べます"
+             style="flex:1;background:var(--bg);color:var(--fg);border:1px solid rgba(255,255,255,.18);
+                    border-radius:7px;padding:7px 9px;font-size:12.5px">
+    </div>
+    <div id="peopleTestOut" class="peopletest" hidden></div>
+    <div class="peoplefind">
       <input id="peopleFind" type="search" placeholder="名前で絞り込む"
              style="flex:1;background:var(--bg);color:var(--fg);border:1px solid rgba(255,255,255,.18);
                     border-radius:7px;padding:7px 9px;font-size:13px">
@@ -807,7 +817,7 @@ details.sub[open]>summary{color:var(--text)}
     </div>
     <div id="histList" class="histlist"></div>
     <div class="histfoot">
-      <span id="histSyncNote","peopleBtn","peoplePanel","peopleList","peopleNote","peopleClose","peopleFind","peopleRebuild","tapL","tapR","tapLsec","tapRsec" class="histnote"></span>
+      <span id="histSyncNote","peopleBtn","peoplePanel","peopleList","peopleNote","peopleClose","peopleFind","peopleRebuild","peopleTest","peopleTestOut","tapL","tapR","tapLsec","tapRsec" class="histnote"></span>
       <button id="histClear" class="btn btn-sm">履歴をすべて消す</button>
     </div>
   </div>
@@ -973,7 +983,7 @@ const els = {};
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castWhere","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pRate","pPeople","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","findNew","syncShared","hqPanel","hqScope","hqSource","hqShare","hqBatch","hqInfo","hqGo","hqCancel","histBtn","histPanel","histList","histNote","histClose","histClear","histSyncNote","peopleBtn","peoplePanel","peopleList","peopleNote","peopleClose","peopleFind","peopleRebuild","tapL","tapR","tapLsec","tapRsec","tagHq","redoLowHq","thinLocal","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","findNew","syncShared","hqPanel","hqScope","hqSource","hqShare","hqBatch","hqInfo","hqGo","hqCancel","histBtn","histPanel","histList","histNote","histClose","histClear","histSyncNote","peopleBtn","peoplePanel","peopleList","peopleNote","peopleClose","peopleFind","peopleRebuild","peopleTest","peopleTestOut","tapL","tapR","tapLsec","tapRsec","tagHq","redoLowHq","thinLocal","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -3257,6 +3267,33 @@ function searchPerson(name){
   say(`「${name}」を含む動画を表示しています`);
 }
 
+// なぜ拾えた／拾えなかったのかを、その場で確かめられるようにする
+function explainPersons(raw){
+  const base = String(raw || "").trim().replace(/\.[A-Za-z0-9]{2,4}$/, "");
+  if (!base) return "";
+  const lines = [];
+  const rules = [
+    ["by のあと", /\bby\s+([^\[\]_]+)$/i],
+    ["品番の前", /^([^\[\]_]{2,24}?)\s*\[[^\]]+\]/],
+    ["つなぎ言葉（x・vs・feat・b2b）", /^([A-Za-z][\w'’.\-]*(?:\s+[A-Za-z][\w'’.\-]*)?)\s+(?:x|×|✕|X|&|＆|b2b|vs\.?|feat\.?|ft\.?)\s+([A-Za-z][\w'’.\-]*(?:\s+[A-Za-z][\w'’.\-]*)*)/],
+    ["Live / at / from の前", /^([A-Za-z][\w'’.\-]*(?:\s+[\w'’.\-]+){0,2}?)\s*[-–—|:]?\s+(?:live|at|@|from|dj\s*set|set)\b/i],
+    ["区切りの前の大文字", /^([A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*(?:\s*[&＆]\s*[A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*)+)\s*[_\-–—]/],
+  ];
+  for (const [label, re] of rules){
+    const m = re.exec(base);
+    if (!m){ lines.push(`・${label}: 当てはまらない`); continue; }
+    const chunks = m.slice(1).filter(Boolean);
+    const got = chunks.flatMap(c => splitPersons(trimTail(c)));
+    lines.push(`・${label}: 「${chunks.join(" / ")}」 → ` +
+      (got.length ? `<b>${got.join(" , ")}</b>` : "名前として認められない"));
+  }
+  const final = personsFromPattern(base);
+  const all = personsOf({name: base});
+  lines.push(`形から拾えた名前: <i>${final.join(" , ") || "（なし）"}</i>`);
+  lines.push(`辞書も合わせた結果: <i>${all.join(" , ") || "（なし）"}</i>`);
+  return lines.join("\n");
+}
+
 function renderPeople(){
   const dict = buildPersonDict();
   const q = (els.peopleFind.value || "").trim().toLowerCase();
@@ -3301,6 +3338,11 @@ els.peopleBtn.addEventListener("click", () => openPeoplePanel(true));
 els.peopleClose.addEventListener("click", () => openPeoplePanel(false));
 els.peoplePanel.addEventListener("click", e => { if (e.target === els.peoplePanel) openPeoplePanel(false); });
 els.peopleFind.addEventListener("input", () => renderPeople());
+els.peopleTest.addEventListener("input", () => {
+  const v = els.peopleTest.value.trim();
+  els.peopleTestOut.hidden = !v;
+  if (v) els.peopleTestOut.innerHTML = explainPersons(v);
+});
 els.peopleRebuild.addEventListener("click", () => {
   buildPersonDict(true);
   [...cardById.keys()].forEach(paintPeople);
