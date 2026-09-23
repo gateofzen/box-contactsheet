@@ -504,7 +504,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v239</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v240</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3211,6 +3211,7 @@ function personsFromPattern(raw){
 let personDict = null;       // Map(名前 -> 見つかった本数)
 let personRe = null;         // 辞書をまとめて探すための仕掛け
 const personMemo = new Map();
+let personLower = null, personLowerAt = null;
 
 function escapeRe(x){ return x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
@@ -3226,6 +3227,17 @@ function personSources(){
 }
 
 function buildPersonDict(force){
+  try{
+    return buildPersonDictNow(force);
+  }catch(err){
+    log("人名の辞書を作れません: " + (err.message || err));
+    personDict = personDict || new Map();
+    personRe = personRe || null;
+    return personDict;
+  }
+}
+
+function buildPersonDictNow(force){
   const src = personSources();
   if (personDict && !force && personDictAt === src.size) return personDict;
   const t0 = Date.now();
@@ -3256,16 +3268,19 @@ function personsOf(file){
   if (!name) return [];
   if (personMemo.has(name)) return personMemo.get(name);
   const out = new Set(personsFromPattern(name));
-  if (!personRe) buildPersonDict();
-  if (personRe){
+  if (!personRe || !personDict) buildPersonDict();
+  if (personRe && personDict){
+    // 見つけた文字を、辞書の正しい表記に直すための対応表
+    if (!personLower || personLowerAt !== personDict)
+      { personLower = new Map([...personDict.keys()].map(k => [k.toLowerCase(), k])); personLowerAt = personDict; }
     personRe.lastIndex = 0;
     const base = name.replace(/\.[A-Za-z0-9]{2,4}$/, "");
     let m;
     while ((m = personRe.exec(base))){
-      const hit = [...personDict.keys()].includes(m[0]) ? m[0]
-        : [...personDict.keys()].find(k => k.toLowerCase() === m[0].toLowerCase());
+      const hit = personDict.has(m[0]) ? m[0] : personLower.get(m[0].toLowerCase());
       if (hit) out.add(hit);
       if (out.size > 8) break;
+      if (personRe.lastIndex === m.index) personRe.lastIndex++;   // 空振りで止まらないように
     }
   }
   const list = [...out];
@@ -3314,8 +3329,20 @@ function explainPersons(raw){
   const inIndex = [...src.values()].some(f => f.name === base || f.name === base + ".mp4"
     || (f.name || "").startsWith(base));
   lines.push(`辞書に入っているか: <b>${inDict.length ? "はい（" + inDict.join(" , ") + "）" : "いいえ"}</b>`);
-  lines.push(`このファイルは索引にあるか: <b>${inIndex ? "ある" : "ない（走査すると入ります）"}</b>`);
+  lines.push(`このファイルは索引にあるか: <b>${inIndex ? "ある" : "ない（名前が少しでも違うと「ない」と出ます）"}</b>`);
   lines.push(`いまの規模: 索引 ${src.size} 本 / 辞書 ${dict.size} 名`);
+
+  // 索引の中から、近いファイルを探して見せる（実際の名前を確かめるため）
+  const key = (final[0] || base.split(/[\s_]+/)[0] || "").trim();
+  if (key.length >= 2){
+    const k = key.toLowerCase();
+    const hits = [...src.values()].filter(f => (f.name || "").toLowerCase().includes(k)).slice(0, 5);
+    lines.push(`索引の中で「${key}」を含むファイル: <b>${hits.length ? hits.length + " 件" : "なし"}</b>`);
+    for (const h of hits){
+      const got = personsOf(h);
+      lines.push(`　・${h.name}　→ <i>${got.join(" , ") || "（なし）"}</i>`);
+    }
+  }
   return lines.join("\n");
 }
 
