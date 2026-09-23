@@ -366,6 +366,20 @@ details.sub[open]>summary{color:var(--text)}
   min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 二本指の操作を横取りするため touch-action は常に none。
    プレーヤーは前面の覆いなので、背後の画面が動かなくても困らない。 */
+.peoplefind{display:flex;gap:8px;align-items:center;padding:10px 12px;
+  border-bottom:1px solid rgba(255,255,255,.08)}
+.peoplelist{overflow-y:auto;padding:8px 10px;display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start}
+.peoplelist .person{font-size:12.5px;padding:4px 11px}
+.peoplelist .person b{font-family:var(--mono);font-weight:500;opacity:.65;margin-left:6px}
+.peopleempty{padding:24px 10px;color:var(--dim);font-size:13px;width:100%;text-align:center}
+/* ファイル名から拾った人名 */
+.people{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0 0}
+.people[hidden]{display:none}
+.person{background:rgba(95,211,196,.12);border:1px solid rgba(95,211,196,.35);
+  color:var(--mint);border-radius:999px;padding:2px 9px;font-size:11.5px;cursor:pointer;
+  line-height:1.5;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.person:hover{background:rgba(95,211,196,.22)}
+.person::before{content:"👤 ";opacity:.7}
 .tapfx{position:absolute;top:0;bottom:0;width:34%;display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:6px;pointer-events:none;z-index:4;
   background:radial-gradient(closest-side, rgba(255,255,255,.16), transparent 70%);
@@ -484,13 +498,14 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v231</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v232</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
              aria-label="絞り込み" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other">
     </div>
     <button id="installBtn" class="btn btn-go" hidden>アプリとして追加</button>
+    <button id="peopleBtn" class="iconbtn" title="出演者" aria-label="出演者">👤</button>
     <button id="histBtn" class="iconbtn" title="再生履歴" aria-label="再生履歴">🕘</button>
     <button id="sortBtn" class="iconbtn" title="並び順" aria-label="並び順">⇅</button>
     <button id="loginTop" class="btn btn-go" hidden>ログイン</button>
@@ -764,6 +779,23 @@ details.sub[open]>summary{color:var(--text)}
 </div>
 <datalist id="tagOptions"></datalist>
 
+<div id="peoplePanel" class="histpanel" hidden>
+  <div class="histbox" role="dialog" aria-label="出演者">
+    <div class="histhead">
+      <h3>出演者</h3>
+      <span id="peopleNote" class="histnote"></span>
+      <button id="peopleClose" class="iconbtn" aria-label="閉じる">✕</button>
+    </div>
+    <div class="peoplefind">
+      <input id="peopleFind" type="search" placeholder="名前で絞り込む"
+             style="flex:1;background:var(--bg);color:var(--fg);border:1px solid rgba(255,255,255,.18);
+                    border-radius:7px;padding:7px 9px;font-size:13px">
+      <button id="peopleRebuild" class="btn btn-sm">作り直す</button>
+    </div>
+    <div id="peopleList" class="peoplelist"></div>
+  </div>
+</div>
+
 <div id="histPanel" class="histpanel" hidden>
   <div class="histbox" role="dialog" aria-label="再生履歴">
     <div class="histhead">
@@ -773,7 +805,7 @@ details.sub[open]>summary{color:var(--text)}
     </div>
     <div id="histList" class="histlist"></div>
     <div class="histfoot">
-      <span id="histSyncNote","tapL","tapR","tapLsec","tapRsec" class="histnote"></span>
+      <span id="histSyncNote","peopleBtn","peoplePanel","peopleList","peopleNote","peopleClose","peopleFind","peopleRebuild","tapL","tapR","tapLsec","tapRsec" class="histnote"></span>
       <button id="histClear" class="btn btn-sm">履歴をすべて消す</button>
     </div>
   </div>
@@ -938,7 +970,7 @@ const els = {};
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castWhere","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","findNew","syncShared","hqPanel","hqScope","hqSource","hqShare","hqBatch","hqInfo","hqGo","hqCancel","histBtn","histPanel","histList","histNote","histClose","histClear","histSyncNote","tapL","tapR","tapLsec","tapRsec","tagHq","redoLowHq","thinLocal","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","findNew","syncShared","hqPanel","hqScope","hqSource","hqShare","hqBatch","hqInfo","hqGo","hqCancel","histBtn","histPanel","histList","histNote","histClose","histClear","histSyncNote","peopleBtn","peoplePanel","peopleList","peopleNote","peopleClose","peopleFind","peopleRebuild","tapL","tapR","tapLsec","tapRsec","tagHq","redoLowHq","thinLocal","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -3003,6 +3035,7 @@ function makeCard(file){
   meta.className = "meta";
   meta.innerHTML =
     '<p class="name"></p>' +
+    '<div class="people" hidden></div>' +
     '<div class="taglist"></div>' +
     '<details class="cardinfo"><summary>詳細</summary><div class="rows">' +
       '<span class="dur"></span><span class="sz"></span><span class="dt"></span><span class="pl"></span>' +
@@ -3030,10 +3063,203 @@ function makeCard(file){
 
   card.appendChild(strip); card.appendChild(meta);
   cardById.set(file.id, {card, strip, star, pick, hq, hero: strip.querySelector(".hero"),
-    dur: meta.querySelector(".dur"), taglist: meta.querySelector(".taglist")});
+    dur: meta.querySelector(".dur"), taglist: meta.querySelector(".taglist"),
+    people: meta.querySelector(".people")});
   paintTagList(file.id);
+  paintPeople(file.id);
   thumbObserver.observe(card);
   return card;
+}
+
+/* ============ ファイル名から人名を拾う ============
+   名前の付き方は何通りかある。
+     ・「BB2 ZEDD by Mizuki」          → by のあと
+     ・「日南りん [Heyzo-2879] …」      → 品番の前
+     ・「VIOLET MYERS & JASON LUV_…」  → 区切りの前の大文字の名前
+   まず、この確実な形から名前を集めて辞書を作る。
+   そのうえで、辞書の名前が入っているファイルすべてに印を付ける。
+   「[MCT-012] 澁谷果歩に酒を…」のように、名前が途中にある場合も拾える。 */
+const PERSON_NG = /^(?:the|and|feat|ft|vol|part|no|ver|full|hd|fhd|uhd|4k|8k|mp4|avi|rec|movie|video|sample|new|best|mix|live|remix|edit|original|off|on)$/i;
+const PERSON_NG_JP = /(無修正|中出し|素人|投稿|流出|人妻|熟女|美少女|激安|総集編|第\d|その\d|前編|後編|本編|撮影|盗撮|温泉|旅行|動画|映像|作品|限定|特典|配信|生配信|収録)/;
+
+function looksLikePerson(raw){
+  const t = String(raw || "").trim().replace(/^[\s・,、&＆]+|[\s・,、&＆]+$/g, "");
+  if (t.length < 2 || t.length > 24) return "";
+  if (/^\d+$/.test(t)) return "";
+  if (/[【】\[\]（）()<>《》"'！!？?…]/.test(t)) return "";
+  if (PERSON_NG.test(t) || PERSON_NG_JP.test(t)) return "";
+  // 日付や数字ばかりのものは名前ではない
+  if (/^\d{4}[-_.\/]?\d{2}/.test(t)) return "";
+  const jp = /[ぁ-んァ-ヶ一-龠]/.test(t);
+  if (jp){
+    if (t.length > 12) return "";
+    // 助詞で終わるもの、文になっているものは名前ではない
+    if (/[はがをにへでとやもね]$/.test(t)) return "";
+    if (/(する|した|します|です|でした|られ|させ|ない|てる)/.test(t)) return "";
+    return t;
+  }
+  // ローマ字は、単語ごとに頭が大文字（または全部大文字）
+  if (!/^[A-Za-z][A-Za-z'’.\- ]*$/.test(t)) return "";
+  const words = t.split(/\s+/).filter(Boolean);
+  if (!words.length || words.length > 4) return "";
+  if (words.some(w => PERSON_NG.test(w))) return "";
+  if (!words.every(w => /^[A-Z]/.test(w))) return "";
+  return t;
+}
+
+function splitPersons(chunk){
+  return String(chunk || "")
+    .split(/[,、，&＆・･\/／]|\s+and\s+|\s+with\s+/i)
+    .map(x => looksLikePerson(x))
+    .filter(Boolean);
+}
+
+// ファイル名の「確実な形」から名前を取り出す
+function personsFromPattern(raw){
+  const base = String(raw || "").replace(/\.[A-Za-z0-9]{2,4}$/, "");
+  const out = [];
+
+  // 1) 「… by 名前, 名前」
+  const by = /\bby\s+([^\[\]_]+)$/i.exec(base);
+  if (by) out.push(...splitPersons(by[1]));
+
+  // 2) 「名前 [品番] …」
+  const head = /^([^\[\]_]{2,24}?)\s*\[[^\]]+\]/.exec(base);
+  if (head) out.push(...splitPersons(head[1]));
+
+  // 3) 「NAME & NAME_…」（区切りの前）
+  const lat = /^([A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*(?:\s*[&＆]\s*[A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*)+)\s*[_\-–—]/.exec(base);
+  if (lat) out.push(...splitPersons(lat[1]));
+
+  return [...new Set(out)];
+}
+
+/* ---- 名前の辞書（この端末で作り、保存しておく） ---- */
+let personDict = null;       // Map(名前 -> 見つかった本数)
+let personRe = null;         // 辞書をまとめて探すための仕掛け
+const personMemo = new Map();
+
+function escapeRe(x){ return x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+function buildPersonDict(force){
+  if (personDict && !force) return personDict;
+  const t0 = Date.now();
+  const count = new Map();
+  for (const f of globalIndex)
+    for (const n of personsFromPattern(f.name)) count.set(n, (count.get(n) || 0) + 1);
+  personDict = count;
+
+  // 長い名前から順に探す（短い名前が先に当たらないように）
+  const names = [...count.keys()].sort((a, b) => b.length - a.length);
+  const jp = names.filter(n => /[ぁ-んァ-ヶ一-龠]/.test(n)).map(escapeRe);
+  const en = names.filter(n => !/[ぁ-んァ-ヶ一-龠]/.test(n)).map(escapeRe);
+  const parts = [];
+  if (jp.length) parts.push(`(?:${jp.join("|")})`);
+  if (en.length) parts.push(`(?<![A-Za-z])(?:${en.join("|")})(?![A-Za-z])`);
+  personRe = parts.length ? new RegExp(parts.join("|"), "gi") : null;
+  personMemo.clear();
+  log(`人名の辞書: ${count.size} 名（${globalIndex.length} 本から・${Date.now() - t0} ms）`);
+  return personDict;
+}
+
+// このファイルに含まれる人名
+function personsOf(file){
+  const name = file && file.name;
+  if (!name) return [];
+  if (personMemo.has(name)) return personMemo.get(name);
+  const out = new Set(personsFromPattern(name));
+  if (!personRe) buildPersonDict();
+  if (personRe){
+    personRe.lastIndex = 0;
+    const base = name.replace(/\.[A-Za-z0-9]{2,4}$/, "");
+    let m;
+    while ((m = personRe.exec(base))){
+      const hit = [...personDict.keys()].includes(m[0]) ? m[0]
+        : [...personDict.keys()].find(k => k.toLowerCase() === m[0].toLowerCase());
+      if (hit) out.add(hit);
+      if (out.size > 8) break;
+    }
+  }
+  const list = [...out];
+  personMemo.set(name, list);
+  return list;
+}
+
+// 名前を押したら、その名前を含む一覧を出す
+function searchPerson(name){
+  els.q.value = name;
+  if (els.searchScope) els.searchScope.value = "all";
+  buildRail(); applyView();
+  window.scrollTo({top:0, behavior:"smooth"});
+  say(`「${name}」を含む動画を表示しています`);
+}
+
+function renderPeople(){
+  const dict = buildPersonDict();
+  const q = (els.peopleFind.value || "").trim().toLowerCase();
+  const list = [...dict.entries()]
+    .filter(([n]) => !q || n.toLowerCase().includes(q))
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "ja"));
+  els.peopleNote.textContent = `${dict.size} 名`;
+  els.peopleList.innerHTML = "";
+  if (!list.length){
+    const e = document.createElement("div");
+    e.className = "peopleempty";
+    e.textContent = dict.size ? "その名前は見つかりません"
+      : "まだ名前を見つけられていません。フォルダを走査すると集まります。";
+    els.peopleList.appendChild(e);
+    return;
+  }
+  for (const [n, c] of list.slice(0, 400)){
+    const b = document.createElement("button");
+    b.className = "person";
+    b.innerHTML = "";
+    b.append(document.createTextNode(n));
+    const num = document.createElement("b"); num.textContent = c;
+    b.appendChild(num);
+    b.addEventListener("click", () => { openPeoplePanel(false); searchPerson(n); });
+    els.peopleList.appendChild(b);
+  }
+}
+
+function openPeoplePanel(open){
+  if (open){
+    if (!els.peoplePanel.hidden) return;
+    els.peoplePanel.hidden = false;
+    pushLayer("people", () => { els.peoplePanel.hidden = true; });
+    renderPeople();
+  }else{
+    if (!popping && dropLayer("people")) return;
+    els.peoplePanel.hidden = true;
+  }
+}
+
+els.peopleBtn.addEventListener("click", () => openPeoplePanel(true));
+els.peopleClose.addEventListener("click", () => openPeoplePanel(false));
+els.peoplePanel.addEventListener("click", e => { if (e.target === els.peoplePanel) openPeoplePanel(false); });
+els.peopleFind.addEventListener("input", () => renderPeople());
+els.peopleRebuild.addEventListener("click", () => {
+  buildPersonDict(true);
+  [...cardById.keys()].forEach(paintPeople);
+  renderPeople();
+  say("人名を集め直しました");
+});
+
+function paintPeople(id){
+  const ref = cardById.get(id);
+  if (!ref || !ref.people) return;
+  const f = findFile(id) || viewById.get(id);
+  const names = f ? personsOf(f) : [];
+  ref.people.innerHTML = "";
+  ref.people.hidden = !names.length;
+  for (const n of names){
+    const b = document.createElement("button");
+    b.className = "person";
+    b.textContent = n;
+    b.title = `「${n}」を含む動画を探す`;
+    b.addEventListener("click", e => { e.stopPropagation(); searchPerson(n); });
+    ref.people.appendChild(b);
+  }
 }
 
 function paintTagList(id){
