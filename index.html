@@ -504,7 +504,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v241</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v242</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3084,6 +3084,149 @@ function makeCard(file){
   return card;
 }
 
+/* ---- 人名の一覧を、すべての端末で共有する ----
+   端末ごとに索引の広さが違うので、そのままだと拾える名前の数も違ってしまう。
+   履歴と同じ _ContactSheet に persons.json を置き、名前を持ち寄る。
+   消した名前（誤りだったもの）も共有し、どの端末でも出ないようにする。 */
+const PERSON_FILE = "persons.json";
+let personFileId = null, personEtag = null;
+let personShared = {names: new Map(), hidden: new Set()};
+let personSyncing = false, personTimer = null, personDirty = false;
+
+function loadPersonLocal(){
+  try{
+    const d = JSON.parse(localStorage.getItem("bcs_persons") || "null");
+    if (d && d.names) personShared = {
+      names: new Map(Object.entries(d.names)),
+      hidden: new Set(d.hidden || []),
+    };
+  }catch(_){}
+}
+function savePersonLocal(){
+  try{
+    localStorage.setItem("bcs_persons", JSON.stringify({
+      names: Object.fromEntries(personShared.names),
+      hidden: [...personShared.hidden],
+    }));
+  }catch(_){}
+}
+
+async function personFindId(){
+  if (personFileId) return;
+  const saved = localStorage.getItem("bcs_personfile");
+  if (saved){ personFileId = saved; return; }
+  await histFindIds();                       // _ContactSheet を用意する
+  const inner = await listFolderLight(histIds.folder);
+  const fi = inner.find(e => e.type === "file" && e.name === PERSON_FILE);
+  personFileId = fi ? fi.id : null;
+  if (personFileId) localStorage.setItem("bcs_personfile", personFileId);
+}
+
+async function personDownload(){
+  if (!personFileId) return null;
+  const meta = await fetch(`${API}/files/${personFileId}?fields=etag`,
+    {headers:{Authorization:"Bearer " + token()}});
+  if (meta.status === 404){ personFileId = null; localStorage.removeItem("bcs_personfile"); return null; }
+  if (meta.ok){ const m = await meta.json().catch(() => ({})); personEtag = m.etag || null; }
+  const r = await fetch(`${API}/files/${personFileId}/content`, {headers:{Authorization:"Bearer " + token()}});
+  if (r.status === 404){ personFileId = null; localStorage.removeItem("bcs_personfile"); return null; }
+  if (!r.ok) throw new Error("人名の一覧を読めません（" + r.status + "）");
+  const d = await r.json().catch(() => ({}));
+  return {names: new Map(Object.entries(d.names || {})), hidden: new Set(d.hidden || [])};
+}
+
+async function personUpload(data){
+  const blob = new Blob([JSON.stringify({
+    v: 1, ts: Date.now(),
+    names: Object.fromEntries(data.names),
+    hidden: [...data.hidden],
+  })], {type:"application/json"});
+  const fd = new FormData();
+  if (personFileId){
+    fd.append("attributes", JSON.stringify({name: PERSON_FILE}));
+    fd.append("file", blob, PERSON_FILE);
+    const headers = {Authorization:"Bearer " + token()};
+    if (personEtag) headers["If-Match"] = personEtag;
+    const r = await fetch(`${UPLOAD_API}/files/${personFileId}/content`, {method:"POST", headers, body: fd});
+    if (r.status === 412) return "conflict";
+    if (r.status === 404){ personFileId = null; return "missing"; }
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error("人名の一覧を保存できません（" + r.status + "）");
+    personEtag = (d.entries && d.entries[0] && d.entries[0].etag) || null;
+    return "ok";
+  }
+  await histFindIds();
+  fd.append("attributes", JSON.stringify({name: PERSON_FILE, parent:{id: histIds.folder}}));
+  fd.append("file", blob, PERSON_FILE);
+  const r = await fetch(`${UPLOAD_API}/files/content`,
+    {method:"POST", headers:{Authorization:"Bearer " + token()}, body: fd});
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 409){
+    const c = d.context_info && d.context_info.conflicts;
+    personFileId = c ? (Array.isArray(c) ? c[0].id : c.id) : null;
+    return "conflict";
+  }
+  if (!r.ok) throw new Error("人名の一覧を作れません（" + r.status + "）");
+  personFileId = d.entries[0].id; personEtag = d.entries[0].etag || null;
+  localStorage.setItem("bcs_personfile", personFileId);
+  return "ok";
+}
+
+function mergePersons(a, b){
+  const names = new Map(a.names);
+  for (const [n, c] of b.names) names.set(n, Math.max(c || 0, names.get(n) || 0));
+  const hidden = new Set([...a.hidden, ...b.hidden]);
+  for (const n of hidden) names.delete(n);
+  return {names, hidden};
+}
+
+async function personSync(why){
+  if (personSyncing){ personDirty = true; return; }
+  if (!token()) return;
+  personSyncing = true;
+  try{
+    await personFindId();
+    for (let i = 0; i < 4; i++){
+      const remote = personFileId ? (await personDownload()) : null;
+      const merged = mergePersons(personShared, remote || {names:new Map(), hidden:new Set()});
+      const changed = !remote
+        || merged.names.size !== remote.names.size
+        || merged.hidden.size !== remote.hidden.size;
+      personShared = merged; savePersonLocal();
+      if (!changed) break;
+      const res = await personUpload(merged);
+      if (res === "ok") break;
+      await sleep(400 * (i + 1));
+    }
+    personDirty = false;
+    buildPersonDict(true);
+    if (els.peoplePanel && !els.peoplePanel.hidden) renderPeople();
+    log(`人名の一覧を持ち寄りました: ${personShared.names.size} 名（${why}）`);
+  }catch(err){
+    log("人名の一覧を共有できません: " + err.message);
+  }finally{
+    personSyncing = false;
+    if (personDirty){ personDirty = false; clearTimeout(personTimer);
+      personTimer = setTimeout(() => personSync("追加の変更"), 3000); }
+  }
+}
+
+function personSoon(){
+  clearTimeout(personTimer);
+  personTimer = setTimeout(() => personSync("この端末で見つけた名前"), 8000);
+}
+
+// 誤って拾った名前を、どの端末からも出さないようにする
+function hidePerson(name){
+  personShared.hidden.add(name);
+  personShared.names.delete(name);
+  savePersonLocal();
+  buildPersonDict(true);
+  renderPeople();
+  personSoon();
+  say(`「${name}」を一覧から外しました（すべての端末から消えます）`);
+}
+
 /* ============ ファイル名から人名を拾う ============
    名前の付き方は何通りかある。
      ・「BB2 ZEDD by Mizuki」          → by のあと
@@ -3254,6 +3397,16 @@ function buildPersonDictNow(force){
   const count = new Map();
   for (const f of src.values())
     for (const n of personsFromPattern(f.name)) count.set(n, (count.get(n) || 0) + 1);
+  // この端末で見つけた名前に、他の端末が見つけた名前を合わせる
+  let mine = 0;
+  for (const [n, c] of count){
+    if (personShared.hidden.has(n)){ count.delete(n); continue; }
+    if ((personShared.names.get(n) || 0) < c){ personShared.names.set(n, c); mine++; }
+  }
+  for (const [n, c] of personShared.names)
+    if (!personShared.hidden.has(n) && (count.get(n) || 0) < c) count.set(n, c);
+  if (mine){ savePersonLocal(); personSoon(); }   // 新しく見つけた名前は持ち寄る
+
   personDict = count;
   personDictAt = src.size;
 
@@ -3383,6 +3536,14 @@ function renderPeople(){
     const num = document.createElement("b"); num.textContent = c;
     b.appendChild(num);
     b.addEventListener("click", () => { openPeoplePanel(false); searchPerson(n); });
+    // 長く押すと、その名前を一覧から外せる（誤って拾った名前の片づけ）
+    let hold = null;
+    const arm = () => { hold = setTimeout(() => { hold = null; hidePerson(n); }, 700); };
+    const dis = () => { clearTimeout(hold); hold = null; };
+    b.addEventListener("pointerdown", arm);
+    b.addEventListener("pointerup", dis);
+    b.addEventListener("pointerleave", dis);
+    b.title = `「${n}」を含む動画を探す（長く押すと一覧から外す）`;
     els.peopleList.appendChild(b);
   }
   if (list.length > shown.length){
@@ -3399,6 +3560,7 @@ function openPeoplePanel(open){
     els.peoplePanel.hidden = false;
     pushLayer("people", () => { els.peoplePanel.hidden = true; });
     renderPeople();
+    personSync("一覧を開いた");
   }else{
     if (!popping && dropLayer("people")) return;
     els.peoplePanel.hidden = true;
@@ -9047,7 +9209,9 @@ watchAudioOnly();   // 音声のみ再生の見張りを開始する
   primeCastProbe();       // 受信ページ方式が使えない場合の備え
   log("marks: " + marks.size + " / 索引: " + globalIndex.length);
   loadHistLocal();
+  loadPersonLocal();
   setTimeout(() => { if (token()) histSync("起動"); }, 5000);
+  setTimeout(() => { if (token()) personSync("起動"); }, 8000);
 
   // Box からの折り返し（?code=...）を処理する
   const params = new URLSearchParams(location.search);
