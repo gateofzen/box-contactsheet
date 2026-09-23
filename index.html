@@ -366,6 +366,14 @@ details.sub[open]>summary{color:var(--text)}
   min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 二本指の操作を横取りするため touch-action は常に none。
    プレーヤーは前面の覆いなので、背後の画面が動かなくても困らない。 */
+.tapfx{position:absolute;top:0;bottom:0;width:34%;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:6px;pointer-events:none;z-index:4;
+  background:radial-gradient(closest-side, rgba(255,255,255,.16), transparent 70%);
+  color:#fff;text-shadow:0 1px 6px rgba(0,0,0,.8);opacity:0;transition:opacity .18s}
+.tapfx.left{left:0} .tapfx.right{right:0}
+.tapfx.on{opacity:1}
+.tapfx span{font-size:22px;letter-spacing:2px}
+.tapfx b{font-family:var(--mono);font-size:13px;font-weight:500}
 .vzoom{position:relative;overflow:hidden;background:#000;touch-action:none}
 .vzoom.zoomed{cursor:grab}
 .vzoom:fullscreen{display:flex;align-items:center;justify-content:center;
@@ -472,7 +480,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v228</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v229</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -761,7 +769,7 @@ details.sub[open]>summary{color:var(--text)}
     </div>
     <div id="histList" class="histlist"></div>
     <div class="histfoot">
-      <span id="histSyncNote" class="histnote"></span>
+      <span id="histSyncNote","tapL","tapR","tapLsec","tapRsec" class="histnote"></span>
       <button id="histClear" class="btn btn-sm">履歴をすべて消す</button>
     </div>
   </div>
@@ -817,6 +825,8 @@ details.sub[open]>summary{color:var(--text)}
     <div id="vzoom" class="vzoom">
       <video id="pVideo" controls playsinline preload="metadata"
              controlsList="nodownload"></video>
+      <div id="tapL" class="tapfx left" hidden><span>◀◀</span><b id="tapLsec">10 秒</b></div>
+      <div id="tapR" class="tapfx right" hidden><span>▶▶</span><b id="tapRsec">10 秒</b></div>
       <div id="castPanel" class="castpanel" hidden>
         <div class="big" id="castWhere">📺 テレビで再生中</div>
         <div class="ctime"><span id="castNow">0:00</span> <small>/ <span id="castDur">0:00</span></small></div>
@@ -924,7 +934,7 @@ const els = {};
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castWhere","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
  "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
- "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","findNew","syncShared","hqPanel","hqScope","hqSource","hqShare","hqBatch","hqInfo","hqGo","hqCancel","histBtn","histPanel","histList","histNote","histClose","histClear","histSyncNote","tagHq","redoLowHq","thinLocal","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
+ "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","findNew","syncShared","hqPanel","hqScope","hqSource","hqShare","hqBatch","hqInfo","hqGo","hqCancel","histBtn","histPanel","histList","histNote","histClose","histClear","histSyncNote","tapL","tapR","tapLsec","tapRsec","tagHq","redoLowHq","thinLocal","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
 let view = [];
@@ -3395,6 +3405,10 @@ async function openPlayer(file, startAt){
             if (at > 0) pendingStart = null;   // すでにその位置から始めている
             els.pNote.textContent = "";
             log("区間配信で再生します");
+            if (matchMedia("(hover: none)").matches && !localStorage.getItem("bcs_taphint")){
+              localStorage.setItem("bcs_taphint", "1");
+              setTimeout(() => playerToast("画面の左右をダブルタップで 10 秒送り／戻し"), 1200);
+            }
             lastSeekAt = 0;        // 開始時の位置合わせは、利用者の操作ではない
           }else throw new Error("再生可能になりません");
         }else throw new Error("開始できません");
@@ -5985,12 +5999,37 @@ function seekTo(t){
   m.currentTime = t;
   return t;
 }
-function seekBy(sec){
+function seekBy(sec, quiet){
   // キャスト中は手元の映像が空なので、テレビ側の位置を基準にする
-  if (presConn){ nudgeCast(sec); playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + sec + "秒"); return; }
+  if (presConn){
+    nudgeCast(sec);
+    if (!quiet) playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + sec + "秒");
+    return;
+  }
   const t = seekTo(activeMedia().currentTime + sec);
-  playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + sec + "秒　" + fmtTC(t));
+  if (!quiet) playerToast((sec > 0 ? "▶▶ +" : "◀◀ ") + sec + "秒　" + fmtTC(t));
 }
+// 左右のダブルタップで送る。続けて叩くと 10 秒ずつ足していく。
+let tapDir = 0, tapSec = 0, tapTimer = null;
+function tapSeek(dir){
+  if (dir !== tapDir){ tapDir = dir; tapSec = 0; }
+  tapSec += 10;
+  seekBy(dir * 10, true);
+  const box = dir > 0 ? els.tapR : els.tapL;
+  const sec = dir > 0 ? els.tapRsec : els.tapLsec;
+  const other = dir > 0 ? els.tapL : els.tapR;
+  other.hidden = true; other.classList.remove("on");
+  sec.textContent = tapSec + " 秒";
+  box.hidden = false;
+  requestAnimationFrame(() => box.classList.add("on"));
+  clearTimeout(tapTimer);
+  tapTimer = setTimeout(() => {
+    box.classList.remove("on");
+    setTimeout(() => { box.hidden = true; }, 200);
+    tapDir = 0; tapSec = 0;
+  }, 700);
+}
+
 function seekToFraction(p){
   if (presConn){
     if (!castDuration) return;
@@ -8286,8 +8325,13 @@ window.addEventListener("orientationchange", () => setTimeout(applyZoom, 300));
       e.preventDefault();
     }else if (e.touches.length === 1){
       const now = Date.now();
-      if (now - lastTap < 300){                    // ダブルタップで拡大 / 戻す
-        setZoom(zoom.s > 1.01 ? 1 : 2.5, {x:e.touches[0].clientX, y:e.touches[0].clientY});
+      if (now - lastTap < 320){
+        const r = els.vzoom.getBoundingClientRect();
+        const side = (e.touches[0].clientX - r.left) / (r.width || 1);
+        // 等倍のときは、左右のダブルタップで 10 秒送り／戻し。
+        // 中央や拡大中は、これまでどおり拡大の切り替え。
+        if (zoom.s <= 1.01 && (side < 0.34 || side > 0.66)) tapSeek(side > 0.66 ? 1 : -1);
+        else setZoom(zoom.s > 1.01 ? 1 : 2.5, {x:e.touches[0].clientX, y:e.touches[0].clientY});
         e.preventDefault();
       }
       lastTap = now;
