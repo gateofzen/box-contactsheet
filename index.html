@@ -472,7 +472,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v227</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v228</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3377,6 +3377,10 @@ async function openPlayer(file, startAt){
           // 最初の区間に 10 秒以上かかることがある。早く見切ると
           // 重い原本に切り替わり、かえって遅くなる。
           // 待っている間に中身が届いたら、その場所へ寄せてすぐ始める。
+          if (dashMain.prepping){
+            warmDashLater(file, at);            // 次に開くときのために、裏で用意を促す
+            throw new Error("Box が配信用を準備中です（原本で再生します）");
+          }
           const target = els.pVideo.currentTime || 0;
           let ok = await waitFor(() => {
             if (els.pVideo.readyState >= 2) return true;
@@ -3487,6 +3491,38 @@ function closePlayerNow(){
   currentFile = null;
   castStartTime = 0; castLastTime = 0;
   setTimeout(() => { playerClosing = false; }, 800);
+}
+
+// Box がまだ用意できていない配信用は、区間を叩くと用意が進む。
+// 次に同じ動画を開くときに待たされないよう、裏で静かに促しておく。
+const warming = new Set();
+async function warmDashLater(file, at){
+  if (!file || warming.has(file.id)) return;
+  warming.add(file.id);
+  try{
+    const mpd = await getMpd(file);
+    if (!mpd) return;
+    const tr = parseTrack(mpd.xml, mpd.url, "video", true);
+    if (!tr) return;
+    const dur = mpdDuration(mpd.xml) || 0;
+    const sec = (at > 0 && at <= 1) ? dur * at : (at || 0);
+    const n = tr.start + Math.floor(Math.max(0, sec) / tr.segDur);
+    for (let i = 0; i < 6; i++){
+      await new Promise(r => setTimeout(r, 15000));
+      if (!token()) return;
+      const base = tr.template(n);
+      const r = await fetch(base + (base.includes("?") ? "&" : "?")
+        + "access_token=" + encodeURIComponent(token())).catch(() => null);
+      if (!r || !r.ok) continue;
+      const b = r.status === 202 ? new ArrayBuffer(0)
+        : await r.arrayBuffer().catch(() => new ArrayBuffer(0));
+      if (b.byteLength){
+        log(`Box の配信用が用意できました: ${file.name}（次からすぐ始まります）`);
+        return;
+      }
+    }
+  }catch(_){}
+  finally{ warming.delete(file.id); }
 }
 
 /* ============ 再生履歴（すべての端末で共有） ============
@@ -5410,6 +5446,8 @@ function createDashEngine(name){
       // 狙った位置が埋まるまで、先読みは始めない。
       // 先に進まれると、手前を足したい番号が分からなくなる。
       this.holdPump = true;
+      this.prepping = false;
+      this.prepBudget = 8000;        // 立ち上がりでは長く待たない
 
       // 最初の 1 区間だけ先に入れて、すぐ再生を始められるようにする。
       // 残りは再生しながら追いかける。
@@ -5429,7 +5467,11 @@ function createDashEngine(name){
           await this.appendWithSpace(tr, buf);
           tr.next++;
         }));
-      }catch(err){ log(`${name}: 最初の区間を入れられません（${err.message}）`); }
+      }catch(err){
+        if (err.prepping) this.prepping = true;
+        log(`${name}: 最初の区間を入れられません（${shortWhy(err)}）`);
+      }
+      this.prepBudget = 30000;       // 以後はふだんどおり待つ
 
       // 音声と映像で区間の区切りが違うことがある。
       // 狙った位置に中身が来ていない道筋を、前後を取って埋める。
@@ -5606,7 +5648,11 @@ function createDashEngine(name){
           if (this.el === els.pVideo && !els.pVideo.currentTime)
             els.pNote.textContent = "Box が動画を準備しています…";
         }
-        if (Date.now() - waitFrom > 30000) throw new Error("区間の準備が終わりません（Box 側で変換中）");
+        if (Date.now() - waitFrom > (this.prepBudget || 30000)){
+          const e = new Error("Box が配信用を準備中です");
+          e.prepping = true;
+          throw e;
+        }
         const ra = Number(r.headers && r.headers.get && r.headers.get("Retry-After")) || 0;
         const wait = ra > 0 ? Math.min(5000, ra * 1000) : Math.min(3000, 500 * tries);
         await new Promise(res => setTimeout(res, wait));
