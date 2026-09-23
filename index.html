@@ -500,7 +500,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v235</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v236</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3086,7 +3086,8 @@ const PERSON_NG = /^(?:the|and|feat|ft|vol|part|no|ver|full|hd|fhd|uhd|4k|8k|mp4
 const PERSON_NG_JP = /(無修正|中出し|素人|投稿|流出|人妻|熟女|美少女|激安|総集編|第\d|その\d|前編|後編|本編|撮影|盗撮|温泉|旅行|動画|映像|作品|限定|特典|配信|生配信|収録)/;
 
 function looksLikePerson(raw){
-  const t = String(raw || "").trim().replace(/^[\s・,、&＆]+|[\s・,、&＆]+$/g, "");
+  const t = String(raw || "").trim()
+    .replace(/^[\s・,、&＆\-–—:：|｜]+|[\s・,、&＆\-–—:：|｜.]+$/g, "");
   if (t.length < 2 || t.length > 24) return "";
   if (/^\d+$/.test(t)) return "";
   if (/[【】\[\]（）()<>《》"'！!？?…]/.test(t)) return "";
@@ -3121,6 +3122,7 @@ function trimTail(text, maxWords){
   const keep = [];
   let counted = 0;
   for (const w of words){
+    if (/^[-–—|:·]+$/.test(w)) break;                                     // 区切り記号が来たら、そこまで
     if (NAME_TAIL.test(w.replace(/[.,]$/, "")) || /^\d/.test(w)) break;   // 言葉や数字が来たら、そこまで
     keep.push(w);
     // 「de」「van」のような小文字のつなぎは、語数に数えない
@@ -3185,7 +3187,7 @@ function personsFromPattern(raw){
 
   // 4) 「Jeff Mills Live @ …」「Kraftwerk Live from …」など、
   //    名前のあとに live / at / from が続く形
-  const stage = /^([A-Za-z][\w'’.\-]*(?:\s+[\w'’.\-]+){0,2}?)\s+(?:live|at|@|from|dj\s*set|set)\b/i.exec(base);
+  const stage = /^([A-Za-z][\w'’.\-]*(?:\s+[\w'’.\-]+){0,2}?)\s*[-–—|:]?\s+(?:live|at|@|from|dj\s*set|set)\b/i.exec(base);
   if (stage) out.push(...splitPersons(trimTail(stage[1])));
 
   // 5) 「NAME & NAME_…」（区切りの前）
