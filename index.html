@@ -498,7 +498,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v232</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v233</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3108,10 +3108,26 @@ function looksLikePerson(raw){
 }
 
 function splitPersons(chunk){
-  return String(chunk || "")
-    .split(/[,、，&＆・･\/／]|\s+and\s+|\s+with\s+/i)
-    .map(x => looksLikePerson(x))
-    .filter(Boolean);
+  const out = [];
+  for (const piece of String(chunk || "").split(/[,、，&＆・･\/／]|\s+and\s+|\s+with\s+/i)){
+    const t = piece.trim();
+    if (!t) continue;
+
+    // 「麻倉ゆあ 生野ひかる」のように、日本語の名前が空白で並ぶことがある。
+    // ローマ字は「VIOLET MYERS」のように空白を含むので、日本語のときだけ分ける。
+    // 「上原 亜衣」のような姓名の分かち書きを壊さないよう、
+    // 分けたそれぞれが 3 文字以上のときだけ分割する。
+    if (/[ぁ-んァ-ヶ一-龠]/.test(t) && /[\s\u3000]/.test(t)){
+      const parts = t.split(/[\s\u3000]+/).filter(Boolean);
+      if (parts.length >= 2 && parts.every(x => x.length >= 3 && looksLikePerson(x))){
+        for (const x of parts) out.push(looksLikePerson(x));
+        continue;
+      }
+    }
+    const one = looksLikePerson(t);
+    if (one) out.push(one);
+  }
+  return out.filter(Boolean);
 }
 
 // ファイル名の「確実な形」から名前を取り出す
