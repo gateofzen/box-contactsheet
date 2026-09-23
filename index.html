@@ -500,7 +500,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v234</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v235</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3106,28 +3106,34 @@ function looksLikePerson(raw){
   const words = t.split(/\s+/).filter(Boolean);
   if (!words.length || words.length > 4) return "";
   if (words.some(w => PERSON_NG.test(w))) return "";
-  if (!words.every(w => /^[A-Z]/.test(w))) return "";
+  // 先頭は大文字。2 語目以降は、大文字か、短い小文字（xcx, van, de など）まで。
+  if (!/^[A-Z]/.test(words[0])) return "";
+  if (!words.slice(1).every(w => /^[A-Z]/.test(w) || w.length <= 4)) return "";
   return t;
 }
 
 // 名前の後ろに続きがちな言葉。ここから先は名前ではない。
-const NAME_TAIL = /^(live|from|at|in|on|set|mix|remix|official|video|full|hd|fhd|4k|part|vol|feat|ft|the|and|with|tour|festival|stage|day|night|show|session|edit|ver|version|extended|radio|club|mixtape|ep|vs|tomorrowland|coachella|ultra|edc|creamfields|lollapalooza|ade|awakenings|glastonbury|sziget|wonderland|arena|hall|stadium|beach|main|closing|opening)$/i;
+const NAME_TAIL = /^(live|from|at|in|on|set|mix|remix|official|video|full|hd|fhd|4k|part|vol|feat|ft|the|and|with|tour|festival|stage|day|night|show|session|edit|ver|version|extended|radio|club|mixtape|ep|vs|tomorrowland|coachella|ultra|edc|creamfields|lollapalooza|ade|awakenings|glastonbury|sziget|wonderland|arena|hall|stadium|beach|main|closing|opening|solo|b2b|boiler|room|warmup|warm|after|afterparty|sunset|sunrise|special|guest|presents|invites|encore|podcast|episode|interview|highlights|recap|teaser|trailer)$/i;
 
 function trimTail(text, maxWords){
   const words = String(text || "").trim().split(/\s+/).filter(Boolean);
   const limit = Math.max(1, Math.min(3, maxWords || 3));
   const keep = [];
+  let counted = 0;
   for (const w of words){
     if (NAME_TAIL.test(w.replace(/[.,]$/, "")) || /^\d/.test(w)) break;   // 言葉や数字が来たら、そこまで
     keep.push(w);
-    if (keep.length >= limit) break;
+    // 「de」「van」のような小文字のつなぎは、語数に数えない
+    if (/^[A-Z]/.test(w)) counted++;
+    if (counted >= limit) break;
   }
   return keep.join(" ");
 }
 
 function splitPersons(chunk){
   const out = [];
-  for (const piece of String(chunk || "").split(/[,、，&＆・･\/／]|\s+and\s+|\s+with\s+/i)){
+  const sep = /[,、，&＆・･\/／]|\s+(?:and|with|x|×|✕|b2b|vs\.?|feat\.?|ft\.?)\s+/i;
+  for (const piece of String(chunk || "").split(sep)){
     const t = piece.trim();
     if (!t) continue;
 
@@ -3168,7 +3174,7 @@ function personsFromPattern(raw){
   if (head) out.push(...splitPersons(head[1]));
 
   // 3) 「Kaskade x IDRIS Live from …」のように、つなぎ言葉で並ぶ名前
-  const join = /^([A-Za-z][\w'’.\-]*(?:\s+[A-Za-z][\w'’.\-]*)?)\s+(?:x|×|✕|X|&|＆|vs\.?|feat\.?|ft\.?)\s+([A-Za-z][\w'’.\-]*(?:\s+[A-Za-z][\w'’.\-]*)*)/.exec(base);
+  const join = /^([A-Za-z][\w'’.\-]*(?:\s+[A-Za-z][\w'’.\-]*)?)\s+(?:x|×|✕|X|&|＆|b2b|vs\.?|feat\.?|ft\.?)\s+([A-Za-z][\w'’.\-]*(?:\s+[A-Za-z][\w'’.\-]*)*)/.exec(base);
   if (join){
     const a = trimTail(join[1]);
     // 後ろの名前は、前の名前と同じ語数までにする
@@ -3177,7 +3183,12 @@ function personsFromPattern(raw){
     if (a && b){ out.push(...splitPersons(a)); out.push(...splitPersons(b)); }
   }
 
-  // 4) 「NAME & NAME_…」（区切りの前）
+  // 4) 「Jeff Mills Live @ …」「Kraftwerk Live from …」など、
+  //    名前のあとに live / at / from が続く形
+  const stage = /^([A-Za-z][\w'’.\-]*(?:\s+[\w'’.\-]+){0,2}?)\s+(?:live|at|@|from|dj\s*set|set)\b/i.exec(base);
+  if (stage) out.push(...splitPersons(trimTail(stage[1])));
+
+  // 5) 「NAME & NAME_…」（区切りの前）
   const lat = /^([A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*(?:\s*[&＆]\s*[A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*)+)\s*[_\-–—]/.exec(base);
   if (lat) out.push(...splitPersons(lat[1]));
 
