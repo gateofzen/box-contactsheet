@@ -504,7 +504,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v237</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v238</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3214,13 +3214,26 @@ const personMemo = new Map();
 
 function escapeRe(x){ return x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
+let personDictAt = -1;         // 辞書を作ったときの本数
+
+// 索引はあとから増える（走査・検索・新着の取り込み）。
+// 増えたままだと新しい名前が辞書に入らないので、本数が変わったら作り直す。
+function personSources(){
+  const seen = new Map();
+  for (const f of globalIndex) if (f && f.name) seen.set(f.id, f);
+  for (const f of files) if (f && f.name) seen.set(f.id, f);
+  return seen;
+}
+
 function buildPersonDict(force){
-  if (personDict && !force) return personDict;
+  const src = personSources();
+  if (personDict && !force && personDictAt === src.size) return personDict;
   const t0 = Date.now();
   const count = new Map();
-  for (const f of globalIndex)
+  for (const f of src.values())
     for (const n of personsFromPattern(f.name)) count.set(n, (count.get(n) || 0) + 1);
   personDict = count;
+  personDictAt = src.size;
 
   // 長い名前から順に探す（短い名前が先に当たらないように）
   const names = [...count.keys()].sort((a, b) => b.length - a.length);
@@ -3231,7 +3244,9 @@ function buildPersonDict(force){
   if (en.length) parts.push(`(?<![A-Za-z])(?:${en.join("|")})(?![A-Za-z])`);
   personRe = parts.length ? new RegExp(parts.join("|"), "gi") : null;
   personMemo.clear();
-  log(`人名の辞書: ${count.size} 名（${globalIndex.length} 本から・${Date.now() - t0} ms）`);
+  // 画面に出ているカードにも、新しい辞書を反映する
+  setTimeout(() => { try{ [...cardById.keys()].forEach(paintPeople); }catch(_){} }, 0);
+  log(`人名の辞書: ${count.size} 名（${src.size} 本から・${Date.now() - t0} ms）`);
   return personDict;
 }
 
@@ -3295,7 +3310,7 @@ function explainPersons(raw){
 }
 
 function renderPeople(){
-  const dict = buildPersonDict();
+  const dict = buildPersonDict();     // 索引が増えていれば作り直される
   const q = (els.peopleFind.value || "").trim().toLowerCase();
   const list = [...dict.entries()]
     .filter(([n]) => !q || n.toLowerCase().includes(q))
