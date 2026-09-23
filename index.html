@@ -381,8 +381,6 @@ details.sub[open]>summary{color:var(--text)}
 .prate button.on{color:var(--amber);text-shadow:0 1px 4px rgba(232,176,75,.45)}
 .prate button:active{transform:scale(.9)}
 @media (hover:hover){ .prate button:hover{color:var(--amber)} }
-.prate .num{font-family:var(--mono);font-size:12px;color:var(--amber);margin-left:6px;min-width:3.2em}
-.prate .num.none{color:var(--dim)}
 
 .vzoom{position:relative;overflow:hidden;background:#000;touch-action:none}
 .vzoom.zoomed{cursor:grab}
@@ -486,7 +484,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v230</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v231</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -824,7 +822,7 @@ details.sub[open]>summary{color:var(--text)}
       <span class="t" id="pTitle"></span>
       <button id="pCast" class="btn btn-sm" title="テレビにキャスト" hidden>📺</button>
       <button id="pAudioBtn" class="btn btn-sm" title="音声のみで再生">🎧</button>
-      <span id="pRate" class="prate" title="評価"><span id="pRateNum" class="num none">未評価</span></span>
+      <span id="pRate" class="prate" title="評価"></span>
       <a id="pBox" class="btn btn-ghost" target="_blank" rel="noopener">Box で開く</a>
       <button id="pClose" class="btn btn-ghost">閉じる</button>
     </div>
@@ -939,7 +937,7 @@ const els = {};
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logShare","logCopy","logFull","logPrev","logClear","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castWhere","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
- "scrim","pTitle","pVideo","pBox","pClose","pRate","pRateNum","pMeta","pNote","pToast","vzoom",
+ "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
  "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","findNew","syncShared","hqPanel","hqScope","hqSource","hqShare","hqBatch","hqInfo","hqGo","hqCancel","histBtn","histPanel","histList","histNote","histClose","histClear","histSyncNote","tapL","tapR","tapLsec","tapRsec","tagHq","redoLowHq","thinLocal","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
@@ -5241,17 +5239,12 @@ for (let i = 1; i <= 5; i++){
     setRate(currentFile.id, cur === i ? 0 : i);
     paintPlayerRate();
   });
-  els.pRate.insertBefore(b, els.pRateNum);
+  els.pRate.appendChild(b);
 }
 
 function paintPlayerRate(){
   const r = currentFile ? getMark(currentFile.id).rate : 0;
-  const stars = [...els.pRate.querySelectorAll("button")];
-  stars.forEach((b, i) => b.classList.toggle("on", i < r));
-  if (els.pRateNum){
-    els.pRateNum.textContent = r ? `${r} / 5` : "未評価";
-    els.pRateNum.classList.toggle("none", !r);
-  }
+  [...els.pRate.querySelectorAll("button")].forEach((b, i) => b.classList.toggle("on", i < r));
   els.pRate.title = r ? `${r} つ星` : "未評価";
 }
 els.scrim.addEventListener("click", e => {
