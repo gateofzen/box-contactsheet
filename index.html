@@ -504,7 +504,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v238</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v239</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3306,6 +3306,16 @@ function explainPersons(raw){
   const all = personsOf({name: base});
   lines.push(`形から拾えた名前: <i>${final.join(" , ") || "（なし）"}</i>`);
   lines.push(`辞書も合わせた結果: <i>${all.join(" , ") || "（なし）"}</i>`);
+
+  // どこに入っているか（一覧に出ない理由を切り分けるため）
+  const dict = buildPersonDict();
+  const src = personSources();
+  const inDict = all.filter(n => dict.has(n));
+  const inIndex = [...src.values()].some(f => f.name === base || f.name === base + ".mp4"
+    || (f.name || "").startsWith(base));
+  lines.push(`辞書に入っているか: <b>${inDict.length ? "はい（" + inDict.join(" , ") + "）" : "いいえ"}</b>`);
+  lines.push(`このファイルは索引にあるか: <b>${inIndex ? "ある" : "ない（走査すると入ります）"}</b>`);
+  lines.push(`いまの規模: 索引 ${src.size} 本 / 辞書 ${dict.size} 名`);
   return lines.join("\n");
 }
 
@@ -3315,7 +3325,9 @@ function renderPeople(){
   const list = [...dict.entries()]
     .filter(([n]) => !q || n.toLowerCase().includes(q))
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "ja"));
-  els.peopleNote.textContent = `${dict.size} 名`;
+  els.peopleNote.textContent = q
+    ? `${list.length} 名（${dict.size} 名から絞り込み）`
+    : `${dict.size} 名（多い順に表示）`;
   els.peopleList.innerHTML = "";
   if (!list.length){
     const e = document.createElement("div");
@@ -3325,7 +3337,8 @@ function renderPeople(){
     els.peopleList.appendChild(e);
     return;
   }
-  for (const [n, c] of list.slice(0, 400)){
+  const shown = list.slice(0, 600);
+  for (const [n, c] of shown){
     const b = document.createElement("button");
     b.className = "person";
     b.innerHTML = "";
@@ -3334,6 +3347,12 @@ function renderPeople(){
     b.appendChild(num);
     b.addEventListener("click", () => { openPeoplePanel(false); searchPerson(n); });
     els.peopleList.appendChild(b);
+  }
+  if (list.length > shown.length){
+    const more = document.createElement("div");
+    more.className = "peopleempty";
+    more.textContent = `ほか ${list.length - shown.length} 名（上の欄で名前を打つと、全部から探せます）`;
+    els.peopleList.appendChild(more);
   }
 }
 
