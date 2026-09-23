@@ -374,6 +374,8 @@ details.sub[open]>summary{color:var(--text)}
 .peopleempty{padding:24px 10px;color:var(--dim);font-size:13px;width:100%;text-align:center}
 /* ファイル名から拾った人名 */
 .people{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0 0}
+.people.pplayer{margin:0;max-width:46%;overflow:hidden}
+.people.pplayer[hidden]{display:none}
 .people[hidden]{display:none}
 .person{background:rgba(95,211,196,.12);border:1px solid rgba(95,211,196,.35);
   color:var(--mint);border-radius:999px;padding:2px 9px;font-size:11.5px;cursor:pointer;
@@ -498,7 +500,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v233</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v234</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -854,6 +856,7 @@ details.sub[open]>summary{color:var(--text)}
       <span class="t" id="pTitle"></span>
       <button id="pCast" class="btn btn-sm" title="テレビにキャスト" hidden>📺</button>
       <button id="pAudioBtn" class="btn btn-sm" title="音声のみで再生">🎧</button>
+      <span id="pPeople" class="people pplayer" hidden></span>
       <span id="pRate" class="prate" title="評価"></span>
       <a id="pBox" class="btn btn-ghost" target="_blank" rel="noopener">Box で開く</a>
       <button id="pClose" class="btn btn-ghost">閉じる</button>
@@ -969,7 +972,7 @@ const els = {};
  "authDot","authText","nTotal","nHit","nFav","nCached","progress","msg","log","logShare","logCopy","logFull","logPrev","logClear","sheet","sentinel","empty","railTags",
  "bulkbar","bulkN","bulkTag","bulkAdd","bulkDel","bulkTrash","bulkAll","bulkNone","tagOptions",
  "castPanel","castWhere","castQ2","castNow","castDur","castSeek","castBack","castPlay","castFwd","castStop","castInfo",
- "scrim","pTitle","pVideo","pBox","pClose","pRate","pMeta","pNote","pToast","vzoom",
+ "scrim","pTitle","pVideo","pBox","pClose","pRate","pPeople","pMeta","pNote","pToast","vzoom",
  "pAudio","pAudioBtn","audioVeil","bgAudio","wholeAudio","audioPrefetch","localQuality","forgetTiers","findNew","syncShared","hqPanel","hqScope","hqSource","hqShare","hqBatch","hqInfo","hqGo","hqCancel","histBtn","histPanel","histList","histNote","histClose","histClear","histSyncNote","peopleBtn","peoplePanel","peopleList","peopleNote","peopleClose","peopleFind","peopleRebuild","tapL","tapR","tapLsec","tapRsec","tagHq","redoLowHq","thinLocal","forgetHq","pCast","castProbe"].forEach(k => els[k] = $(k));
 
 let files = [];
@@ -3107,6 +3110,21 @@ function looksLikePerson(raw){
   return t;
 }
 
+// 名前の後ろに続きがちな言葉。ここから先は名前ではない。
+const NAME_TAIL = /^(live|from|at|in|on|set|mix|remix|official|video|full|hd|fhd|4k|part|vol|feat|ft|the|and|with|tour|festival|stage|day|night|show|session|edit|ver|version|extended|radio|club|mixtape|ep|vs|tomorrowland|coachella|ultra|edc|creamfields|lollapalooza|ade|awakenings|glastonbury|sziget|wonderland|arena|hall|stadium|beach|main|closing|opening)$/i;
+
+function trimTail(text, maxWords){
+  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+  const limit = Math.max(1, Math.min(3, maxWords || 3));
+  const keep = [];
+  for (const w of words){
+    if (NAME_TAIL.test(w.replace(/[.,]$/, "")) || /^\d/.test(w)) break;   // 言葉や数字が来たら、そこまで
+    keep.push(w);
+    if (keep.length >= limit) break;
+  }
+  return keep.join(" ");
+}
+
 function splitPersons(chunk){
   const out = [];
   for (const piece of String(chunk || "").split(/[,、，&＆・･\/／]|\s+and\s+|\s+with\s+/i)){
@@ -3137,13 +3155,29 @@ function personsFromPattern(raw){
 
   // 1) 「… by 名前, 名前」
   const by = /\bby\s+([^\[\]_]+)$/i.exec(base);
-  if (by) out.push(...splitPersons(by[1]));
+  if (by){
+    // 「by DJ Snake Live 2023」のように、名前の後ろに説明が続くことがある
+    const chunk = /[ぁ-んァ-ヶ一-龠]/.test(by[1]) ? by[1] : trimTail(by[1]);
+    out.push(...splitPersons(chunk));
+    if (!/[ぁ-んァ-ヶ一-龠]/.test(by[1]))
+      for (const part of by[1].split(/[,、，&＆・]/)) out.push(...splitPersons(trimTail(part)));
+  }
 
   // 2) 「名前 [品番] …」
   const head = /^([^\[\]_]{2,24}?)\s*\[[^\]]+\]/.exec(base);
   if (head) out.push(...splitPersons(head[1]));
 
-  // 3) 「NAME & NAME_…」（区切りの前）
+  // 3) 「Kaskade x IDRIS Live from …」のように、つなぎ言葉で並ぶ名前
+  const join = /^([A-Za-z][\w'’.\-]*(?:\s+[A-Za-z][\w'’.\-]*)?)\s+(?:x|×|✕|X|&|＆|vs\.?|feat\.?|ft\.?)\s+([A-Za-z][\w'’.\-]*(?:\s+[A-Za-z][\w'’.\-]*)*)/.exec(base);
+  if (join){
+    const a = trimTail(join[1]);
+    // 後ろの名前は、前の名前と同じ語数までにする
+    // （「ZEDD X ALESSO Ultra」の Ultra のような会場名を拾わないため）
+    const b = trimTail(join[2], a ? a.split(/\s+/).length : 1);
+    if (a && b){ out.push(...splitPersons(a)); out.push(...splitPersons(b)); }
+  }
+
+  // 4) 「NAME & NAME_…」（区切りの前）
   const lat = /^([A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*(?:\s*[&＆]\s*[A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*)+)\s*[_\-–—]/.exec(base);
   if (lat) out.push(...splitPersons(lat[1]));
 
@@ -3260,6 +3294,42 @@ els.peopleRebuild.addEventListener("click", () => {
   renderPeople();
   say("人名を集め直しました");
 });
+
+// プレーヤーにも、その動画の人名を出す
+function paintPlayerPeople(){
+  if (!els.pPeople) return;
+  const names = currentFile ? personsOf(currentFile) : [];
+  els.pPeople.innerHTML = "";
+  els.pPeople.hidden = !names.length;
+  for (const n of names.slice(0, 4)){
+    const b = document.createElement("button");
+    b.className = "person";
+    b.textContent = n;
+    b.title = `「${n}」を含む動画を探す`;
+    b.addEventListener("click", async () => {
+      await closePlayerAndWait();
+      searchPerson(n);
+    });
+    els.pPeople.appendChild(b);
+  }
+}
+
+// プレーヤーを閉じ終わってから次へ進む（戻る操作とぶつからないように）
+function closePlayerAndWait(){
+  if (!els.scrim.classList.contains("open")) return Promise.resolve();
+  return new Promise(res => {
+    let done = false;
+    const fin = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener("popstate", fin);
+      setTimeout(res, 0);
+    };
+    window.addEventListener("popstate", fin);
+    closePlayer();
+    setTimeout(fin, 800);
+  });
+}
 
 function paintPeople(id){
   const ref = cardById.get(id);
@@ -3570,6 +3640,7 @@ async function openPlayer(file, startAt){
   });
   els.pBox.href = "https://app.box.com/file/" + file.id;
   els.pMeta.textContent = [fmtSize(file.size), fmtDate(file.modified), file.path].filter(Boolean).join("  ·  ");
+  paintPlayerPeople();
   paintPlayerRate();
 
   pushLayer("player", () => closePlayerNow());
