@@ -504,7 +504,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v242</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v243</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1719,7 +1719,11 @@ async function boxSearchMerge(text){
       + `&file_extensions=${encodeURIComponent(exts)}`
       + `&fields=id,name,size,modified_at,extension,parent,metadata.${MD_SCOPE}.${MD_TPL}`;
     const d = await boxFetch(url);
-    const hits = (d.entries || []).filter(isVideo).map(e => {
+    // 検索の結果には type が入らないことがある。拡張子で判断する。
+    const hits = (d.entries || [])
+      .filter(e => e && e.name && (!e.type || e.type === "file"))
+      .filter(e => VIDEO_EXT.has((e.extension || e.name.split(".").pop() || "").toLowerCase()))
+      .map(e => {
       absorbMetadata(e);
       return {id:e.id, name:e.name, size:e.size, modified:e.modified_at,
               path: e.parent ? "/" + e.parent.name : "", parentId: e.parent ? e.parent.id : null};
@@ -3452,12 +3456,28 @@ function personsOf(file){
 }
 
 // 名前を押したら、その名前を含む一覧を出す
-function searchPerson(name){
+async function searchPerson(name){
   els.q.value = name;
   if (els.searchScope) els.searchScope.value = "all";
   buildRail(); applyView();
   window.scrollTo({top:0, behavior:"smooth"});
-  say(`「${name}」を含む動画を表示しています`);
+
+  if (view.length){
+    say(`「${name}」を含む動画: ${view.length} 本`);
+    return;
+  }
+
+  // この端末の索引に無いことがある（名前は他の端末から共有されたもの）。
+  // Box 全体を検索して取り込む。
+  els.progress.textContent = `「${name}」を Box から探しています…`;
+  lastBoxSearch = "";                 // 同じ語でも、ここでは必ず探す
+  try{
+    await boxSearchMerge(name);
+  }catch(_){}
+  els.progress.textContent = "";
+  applyView();
+  if (view.length) say(`「${name}」を含む動画: ${view.length} 本（Box から取り込みました）`);
+  else say(`「${name}」を含む動画は見つかりませんでした`, true);
 }
 
 // なぜ拾えた／拾えなかったのかを、その場で確かめられるようにする
