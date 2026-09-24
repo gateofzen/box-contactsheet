@@ -504,7 +504,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v243</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v244</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1714,23 +1714,29 @@ async function boxSearchMerge(text){
   lastBoxSearch = text;
   try{
     const exts = [...VIDEO_EXT].join(",");
-    const url = `/search?query=${encodeURIComponent(text)}&type=file&limit=200`
-      + `&ancestor_folder_ids=${encodeURIComponent(froot || "0")}`
-      + `&file_extensions=${encodeURIComponent(exts)}`
-      + `&fields=id,name,size,modified_at,extension,parent,metadata.${MD_SCOPE}.${MD_TPL}`;
-    const d = await boxFetch(url);
-    // 検索の結果には type が入らないことがある。拡張子で判断する。
-    const hits = (d.entries || [])
-      .filter(e => e && e.name && (!e.type || e.type === "file"))
-      .filter(e => VIDEO_EXT.has((e.extension || e.name.split(".").pop() || "").toLowerCase()))
-      .map(e => {
-      absorbMetadata(e);
-      return {id:e.id, name:e.name, size:e.size, modified:e.modified_at,
-              path: e.parent ? "/" + e.parent.name : "", parentId: e.parent ? e.parent.id : null};
-    });
+    const hits = [];
+    // Box の検索は 200 件ずつ返る。続きがあれば取りに行く。
+    for (let offset = 0; offset < 2000; offset += 200){
+      const url = `/search?query=${encodeURIComponent(text)}&type=file&limit=200&offset=${offset}`
+        + `&ancestor_folder_ids=${encodeURIComponent(froot || "0")}`
+        + `&file_extensions=${encodeURIComponent(exts)}`
+        + `&fields=id,name,size,modified_at,extension,parent,metadata.${MD_SCOPE}.${MD_TPL}`;
+      const d = await boxFetch(url);
+      const entries = d.entries || [];
+      // 検索の結果には type が入らないことがある。拡張子で判断する。
+      for (const e of entries){
+        if (!e || !e.name || (e.type && e.type !== "file")) continue;
+        if (!VIDEO_EXT.has((e.extension || e.name.split(".").pop() || "").toLowerCase())) continue;
+        absorbMetadata(e);
+        hits.push({id:e.id, name:e.name, size:e.size, modified:e.modified_at,
+                   path: e.parent ? "/" + e.parent.name : "", parentId: e.parent ? e.parent.id : null});
+      }
+      if (entries.length < 200) break;
+      if (els.progress) els.progress.textContent = `Box を探しています… ${hits.length} 本`;
+    }
     if (hits.length){
       await mergeIndex(hits);
-      log(`Box 検索: ${hits.length} 件を索引に追加`);
+      log(`Box 検索「${text}」: ${hits.length} 件を索引に追加`);
       applyView();
     }
   }catch(err){ log("Box 検索に失敗: " + err.message); }
@@ -3462,13 +3468,15 @@ async function searchPerson(name){
   buildRail(); applyView();
   window.scrollTo({top:0, behavior:"smooth"});
 
-  if (view.length){
+  // 共有の一覧には、他の端末が数えた本数が入っている。
+  // 手元がそれより少なければ、まだ索引に入っていない動画がある。
+  const dict = buildPersonDict();
+  const expect = dict.get(name) || 0;
+  if (view.length && view.length >= expect){
     say(`「${name}」を含む動画: ${view.length} 本`);
     return;
   }
-
-  // この端末の索引に無いことがある（名前は他の端末から共有されたもの）。
-  // Box 全体を検索して取り込む。
+  if (view.length) log(`「${name}」は手元に ${view.length} 本（一覧では ${expect} 本）。Box から探します。`);
   els.progress.textContent = `「${name}」を Box から探しています…`;
   lastBoxSearch = "";                 // 同じ語でも、ここでは必ず探す
   try{
@@ -3476,7 +3484,7 @@ async function searchPerson(name){
   }catch(_){}
   els.progress.textContent = "";
   applyView();
-  if (view.length) say(`「${name}」を含む動画: ${view.length} 本（Box から取り込みました）`);
+  if (view.length) say(`「${name}」を含む動画: ${view.length} 本`);
   else say(`「${name}」を含む動画は見つかりませんでした`, true);
 }
 
