@@ -523,7 +523,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v249</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v250</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3308,6 +3308,12 @@ function looksLikePerson(raw){
   const jp = /[ぁ-んァ-ヶ一-龠]/.test(t);
   if (jp){
     if (t.length > 12) return "";
+    // 数字を含むものは名前ではない（「3発射」など）
+    if (/[0-9０-９]/.test(t)) return "";
+    // 文の一部を切り取ったもの（「叶えます」「〜ったら」など）
+    if (/(ます|ません|でした|します|される|させる|してる|ている|ったら|なので|だから|ながら|けれど|らしい|みたい)/.test(t)) return "";
+    // ひらがなだけの短い語は、文の一部のことが多い（「もう」「えま」）
+    if (/^[ぁ-ん]+$/.test(t) && t.length <= 3) return "";
     // 文になっているものは名前ではない。
     // ただし「稲月このは」「晴山ひとは」のように、名前が助詞と同じ字で
     // 終わることがある。短いものは名前として扱う。
@@ -3318,6 +3324,7 @@ function looksLikePerson(raw){
   }
   // ローマ字は、単語ごとに頭が大文字（または全部大文字）
   if (!/^[A-Za-z][A-Za-z'’.\- ]*$/.test(t)) return "";
+  if (t.replace(/[^A-Za-z]/g, "").length < 3) return "";   // 「OL」のような 2 文字は名前としない
   const words = t.split(/\s+/).filter(Boolean);
   if (!words.length || words.length > 4) return "";
   if (words.some(w => PERSON_NG.test(w))) return "";
@@ -3468,6 +3475,10 @@ function buildPersonDictNow(force){
   const count = new Map();
   for (const f of src.values())
     for (const n of personsFromPattern(f.name)) count.set(n, (count.get(n) || 0) + 1);
+  // これまでに入ってしまった誤り（「もう」「OL」など）を、この機会に落とす
+  for (const n of [...personShared.names.keys()])
+    if (!looksLikePerson(n)) personShared.names.delete(n);
+
   // この端末で見つけた名前に、他の端末が見つけた名前を合わせる
   let mine = 0;
   for (const [n, c] of count){
@@ -3482,9 +3493,17 @@ function buildPersonDictNow(force){
   personDictAt = src.size;
 
   // 長い名前から順に探す（短い名前が先に当たらないように）
+  // 文の途中にたまたま含まれる語を拾わないよう、
+  // 突き合わせに使うのは「漢字かカタカナを含む 3 文字以上」の名前だけにする。
   const names = [...count.keys()].sort((a, b) => b.length - a.length);
-  const jp = names.filter(n => /[ぁ-んァ-ヶ一-龠]/.test(n)).map(escapeRe);
-  const en = names.filter(n => !/[ぁ-んァ-ヶ一-龠]/.test(n)).map(escapeRe);
+  const jp = names
+    .filter(n => /[ぁ-んァ-ヶ一-龠]/.test(n))
+    .filter(n => n.length >= 3 && /[ァ-ヶ一-龠]/.test(n))
+    .map(escapeRe);
+  const en = names
+    .filter(n => !/[ぁ-んァ-ヶ一-龠]/.test(n))
+    .filter(n => n.replace(/[^A-Za-z]/g, "").length >= 3)
+    .map(escapeRe);
   const parts = [];
   if (jp.length) parts.push(`(?:${jp.join("|")})`);
   if (en.length) parts.push(`(?<![A-Za-z])(?:${en.join("|")})(?![A-Za-z])`);
