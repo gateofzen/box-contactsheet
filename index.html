@@ -523,7 +523,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v250</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v251</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3293,8 +3293,14 @@ function hidePerson(name){
    まず、この確実な形から名前を集めて辞書を作る。
    そのうえで、辞書の名前が入っているファイルすべてに印を付ける。
    「[MCT-012] 澁谷果歩に酒を…」のように、名前が途中にある場合も拾える。 */
-const PERSON_NG = /^(?:the|and|feat|ft|vol|part|no|ver|full|hd|fhd|uhd|4k|8k|mp4|avi|rec|movie|video|sample|new|best|mix|live|remix|edit|original|off|on)$/i;
-const PERSON_NG_JP = /(無修正|中出し|素人|投稿|流出|人妻|熟女|美少女|激安|総集編|第\d|その\d|前編|後編|本編|撮影|盗撮|温泉|旅行|動画|映像|作品|限定|特典|配信|生配信|収録|女子大生|女子高生|女教師|看護師|社長|店員|店長|受付|新人|専属|単体|巨乳|爆乳|美乳|彼女|彼氏|友達|義母|義姉|義妹|叔母|奥様|奥さん|お姉さん|お義母|ナース|メイド|ギャル|痴女|淫乱)/;
+const PERSON_NG = /^(?:the|and|feat|ft|vol|part|no|ver|full|hd|fhd|uhd|4k|8k|mp4|avi|rec|movie|video|sample|new|best|mix|live|remix|edit|original|off|on|debut|av|dvd|blu|ray|cup|deluxe|special|premium|complete|uncensored)$/i;
+const PERSON_NG_JP = /(無修正|中出し|素人|投稿|流出|人妻|熟女|美少女|激安|総集編|第\d|その\d|前編|後編|本編|撮影|盗撮|温泉|旅行|動画|映像|作品|限定|特典|配信|生配信|収録|女子大生|女子高生|女教師|看護師|社長|店員|店長|受付|新人|専属|単体|巨乳|爆乳|美乳|彼女|彼氏|友達|義母|義姉|義妹|叔母|奥様|奥さん|お姉さん|お義母|ナース|メイド|ギャル|痴女|淫乱|お嬢様|家政婦|処女|ぽっちゃり|ボディ|カップ|ランク|専門店|風俗|デリヘル|介護士|保育士|美容師|アイドル|モデル|主婦|未亡人|マッサージ|エステ)/;
+
+// 「観月さん」→「観月」のように、敬称を落とす
+function stripHonorific(t){
+  const m = /^(.{2,12}?)(さん|ちゃん|くん|君|様|さま|氏|先生|嬢)$/.exec(t);
+  return m && m[1].length >= 2 ? m[1] : t;
+}
 
 function looksLikePerson(raw){
   const t = String(raw || "").trim()
@@ -3307,20 +3313,21 @@ function looksLikePerson(raw){
   if (/^\d{4}[-_.\/]?\d{2}/.test(t)) return "";
   const jp = /[ぁ-んァ-ヶ一-龠]/.test(t);
   if (jp){
-    if (t.length > 12) return "";
+    // 名前はふつう短い。長いものは説明文の切れ端。
+    if (t.length > 9) return "";
     // 数字を含むものは名前ではない（「3発射」など）
     if (/[0-9０-９]/.test(t)) return "";
     // 文の一部を切り取ったもの（「叶えます」「〜ったら」など）
     if (/(ます|ません|でした|します|される|させる|してる|ている|ったら|なので|だから|ながら|けれど|らしい|みたい)/.test(t)) return "";
     // ひらがなだけの短い語は、文の一部のことが多い（「もう」「えま」）
-    if (/^[ぁ-ん]+$/.test(t) && t.length <= 3) return "";
+    if (/^[ぁ-ん]+$/.test(t) && t.length <= 2) return "";
     // 文になっているものは名前ではない。
     // ただし「稲月このは」「晴山ひとは」のように、名前が助詞と同じ字で
     // 終わることがある。短いものは名前として扱う。
     if (t.length >= 7 && /[はがをにへでとやもね]$/.test(t)) return "";
     if (/^(彼女|彼氏|貴女|貴方|あなた|わたし|私|僕|俺)[はがも]?$/.test(t)) return "";
     if (/(する|した|します|です|でした|られ|させ|ない|てる)/.test(t)) return "";
-    return t;
+    return stripHonorific(t);
   }
   // ローマ字は、単語ごとに頭が大文字（または全部大文字）
   if (!/^[A-Za-z][A-Za-z'’.\- ]*$/.test(t)) return "";
@@ -3423,13 +3430,29 @@ function personsFromPattern(raw){
   const stage = /^([A-Za-z][\w'’.\-]*(?:\s+[\w'’.\-]+){0,2}?)\s*[-–—|:]?\s+(?:live|at|@|from|dj\s*set|set)\b/i.exec(base);
   if (stage) out.push(...splitPersons(trimTail(stage[1])));
 
-  // 5) 「…公開します。花園もあ」のように、末尾に名前が置かれる形
-  const tail = /。\s*([^。]{2,30})$/.exec(base);
-  if (tail) out.push(...splitPersons(tail[1]));
+  // ここまでで見つかったか（名前が題名の一部と紛れないよう、末尾の規則の可否に使う）
+  const foundStrong = out.length > 0;
 
-  // 6) 「陽子（43歳）」のように、年齢が添えられた名前
-  for (const m of base.matchAll(/([^\s。、，,（(\[\]]{2,12})[（(]\s*\d{1,2}\s*歳\s*[）)]/g))
+  // 6) 「陽子（43歳）」のように、年齢が添えられた名前（これは確かな手がかり）
+  for (const m of base.matchAll(/([ぁ-んァ-ヶ一-龠A-Za-z]{2,9})\s*[（(]\s*\d{1,2}\s*(?:歳)?\s*[）)]/g))
     out.push(...splitPersons(m[1]));
+
+  // 5) 末尾に名前が置かれる形。
+  //    「…公開します。花園もあ」「…ギャル 香織さん」「…観月さん（40歳）」
+  //    「…沙友里（介護士）」「…雅子さん（42）」など。
+  //    ただし、ここまでで名前が見つかっているときは使わない。
+  //    末尾の語は題名の一部のことが多く（「…サンタコス」「…Coachella」）、
+  //    名前と紛れるため。
+  if (!foundStrong){
+    const noParen = base.replace(/[（(][^）)]*[）)]\s*$/, "").trim();
+    const last = noParen.split(/[\s\u3000。、，,！!？?・「」『』【】]+/).filter(Boolean).pop();
+    // 末尾から拾うのは日本語の名前だけ（ローマ字は題名の一部が多い）
+    if (last && /[ぁ-んァ-ヶ一-龠]/.test(last)) out.push(...splitPersons(last));
+
+    // 「。」のあとに複数の名前が並ぶこともある
+    const tail = /。\s*([^。]{2,30})$/.exec(base);
+    if (tail && /[ぁ-んァ-ヶ一-龠]/.test(tail[1])) out.push(...splitPersons(tail[1]));
+  }
 
   // 7) 「NAME & NAME_…」（区切りの前）
   const lat = /^([A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*(?:\s*[&＆]\s*[A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*)+)\s*[_\-–—]/.exec(base);
