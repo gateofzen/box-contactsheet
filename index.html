@@ -61,6 +61,25 @@ b{font-weight:600}
 .menu-item.on::after{content:"　✓"}
 @media (max-width:860px){ .menu{left:10px;right:10px;min-width:0} }
 
+/* ---- 狭い画面（スマートフォン）の上段 ----
+   アイコンと検索窓を 1 行に詰めると、検索窓がほとんど残らない。
+   検索窓を 2 段目に置き、全幅で使えるようにする。 */
+@media (max-width:560px){
+  :root{ --bar:92px; }                      /* 2 段ぶんの高さ */
+  .topbar-in{height:auto;flex-wrap:wrap;padding:6px 10px 8px;gap:6px;row-gap:6px}
+  .mark{font-size:11px;letter-spacing:.08em}
+  .mark small{display:none}                  /* 版は設定の中で分かる */
+  .search{order:10;flex:1 0 100%;height:38px}
+  .iconbtn{width:36px;height:36px}
+  .topbar-in .btn{padding:6px 10px;font-size:12px}
+}
+/* さらに狭いとき（小さめのスマートフォン） */
+@media (max-width:380px){
+  .mark{display:none}                        /* 題名は隠す */
+  .iconbtn{width:34px;height:34px;font-size:15px}
+}
+
+
 /* progress line */
 .pbar{height:2px;background:transparent;position:relative}
 .pbar .fill{position:absolute;left:0;top:0;bottom:0;width:0;
@@ -504,7 +523,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v245</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v246</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
