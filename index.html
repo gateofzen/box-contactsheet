@@ -523,7 +523,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v251</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v252</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3147,24 +3147,30 @@ function makeCard(file){
    履歴と同じ _ContactSheet に persons.json を置き、名前を持ち寄る。
    消した名前（誤りだったもの）も共有し、どの端末でも出ないようにする。 */
 const PERSON_FILE = "persons.json";
+// 拾い方を変えたら、この数を上げる。古い一覧は作り直す。
+const PERSON_RULES_VER = 2;
 let personFileId = null, personEtag = null;
-let personShared = {names: new Map(), hidden: new Set()};
+let personShared = {names: new Map(), hidden: new Set(), strong: new Set()};
 let personSyncing = false, personTimer = null, personDirty = false;
 
 function loadPersonLocal(){
   try{
     const d = JSON.parse(localStorage.getItem("bcs_persons") || "null");
-    if (d && d.names) personShared = {
+    if (d && d.names && d.ver === PERSON_RULES_VER) personShared = {
       names: new Map(Object.entries(d.names)),
       hidden: new Set(d.hidden || []),
+      strong: new Set(d.strong || []),
     };
+    else if (d) personShared = {names:new Map(), hidden:new Set(d.hidden || []), strong:new Set()};
   }catch(_){}
 }
 function savePersonLocal(){
   try{
     localStorage.setItem("bcs_persons", JSON.stringify({
+      ver: PERSON_RULES_VER,
       names: Object.fromEntries(personShared.names),
       hidden: [...personShared.hidden],
+      strong: [...personShared.strong],
     }));
   }catch(_){}
 }
@@ -3190,14 +3196,19 @@ async function personDownload(){
   if (r.status === 404){ personFileId = null; localStorage.removeItem("bcs_personfile"); return null; }
   if (!r.ok) throw new Error("人名の一覧を読めません（" + r.status + "）");
   const d = await r.json().catch(() => ({}));
-  return {names: new Map(Object.entries(d.names || {})), hidden: new Set(d.hidden || [])};
+  // 拾い方が古い一覧は、名前を引き継がない（誤りが混ざっているため）
+  if (d.ver !== PERSON_RULES_VER)
+    return {names:new Map(), hidden:new Set(d.hidden || []), strong:new Set()};
+  return {names: new Map(Object.entries(d.names || {})),
+          hidden: new Set(d.hidden || []), strong: new Set(d.strong || [])};
 }
 
 async function personUpload(data){
   const blob = new Blob([JSON.stringify({
-    v: 1, ts: Date.now(),
+    v: 1, ver: PERSON_RULES_VER, ts: Date.now(),
     names: Object.fromEntries(data.names),
     hidden: [...data.hidden],
+    strong: [...(data.strong || [])],
   })], {type:"application/json"});
   const fd = new FormData();
   if (personFileId){
@@ -3234,8 +3245,9 @@ function mergePersons(a, b){
   const names = new Map(a.names);
   for (const [n, c] of b.names) names.set(n, Math.max(c || 0, names.get(n) || 0));
   const hidden = new Set([...a.hidden, ...b.hidden]);
-  for (const n of hidden) names.delete(n);
-  return {names, hidden};
+  const strong = new Set([...(a.strong || []), ...(b.strong || [])]);
+  for (const n of hidden){ names.delete(n); strong.delete(n); }
+  return {names, hidden, strong};
 }
 
 async function personSync(why){
@@ -3294,7 +3306,7 @@ function hidePerson(name){
    そのうえで、辞書の名前が入っているファイルすべてに印を付ける。
    「[MCT-012] 澁谷果歩に酒を…」のように、名前が途中にある場合も拾える。 */
 const PERSON_NG = /^(?:the|and|feat|ft|vol|part|no|ver|full|hd|fhd|uhd|4k|8k|mp4|avi|rec|movie|video|sample|new|best|mix|live|remix|edit|original|off|on|debut|av|dvd|blu|ray|cup|deluxe|special|premium|complete|uncensored)$/i;
-const PERSON_NG_JP = /(無修正|中出し|素人|投稿|流出|人妻|熟女|美少女|激安|総集編|第\d|その\d|前編|後編|本編|撮影|盗撮|温泉|旅行|動画|映像|作品|限定|特典|配信|生配信|収録|女子大生|女子高生|女教師|看護師|社長|店員|店長|受付|新人|専属|単体|巨乳|爆乳|美乳|彼女|彼氏|友達|義母|義姉|義妹|叔母|奥様|奥さん|お姉さん|お義母|ナース|メイド|ギャル|痴女|淫乱|お嬢様|家政婦|処女|ぽっちゃり|ボディ|カップ|ランク|専門店|風俗|デリヘル|介護士|保育士|美容師|アイドル|モデル|主婦|未亡人|マッサージ|エステ)/;
+const PERSON_NG_JP = /(無修正|中出し|素人|投稿|流出|人妻|熟女|美少女|激安|総集編|第\d|その\d|前編|後編|本編|撮影|盗撮|温泉|旅行|動画|映像|作品|限定|特典|配信|生配信|収録|女子大生|女子高生|女教師|看護師|社長|店員|店長|受付|新人|専属|単体|巨乳|爆乳|美乳|彼女|彼氏|友達|義母|義姉|義妹|叔母|奥様|奥さん|お姉さん|お義母|ナース|メイド|ギャル|痴女|淫乱|お嬢様|家政婦|処女|ぽっちゃり|ボディ|カップ|ランク|専門店|風俗|デリヘル|介護士|保育士|美容師|アイドル|モデル|主婦|未亡人|マッサージ|エステ|大学生|高校生|中学生|社会人|スナック|ママ|パパ|グラマラス|プライベート|ペニス|チンポ|オナニー|セックス|フェラ|デビュー|ドラマ|シリーズ|コレクション|ベスト|ハーフ|ギャップ|ボディコン|コスプレ|ナンパ|童顔|巨乳|美尻|美脚|放出|出荷|入荷|販売|流出|公開|応募|誕生)/;
 
 // 「観月さん」→「観月」のように、敬称を落とす
 function stripHonorific(t){
@@ -3321,6 +3333,10 @@ function looksLikePerson(raw){
     if (/(ます|ません|でした|します|される|させる|してる|ている|ったら|なので|だから|ながら|けれど|らしい|みたい)/.test(t)) return "";
     // ひらがなだけの短い語は、文の一部のことが多い（「もう」「えま」）
     if (/^[ぁ-ん]+$/.test(t) && t.length <= 2) return "";
+    // 日本語とローマ字が混じるものは名前ではない（「応募DEBUt」）
+    if (/[A-Za-z]/.test(t)) return "";
+    // 「勝手に販売」のように、助詞をはさむものは文の一部
+    if (/[一-龠][にをへ][一-龠ぁ-んァ-ヶ]/.test(t)) return "";
     // 文になっているものは名前ではない。
     // ただし「稲月このは」「晴山ひとは」のように、名前が助詞と同じ字で
     // 終わることがある。短いものは名前として扱う。
@@ -3397,7 +3413,11 @@ function tidyName(raw){
     .trim();
 }
 
-function personsFromPattern(raw){
+// 名前を、手がかりの強さとともに返す。
+//   強い: 品番の前 / by のあと / つなぎ言葉 / Live の前 / 年齢つき / 区切りの前
+//   弱い: 末尾に置かれただけのもの（題名の一部と紛れやすい）
+// 弱いものは、そのファイルの印にはするが、他のファイルを探す辞書には入れない。
+function personsDetailed(raw){
   const base = tidyName(raw);
   const out = [];
 
@@ -3443,22 +3463,29 @@ function personsFromPattern(raw){
   //    ただし、ここまでで名前が見つかっているときは使わない。
   //    末尾の語は題名の一部のことが多く（「…サンタコス」「…Coachella」）、
   //    名前と紛れるため。
+  const weak = [];
   if (!foundStrong){
     const noParen = base.replace(/[（(][^）)]*[）)]\s*$/, "").trim();
     const last = noParen.split(/[\s\u3000。、，,！!？?・「」『』【】]+/).filter(Boolean).pop();
     // 末尾から拾うのは日本語の名前だけ（ローマ字は題名の一部が多い）
-    if (last && /[ぁ-んァ-ヶ一-龠]/.test(last)) out.push(...splitPersons(last));
+    if (last && /[ぁ-んァ-ヶ一-龠]/.test(last)) weak.push(...splitPersons(last));
 
     // 「。」のあとに複数の名前が並ぶこともある
     const tail = /。\s*([^。]{2,30})$/.exec(base);
-    if (tail && /[ぁ-んァ-ヶ一-龠]/.test(tail[1])) out.push(...splitPersons(tail[1]));
+    if (tail && /[ぁ-んァ-ヶ一-龠]/.test(tail[1])) weak.push(...splitPersons(tail[1]));
   }
 
   // 7) 「NAME & NAME_…」（区切りの前）
   const lat = /^([A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*(?:\s*[&＆]\s*[A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*)+)\s*[_\-–—]/.exec(base);
   if (lat) out.push(...splitPersons(lat[1]));
 
-  return [...new Set(out)];
+  const strong = [...new Set(out)];
+  return {strong, weak: [...new Set(weak)].filter(n => !strong.includes(n))};
+}
+
+function personsFromPattern(raw){
+  const d = personsDetailed(raw);
+  return [...new Set([...d.strong, ...d.weak])];
 }
 
 /* ---- 名前の辞書（この端末で作り、保存しておく） ---- */
@@ -3496,8 +3523,17 @@ function buildPersonDictNow(force){
   if (personDict && !force && personDictAt === src.size) return personDict;
   const t0 = Date.now();
   const count = new Map();
-  for (const f of src.values())
-    for (const n of personsFromPattern(f.name)) count.set(n, (count.get(n) || 0) + 1);
+  const strongNames = new Set();
+  const weakCount = new Map();
+  for (const f of src.values()){
+    const d = personsDetailed(f.name);
+    for (const n of d.strong){ count.set(n, (count.get(n) || 0) + 1); strongNames.add(n); }
+    for (const n of d.weak) weakCount.set(n, (weakCount.get(n) || 0) + 1);
+  }
+  // 末尾から拾っただけの名前は、題名の一部のことがある。
+  // 2 本以上で見つかったものだけ採用する。
+  for (const [n, c] of weakCount)
+    if (strongNames.has(n) || c >= 2) count.set(n, (count.get(n) || 0) + c);
   // これまでに入ってしまった誤り（「もう」「OL」など）を、この機会に落とす
   for (const n of [...personShared.names.keys()])
     if (!looksLikePerson(n)) personShared.names.delete(n);
@@ -3506,6 +3542,7 @@ function buildPersonDictNow(force){
   let mine = 0;
   for (const [n, c] of count){
     if (personShared.hidden.has(n)){ count.delete(n); continue; }
+    if (strongNames.has(n) && !personShared.strong.has(n)){ personShared.strong.add(n); mine++; }
     if ((personShared.names.get(n) || 0) < c){ personShared.names.set(n, c); mine++; }
   }
   for (const [n, c] of personShared.names)
@@ -3518,10 +3555,14 @@ function buildPersonDictNow(force){
   // 長い名前から順に探す（短い名前が先に当たらないように）
   // 文の途中にたまたま含まれる語を拾わないよう、
   // 突き合わせに使うのは「漢字かカタカナを含む 3 文字以上」の名前だけにする。
-  const names = [...count.keys()].sort((a, b) => b.length - a.length);
+  // 他のファイルを探すのに使うのは、確かな手がかりで拾った名前だけ。
+  // 末尾から拾った語は、文中にたまたま一致しやすい。
+  const names = [...count.keys()]
+    .filter(n => strongNames.has(n) || (personShared.strong && personShared.strong.has(n)))
+    .sort((a, b) => b.length - a.length);
   const jp = names
     .filter(n => /[ぁ-んァ-ヶ一-龠]/.test(n))
-    .filter(n => n.length >= 3 && /[ァ-ヶ一-龠]/.test(n))
+    .filter(n => n.length >= 3 && /[一-龠]/.test(n))   // 漢字を含むものに限る
     .map(escapeRe);
   const en = names
     .filter(n => !/[ぁ-んァ-ヶ一-龠]/.test(n))
@@ -3553,6 +3594,15 @@ function personsOf(file){
     const base = tidyName(name);
     let m;
     while ((m = personRe.exec(base))){
+      // 「シャトーブリアン」の中の「リアン」のように、語の途中に
+      // 一致しただけのものは採らない。前後の字の種類で見分ける。
+      const before = base[m.index - 1] || "";
+      const after = base[m.index + m[0].length] || "";
+      const kind = c => /[ァ-ヶー]/.test(c) ? "カナ" : /[一-龠]/.test(c) ? "漢字"
+                      : /[ぁ-ん]/.test(c) ? "かな" : "";
+      const head = kind(m[0][0]), tailc = kind(m[0][m[0].length - 1]);
+      if ((head && kind(before) === head) || (tailc && kind(after) === tailc)) continue;
+
       const hit = personDict.has(m[0]) ? m[0] : personLower.get(m[0].toLowerCase());
       if (hit) out.add(hit);
       if (out.size > 8) break;
