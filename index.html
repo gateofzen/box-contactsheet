@@ -523,7 +523,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v247</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v248</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1893,6 +1893,7 @@ function clearSheet(name){
   // view も空にする。残っていると、スクロールによる追加描画が
   // 古い一覧の続きを描いてしまう。
   files = []; view = []; viewById.clear();
+  thumbHeld.clear();
   hqDone.clear();
   cardById.clear(); picked.clear();
   rendered = 0;
@@ -3779,11 +3780,19 @@ function refreshCard(id){
     paintPlayerRate();
 }
 
+// 再生中に見送ったカード。再生が落ち着いたら、ここから取りに行く。
+const thumbHeld = new Set();
+
 const thumbObserver = new IntersectionObserver(entries => {
   for (const en of entries){
     if (!en.isIntersecting) continue;
-    // 再生の立ち上がりに通信を回す
-    if (pool.paused) continue;
+    // 再生の立ち上がりに通信を回す。
+    // 見張りを外して覚えておく（外さずに置くと、二度と通知が来ない）。
+    if (pool.paused){
+      thumbObserver.unobserve(en.target);
+      thumbHeld.add(en.target);
+      continue;
+    }
     thumbObserver.unobserve(en.target);
     // 検索結果は files に入っていないので、表示中の一覧から引く
     const f = findFile(en.target.dataset.id);
@@ -3791,6 +3800,20 @@ const thumbObserver = new IntersectionObserver(entries => {
     else log("対象のファイルが見つかりません: " + en.target.dataset.id);
   }
 }, {rootMargin:"600px 0px"});
+
+// 見送ったカードを、あらためて取りに行く
+function resumeHeldThumbs(){
+  if (!thumbHeld.size) return;
+  const held = [...thumbHeld];
+  thumbHeld.clear();
+  for (const el of held){
+    if (!el.isConnected) continue;
+    const f = findFile(el.dataset.id);
+    if (f) pool.push(() => paintThumbs(f));
+    else thumbObserver.observe(el);
+  }
+  log(`見送っていたサムネイル ${held.length} 件を取りに行きます`);
+}
 
 const waiting = new Set();   // Box が filmstrip を生成中のファイル ID
 
@@ -4175,6 +4198,7 @@ function closePlayerNow(){
   clearInterval(localTuneTimer); localTuneTimer = null;
   clearTimeout(poolResumeTimer);
   pool.setLimit(0); pool.resume();      // サムネイルの取得を元に戻す
+  resumeHeldThumbs();
   deferUploads = false; flushPendingUploads();
   // 止めている間に見えたものを、改めて取りに行く
   setTimeout(() => {
@@ -7198,6 +7222,7 @@ els.pVideo.addEventListener("playing", () => {
   clearTimeout(poolResumeTimer);
   poolResumeTimer = setTimeout(() => {
     pool.setLimit(2); pool.resume();
+    resumeHeldThumbs();
     deferUploads = false; flushPendingUploads();
   }, 8000);
   if (els.pNote.textContent === "最初の場面を受け取っています…") els.pNote.textContent = "";
@@ -7216,6 +7241,7 @@ els.pVideo.addEventListener("playing", () => {
   clearTimeout(poolResumeTimer);
   poolResumeTimer = setTimeout(() => {
     pool.setLimit(2); pool.resume();
+    resumeHeldThumbs();
     deferUploads = false; flushPendingUploads();
   }, 8000);
   if (els.pNote.textContent === "最初の場面を受け取っています…") els.pNote.textContent = "";
