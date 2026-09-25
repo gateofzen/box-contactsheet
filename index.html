@@ -504,7 +504,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v244</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v245</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -2022,7 +2022,7 @@ async function composeFromFilmstrip(blob, frameW){
                   frameW, frameH, i * frameW, 0, frameW, frameH);
   });
   bmp.close && bmp.close();
-  const sheet = await new Promise(r => canvas.toBlob(r, "image/jpeg", .85));
+  const sheet = await canvasToBlob(canvas, .85);
   return {sheet, total};
 }
 /**
@@ -2073,7 +2073,11 @@ async function captureFromVideo(src, points, size, noCors){
   if (!isFinite(dur) || dur <= 0) throw new Error("再生時間が取得できません");
 
   const canvas = document.createElement("canvas");
-  canvas.width = v.videoWidth; canvas.height = v.videoHeight;
+  // 4K などの大きな画面は、そのままだと画像にできないことがある。
+  // 長辺 1920 までに収めて取り込む（5 コマの帯としては十分）。
+  const scale = Math.min(1, 1920 / Math.max(v.videoWidth || 1, v.videoHeight || 1));
+  canvas.width = Math.max(2, Math.round((v.videoWidth || 0) * scale));
+  canvas.height = Math.max(2, Math.round((v.videoHeight || 0) * scale));
   const ctx = canvas.getContext("2d");
   const frames = [];
 
@@ -2094,7 +2098,7 @@ async function captureFromVideo(src, points, size, noCors){
     }catch(err){
       throw new Error("画を取り込めません: " + (err.message || err));
     }
-    frames.push(await new Promise(r => canvas.toBlob(r, "image/jpeg", .85)));
+    frames.push(await canvasToBlob(canvas, .85));
   }
   v.src = ""; v.load();
   return {frames, duration: dur, w: canvas.width, h: canvas.height};
@@ -2228,15 +2232,34 @@ function getCacheIndex(parentId, allowStale){
 }
 
 // 5 コマを横に連結して 1 枚にする
+// canvas から画像を作る。まれに空で返るので、粗さを下げて作り直す。
+async function canvasToBlob(canvas, quality){
+  for (const q of [quality, 0.7, 0.55]){
+    const b = await new Promise(r => { try{ canvas.toBlob(r, "image/jpeg", q); }catch(_){ r(null); } });
+    if (b && b.size) return b;
+  }
+  // それでも駄目なら、別の作り方で試す
+  try{
+    const url = canvas.toDataURL("image/jpeg", 0.7);
+    const r = await fetch(url);
+    const b = await r.blob();
+    if (b && b.size) return b;
+  }catch(_){}
+  throw new Error(`コマを画像にできません（${canvas.width}x${canvas.height}）`);
+}
+
 async function composeSheet(frames){
-  const bmps = await Promise.all(frames.map(b => createImageBitmap(b)));
+  const good = frames.filter(b => b && b.size);
+  if (good.length !== frames.length)
+    throw new Error(`コマが ${frames.length - good.length} 枚できていません`);
+  const bmps = await Promise.all(good.map(b => createImageBitmap(b)));
   const w = Math.max(...bmps.map(b => b.width));
   const h = Math.max(...bmps.map(b => b.height));
   const canvas = document.createElement("canvas");
   canvas.width = w * bmps.length; canvas.height = h;
   const ctx = canvas.getContext("2d");
   bmps.forEach((b,i) => { ctx.drawImage(b, i*w, 0, w, h); b.close && b.close(); });
-  return new Promise(r => canvas.toBlob(r, "image/jpeg", .85));
+  return canvasToBlob(canvas, .85);
 }
 
 
@@ -2510,7 +2533,7 @@ async function captureFromDash(file, points){
             ctx = canvas.getContext("2d");
           }
           ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-          frames.push(await new Promise(r => canvas.toBlob(r, "image/jpeg", .85)));
+          frames.push(await canvasToBlob(canvas, .85));
           continue;
         }finally{ opened.cleanup(); }
       }
@@ -2548,7 +2571,7 @@ async function captureFromDash(file, points){
         ctx = canvas.getContext("2d");
       }
       ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-      frames.push(await new Promise(r => canvas.toBlob(r, "image/jpeg", .85)));
+      frames.push(await canvasToBlob(canvas, .85));
     }finally{
       v.removeAttribute("src"); v.load();
       URL.revokeObjectURL(url);
