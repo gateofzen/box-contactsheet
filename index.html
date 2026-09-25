@@ -523,7 +523,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v248</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v249</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -3294,7 +3294,7 @@ function hidePerson(name){
    そのうえで、辞書の名前が入っているファイルすべてに印を付ける。
    「[MCT-012] 澁谷果歩に酒を…」のように、名前が途中にある場合も拾える。 */
 const PERSON_NG = /^(?:the|and|feat|ft|vol|part|no|ver|full|hd|fhd|uhd|4k|8k|mp4|avi|rec|movie|video|sample|new|best|mix|live|remix|edit|original|off|on)$/i;
-const PERSON_NG_JP = /(無修正|中出し|素人|投稿|流出|人妻|熟女|美少女|激安|総集編|第\d|その\d|前編|後編|本編|撮影|盗撮|温泉|旅行|動画|映像|作品|限定|特典|配信|生配信|収録)/;
+const PERSON_NG_JP = /(無修正|中出し|素人|投稿|流出|人妻|熟女|美少女|激安|総集編|第\d|その\d|前編|後編|本編|撮影|盗撮|温泉|旅行|動画|映像|作品|限定|特典|配信|生配信|収録|女子大生|女子高生|女教師|看護師|社長|店員|店長|受付|新人|専属|単体|巨乳|爆乳|美乳|彼女|彼氏|友達|義母|義姉|義妹|叔母|奥様|奥さん|お姉さん|お義母|ナース|メイド|ギャル|痴女|淫乱)/;
 
 function looksLikePerson(raw){
   const t = String(raw || "").trim()
@@ -3308,8 +3308,11 @@ function looksLikePerson(raw){
   const jp = /[ぁ-んァ-ヶ一-龠]/.test(t);
   if (jp){
     if (t.length > 12) return "";
-    // 助詞で終わるもの、文になっているものは名前ではない
-    if (/[はがをにへでとやもね]$/.test(t)) return "";
+    // 文になっているものは名前ではない。
+    // ただし「稲月このは」「晴山ひとは」のように、名前が助詞と同じ字で
+    // 終わることがある。短いものは名前として扱う。
+    if (t.length >= 7 && /[はがをにへでとやもね]$/.test(t)) return "";
+    if (/^(彼女|彼氏|貴女|貴方|あなた|わたし|私|僕|俺)[はがも]?$/.test(t)) return "";
     if (/(する|した|します|です|でした|られ|させ|ない|てる)/.test(t)) return "";
     return t;
   }
@@ -3346,7 +3349,9 @@ function trimTail(text, maxWords){
 function splitPersons(chunk){
   const out = [];
   const sep = /[,、，&＆・･\/／]|\s+(?:and|with|x|×|✕|b2b|vs\.?|feat\.?|ft\.?)\s+/i;
-  for (const piece of String(chunk || "").split(sep)){
+  // 「穂香（39歳）豊田怜花」のように、括弧が名前の区切りになっていることがある
+  const text = String(chunk || "").replace(/[（(][^）)]*[）)]/g, "、");
+  for (const piece of text.split(sep)){
     const t = piece.trim();
     if (!t) continue;
 
@@ -3411,7 +3416,15 @@ function personsFromPattern(raw){
   const stage = /^([A-Za-z][\w'’.\-]*(?:\s+[\w'’.\-]+){0,2}?)\s*[-–—|:]?\s+(?:live|at|@|from|dj\s*set|set)\b/i.exec(base);
   if (stage) out.push(...splitPersons(trimTail(stage[1])));
 
-  // 5) 「NAME & NAME_…」（区切りの前）
+  // 5) 「…公開します。花園もあ」のように、末尾に名前が置かれる形
+  const tail = /。\s*([^。]{2,30})$/.exec(base);
+  if (tail) out.push(...splitPersons(tail[1]));
+
+  // 6) 「陽子（43歳）」のように、年齢が添えられた名前
+  for (const m of base.matchAll(/([^\s。、，,（(\[\]]{2,12})[（(]\s*\d{1,2}\s*歳\s*[）)]/g))
+    out.push(...splitPersons(m[1]));
+
+  // 7) 「NAME & NAME_…」（区切りの前）
   const lat = /^([A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*(?:\s*[&＆]\s*[A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*)*)+)\s*[_\-–—]/.exec(base);
   if (lat) out.push(...splitPersons(lat[1]));
 
