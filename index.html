@@ -523,7 +523,7 @@ details.sub[open]>summary{color:var(--text)}
 <header class="topbar">
   <div class="topbar-in">
     <button id="drawerBtn" class="iconbtn m-only" title="フォルダ" aria-label="フォルダ">☰</button>
-    <div class="mark">Contact&nbsp;Sheet<small id="ver">v246</small></div>
+    <div class="mark">Contact&nbsp;Sheet<small id="ver">v247</small></div>
     <div class="search">
       <span>⌕</span>
       <input id="q" type="search" name="bcs-filter" placeholder="動画を絞り込む"
@@ -1727,15 +1727,20 @@ async function mergeIndex(list){
 // Box の検索も併用して、まだ走査していないフォルダの動画も拾う
 let boxSearchTimer = null;
 let lastBoxSearch = "";
-async function boxSearchMerge(text){
+async function boxSearchMerge(text, deep){
   if (!text || text.length < 2) return;
   if (text === lastBoxSearch) return;      // 同じ語で二度は投げない
+  // 再生中は通信を譲る（検索で帯域を使うと、再生が途切れる）
+  if (els.scrim.classList.contains("open") && !deep) return;
   lastBoxSearch = text;
   try{
     const exts = [...VIDEO_EXT].join(",");
     const hits = [];
     // Box の検索は 200 件ずつ返る。続きがあれば取りに行く。
-    for (let offset = 0; offset < 2000; offset += 200){
+    // 打ちながらの検索は 1 ページ（200 件）まで。
+    // 人名を押したときだけ、続きも取りに行く。
+    const maxOffset = deep ? 2000 : 200;
+    for (let offset = 0; offset < maxOffset; offset += 200){
       const url = `/search?query=${encodeURIComponent(text)}&type=file&limit=200&offset=${offset}`
         + `&ancestor_folder_ids=${encodeURIComponent(froot || "0")}`
         + `&file_extensions=${encodeURIComponent(exts)}`
@@ -3522,7 +3527,7 @@ async function searchPerson(name){
   els.progress.textContent = `「${name}」を Box から探しています…`;
   lastBoxSearch = "";                 // 同じ語でも、ここでは必ず探す
   try{
-    await boxSearchMerge(name);
+    await boxSearchMerge(name, true);
   }catch(_){}
   els.progress.textContent = "";
   applyView();
@@ -4004,8 +4009,9 @@ async function openPlayer(file, startAt){
   pushLayer("player", () => closePlayerNow());
 
   playerClosing = false;
-  // 再生の立ち上がりに通信を回す。サムネイルは後回し。
+  // 再生の立ち上がりに通信を回す。サムネイルと検索は後回し。
   pool.pause();
+  clearTimeout(boxSearchTimer);
   deferUploads = true;
   liftPending = false;
   liftDone = false;
@@ -5891,7 +5897,7 @@ els.q.addEventListener("input", () => {
   clearTimeout(boxSearchTimer);
   const text = els.q.value.split(/\s+/).filter(t => t && !/^[-#]/.test(t) && !/:/.test(t)
               && !["fav","untagged"].includes(t.toLowerCase())).join(" ");
-  if (text) boxSearchTimer = setTimeout(() => boxSearchMerge(text), 700);
+  if (text) boxSearchTimer = setTimeout(() => boxSearchMerge(text), 1200);
 });
 els.sort.addEventListener("change", applyView);
 els.col.addEventListener("input", () => {
